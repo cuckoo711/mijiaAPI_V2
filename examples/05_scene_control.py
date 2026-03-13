@@ -3,8 +3,9 @@
 
 演示场景相关操作：
 - 获取场景列表
-- 执行场景
-- 按家庭筛选场景
+- 交互式选择并执行场景
+- 支持跳过场景执行
+- 支持连续执行多个场景
 """
 
 import sys
@@ -52,18 +53,44 @@ def main():
     
     # 2. 执行场景
     print("【执行场景】")
-    if scenes:
-        scene = scenes[0]
-        print(f"执行场景: {scene.name}")
-        
+    while True:
         try:
-            success = api.execute_scene(scene.scene_id)
-            if success:
-                print("✓ 场景执行成功")
+            choice = input(f"\n请选择要执行的场景 (1-{len(scenes)})，或输入 0 跳过: ").strip()
+            
+            if not choice:
+                continue
+            
+            choice_num = int(choice)
+            
+            if choice_num == 0:
+                print("跳过场景执行")
+                break
+            
+            if 1 <= choice_num <= len(scenes):
+                scene = scenes[choice_num - 1]
+                print(f"\n执行场景: {scene.name}")
+                
+                try:
+                    success = api.execute_scene(scene.scene_id, home.id)
+                    if success:
+                        print("✓ 场景执行成功")
+                    else:
+                        print("✗ 场景执行失败")
+                except Exception as e:
+                    print(f"✗ 场景执行失败: {e}")
+                
+                # 询问是否继续执行其他场景
+                continue_choice = input("\n是否继续执行其他场景? (y/n): ").strip().lower()
+                if continue_choice != 'y':
+                    break
             else:
-                print("✗ 场景执行失败")
-        except Exception as e:
-            print(f"✗ 场景执行失败: {e}")
+                print(f"无效的选择，请输入 0-{len(scenes)} 之间的数字")
+        
+        except ValueError:
+            print("请输入有效的数字")
+        except KeyboardInterrupt:
+            print("\n\n操作已取消")
+            break
     
     print("\n=== 示例完成 ===")
     print("\n提示：")

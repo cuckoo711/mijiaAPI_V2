@@ -115,10 +115,10 @@ def test_execute_scene_delegates_to_repo(
     mock_scene_repo.execute.return_value = True
 
     # 调用方法
-    result = scene_service.execute_scene("scene_001", sample_credential)
+    result = scene_service.execute_scene("scene_001", "home_123", sample_credential)
 
     # 验证
-    mock_scene_repo.execute.assert_called_once_with("scene_001", sample_credential)
+    mock_scene_repo.execute.assert_called_once_with("scene_001", "home_123", sample_credential)
     assert result is True
 
 
@@ -132,10 +132,10 @@ def test_execute_scene_returns_false_on_failure(
     mock_scene_repo.execute.return_value = False
 
     # 调用方法
-    result = scene_service.execute_scene("scene_001", sample_credential)
+    result = scene_service.execute_scene("scene_001", "home_123", sample_credential)
 
     # 验证
-    mock_scene_repo.execute.assert_called_once_with("scene_001", sample_credential)
+    mock_scene_repo.execute.assert_called_once_with("scene_001", "home_123", sample_credential)
     assert result is False
 
 
@@ -180,11 +180,12 @@ def test_execute_scene_with_different_scene_ids(
 
     # 执行多个场景
     scene_ids = ["scene_001", "scene_002", "scene_003"]
+    home_id = "home_123"
     for scene_id in scene_ids:
-        result = scene_service.execute_scene(scene_id, sample_credential)
+        result = scene_service.execute_scene(scene_id, home_id, sample_credential)
         assert result is True
 
     # 验证调用次数和参数
     assert mock_scene_repo.execute.call_count == 3
     for scene_id in scene_ids:
-        mock_scene_repo.execute.assert_any_call(scene_id, sample_credential)
+        mock_scene_repo.execute.assert_any_call(scene_id, home_id, sample_credential)

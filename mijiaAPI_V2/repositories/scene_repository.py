@@ -35,10 +35,19 @@ class SceneRepositoryImpl(ISceneRepository):
             场景列表
         """
         # 从API获取场景列表
-        response = self._http.post("/scene/list", json={"home_id": home_id}, credential=credential)
+        response = self._http.post(
+            "/appgateway/miot/appsceneservice/AppSceneService/GetSimpleSceneList",
+            json={
+                "app_version": 12,
+                "get_type": 2,
+                "home_id": str(home_id),
+                "owner_uid": credential.user_id
+            },
+            credential=credential
+        )
 
         # 解析场景列表
-        scene_list = response.get("result", {}).get("scenes", [])
+        scene_list = response.get("result", {}).get("manual_scene_info_list", [])
         scenes = []
         for scene_data in scene_list:
             # 映射API字段到领域模型
@@ -52,11 +61,12 @@ class SceneRepositoryImpl(ISceneRepository):
 
         return scenes
 
-    def execute(self, scene_id: str, credential: Credential) -> bool:
+    def execute(self, scene_id: str, home_id: str, credential: Credential) -> bool:
         """执行场景
 
         Args:
             scene_id: 场景ID
+            home_id: 家庭ID
             credential: 用户凭据
 
         Returns:
@@ -64,7 +74,15 @@ class SceneRepositoryImpl(ISceneRepository):
         """
         # 调用API执行场景
         response = self._http.post(
-            "/scene/execute", json={"scene_id": scene_id}, credential=credential
+            "/appgateway/miot/appsceneservice/AppSceneService/NewRunScene",
+            json={
+                "scene_id": scene_id,
+                "scene_type": 2,
+                "phone_id": "null",
+                "home_id": str(home_id),
+                "owner_uid": credential.user_id
+            },
+            credential=credential
         )
 
         # 检查结果

@@ -252,11 +252,12 @@ class MijiaAPI:
         """
         return self._scene_service.get_scenes(home_id, self._credential)
 
-    def execute_scene(self, scene_id: str) -> bool:
+    def execute_scene(self, scene_id: str, home_id: str) -> bool:
         """执行场景
 
         Args:
             scene_id: 场景ID
+            home_id: 家庭ID
 
         Returns:
             是否成功
@@ -265,7 +266,7 @@ class MijiaAPI:
             TokenExpiredError: 凭据已过期
             NetworkError: 网络错误
         """
-        return self._scene_service.execute_scene(scene_id, self._credential)
+        return self._scene_service.execute_scene(scene_id, home_id, self._credential)
 
     def get_device_statistics(self, home_id: str) -> Dict[str, Any]:
         """获取设备统计信息
@@ -639,18 +640,19 @@ class AsyncMijiaAPI:
             self._scene_service.get_scenes, home_id, self._credential
         )
 
-    async def execute_scene(self, scene_id: str) -> bool:
+    async def execute_scene(self, scene_id: str, home_id: str) -> bool:
         """异步执行场景
 
         Args:
             scene_id: 场景ID
+            home_id: 家庭ID
 
         Returns:
             是否成功
         """
         import asyncio
         return await asyncio.to_thread(
-            self._scene_service.execute_scene, scene_id, self._credential
+            self._scene_service.execute_scene, scene_id, home_id, self._credential
         )
 
     async def get_device_statistics(self, home_id: str) -> Dict[str, Any]:

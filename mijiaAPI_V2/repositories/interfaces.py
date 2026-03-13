@@ -97,7 +97,7 @@ class ISceneRepository(ABC):
         pass
 
     @abstractmethod
-    def execute(self, scene_id: str, credential: Credential) -> bool:
+    def execute(self, scene_id: str, home_id: str, credential: Credential) -> bool:
         """执行场景"""
         pass
 

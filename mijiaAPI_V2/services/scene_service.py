@@ -35,14 +35,15 @@ class SceneService:
         """
         return self._scene_repo.get_all(home_id, credential)
 
-    def execute_scene(self, scene_id: str, credential: Credential) -> bool:
+    def execute_scene(self, scene_id: str, home_id: str, credential: Credential) -> bool:
         """执行场景
 
         Args:
             scene_id: 场景ID
+            home_id: 家庭ID
             credential: 用户凭据
 
         Returns:
             执行是否成功
         """
-        return self._scene_repo.execute(scene_id, credential)
+        return self._scene_repo.execute(scene_id, home_id, credential)

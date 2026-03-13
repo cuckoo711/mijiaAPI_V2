@@ -45,7 +45,7 @@ class TestGetAll:
         api_response = {
             "code": 0,
             "result": {
-                "scenes": [
+                "manual_scene_info_list": [
                     {
                         "scene_id": 123456,
                         "name": "回家模式",
@@ -77,13 +77,20 @@ class TestGetAll:
 
         # 验证HTTP调用
         mock_http_client.post.assert_called_once_with(
-            "/scene/list", json={"home_id": "home1"}, credential=test_credential
+            "/appgateway/miot/appsceneservice/AppSceneService/GetSimpleSceneList",
+            json={
+                "app_version": 12,
+                "get_type": 2,
+                "home_id": "home1",
+                "owner_uid": "test_user"
+            },
+            credential=test_credential
         )
 
     def test_get_all_empty_list(self, scene_repository, mock_http_client, test_credential):
         """测试获取空场景列表"""
         # 准备API响应（空列表）
-        api_response = {"code": 0, "result": {"scenes": []}}
+        api_response = {"code": 0, "result": {"manual_scene_info_list": []}}
         mock_http_client.post.return_value = api_response
 
         # 调用方法
@@ -95,7 +102,14 @@ class TestGetAll:
 
         # 验证HTTP调用
         mock_http_client.post.assert_called_once_with(
-            "/scene/list", json={"home_id": "home1"}, credential=test_credential
+            "/appgateway/miot/appsceneservice/AppSceneService/GetSimpleSceneList",
+            json={
+                "app_version": 12,
+                "get_type": 2,
+                "home_id": "home1",
+                "owner_uid": "test_user"
+            },
+            credential=test_credential
         )
 
     def test_get_all_missing_fields(self, scene_repository, mock_http_client, test_credential):
@@ -104,7 +118,7 @@ class TestGetAll:
         api_response = {
             "code": 0,
             "result": {
-                "scenes": [
+                "manual_scene_info_list": [
                     {
                         "scene_id": 123456,
                         "name": "回家模式",
@@ -131,7 +145,7 @@ class TestGetAll:
         api_response = {
             "code": 0,
             "result": {
-                "scenes": [
+                "manual_scene_info_list": [
                     {
                         # 缺少 scene_id
                         "name": "回家模式",
@@ -156,7 +170,7 @@ class TestGetAll:
         api_response = {
             "code": 0,
             "result": {
-                "scenes": [
+                "manual_scene_info_list": [
                     {
                         "scene_id": 123456,
                         # 缺少 name
@@ -181,7 +195,7 @@ class TestGetAll:
         api_response = {
             "code": 0,
             "result": {
-                "scenes": [
+                "manual_scene_info_list": [
                     {
                         "scene_id": 123456,
                         "name": "回家模式",
@@ -219,14 +233,22 @@ class TestExecute:
         mock_http_client.post.return_value = api_response
 
         # 调用方法
-        result = scene_repository.execute("scene123", test_credential)
+        result = scene_repository.execute("scene123", "home1", test_credential)
 
         # 验证结果
         assert result is True
 
         # 验证HTTP调用
         mock_http_client.post.assert_called_once_with(
-            "/scene/execute", json={"scene_id": "scene123"}, credential=test_credential
+            "/appgateway/miot/appsceneservice/AppSceneService/NewRunScene",
+            json={
+                "scene_id": "scene123",
+                "scene_type": 2,
+                "phone_id": "null",
+                "home_id": "home1",
+                "owner_uid": "test_user"
+            },
+            credential=test_credential
         )
 
     def test_execute_failure(self, scene_repository, mock_http_client, test_credential):
@@ -236,14 +258,22 @@ class TestExecute:
         mock_http_client.post.return_value = api_response
 
         # 调用方法
-        result = scene_repository.execute("scene999", test_credential)
+        result = scene_repository.execute("scene999", "home1", test_credential)
 
         # 验证结果
         assert result is False
 
         # 验证HTTP调用
         mock_http_client.post.assert_called_once_with(
-            "/scene/execute", json={"scene_id": "scene999"}, credential=test_credential
+            "/appgateway/miot/appsceneservice/AppSceneService/NewRunScene",
+            json={
+                "scene_id": "scene999",
+                "scene_type": 2,
+                "phone_id": "null",
+                "home_id": "home1",
+                "owner_uid": "test_user"
+            },
+            credential=test_credential
         )
 
     def test_execute_different_scenes(self, scene_repository, mock_http_client, test_credential):
@@ -253,11 +283,11 @@ class TestExecute:
         mock_http_client.post.return_value = api_response
 
         # 执行场景1
-        result1 = scene_repository.execute("scene1", test_credential)
+        result1 = scene_repository.execute("scene1", "home1", test_credential)
         assert result1 is True
 
         # 执行场景2
-        result2 = scene_repository.execute("scene2", test_credential)
+        result2 = scene_repository.execute("scene2", "home1", test_credential)
         assert result2 is True
 
         # 验证HTTP调用了两次，使用不同的scene_id
@@ -276,7 +306,7 @@ class TestExecute:
             mock_http_client.post.return_value = api_response
 
             # 调用方法
-            result = scene_repository.execute("scene123", test_credential)
+            result = scene_repository.execute("scene123", "home1", test_credential)
 
             # 验证结果（只有code=0才返回True）
             assert result is False
@@ -291,7 +321,7 @@ class TestIntegration:
         list_response = {
             "code": 0,
             "result": {
-                "scenes": [
+                "manual_scene_info_list": [
                     {
                         "scene_id": 123456,
                         "name": "回家模式",
@@ -312,7 +342,7 @@ class TestIntegration:
         assert len(scenes) == 1
 
         # 执行第一个场景
-        result = scene_repository.execute(scenes[0].scene_id, test_credential)
+        result = scene_repository.execute(scenes[0].scene_id, "home1", test_credential)
         assert result is True
 
         # 验证HTTP调用了两次
@@ -342,7 +372,7 @@ class TestIntegration:
         )
 
         # 准备API响应
-        api_response = {"code": 0, "result": {"scenes": []}}
+        api_response = {"code": 0, "result": {"manual_scene_info_list": []}}
         mock_http_client.post.return_value = api_response
 
         # 用户1获取场景
@@ -356,6 +386,8 @@ class TestIntegration:
         assert calls[0][1]["credential"] == credential1
         assert calls[1][1]["credential"] == credential2
 
-        # 验证使用了不同的home_id
+        # 验证使用了不同的home_id和owner_uid
         assert calls[0][1]["json"]["home_id"] == "home1"
+        assert calls[0][1]["json"]["owner_uid"] == "user1"
         assert calls[1][1]["json"]["home_id"] == "home2"
+        assert calls[1][1]["json"]["owner_uid"] == "user2"
