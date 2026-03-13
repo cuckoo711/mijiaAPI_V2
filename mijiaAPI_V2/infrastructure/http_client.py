@@ -341,18 +341,23 @@ class AsyncHttpClient:
         import asyncio
 
         max_retries = 3
+        last_exception: Exception = Exception("未知错误")
+        
         for attempt in range(max_retries):
             try:
                 response = await self._client.post(url, data=encrypted_params, headers=headers, **kwargs)
                 response.raise_for_status()
                 return response
-            except (httpx.TimeoutException, httpx.ConnectError):
+            except (httpx.TimeoutException, httpx.ConnectError) as e:
+                last_exception = e
                 if attempt < max_retries - 1:
                     # 指数退避：1s, 2s, 4s
                     wait_time = min(2 ** attempt, 10)
                     await asyncio.sleep(wait_time)
                     continue
-                raise
+        
+        # 所有重试都失败，抛出最后一个异常
+        raise last_exception
 
     async def post(
         self, path: str, json: Dict[str, Any], credential: Credential, **kwargs: Any

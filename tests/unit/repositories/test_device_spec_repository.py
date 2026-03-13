@@ -387,3 +387,4 @@ class TestDeviceSpecRepositoryImpl:
         assert temp_prop.name == "温度"
         assert temp_prop.type == PropertyType.UINT
         assert temp_prop.value_range == [30, 100, 1]  # 应该保持列表格式
+

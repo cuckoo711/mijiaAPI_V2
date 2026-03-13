@@ -188,3 +188,8 @@ exclude_lines = [
     "if TYPE_CHECKING:",
     "@abstractmethod",
 ]
+
+[dependency-groups]
+dev = [
+    "types-cachetools>=6.2.0.20251022",
+]

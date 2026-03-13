@@ -1,6 +1,8 @@
 """异步设备仓储实现
 
 提供异步的设备数据访问接口。
+
+此模块实现了 IAsyncDeviceRepository 接口，提供完整的异步设备操作支持。
 """
 
 from typing import Any, Dict, List, Optional
@@ -9,15 +11,15 @@ from ..core.logging import get_logger
 from ..domain.models import Credential, Device, DeviceStatus
 from ..infrastructure.cache_manager import CacheManager
 from ..infrastructure.http_client import AsyncHttpClient
-from .interfaces import IDeviceRepository
+from .interfaces import IAsyncDeviceRepository
 
 logger = get_logger(__name__)
 
 
-class AsyncDeviceRepositoryImpl(IDeviceRepository):
+class AsyncDeviceRepositoryImpl(IAsyncDeviceRepository):
     """异步设备仓储实现
 
-    使用AsyncHttpClient提供异步的设备数据访问。
+    使用 AsyncHttpClient 提供异步的设备数据访问。
     """
 
     def __init__(self, http_client: AsyncHttpClient, cache_manager: CacheManager):
@@ -165,7 +167,11 @@ class AsyncDeviceRepositoryImpl(IDeviceRepository):
         Returns:
             结果列表
         """
-        response = await self._http.post("/miotspec/prop/get_batch", requests, credential)
+        response = await self._http.post(
+            "/miotspec/prop/get_batch", 
+            {"params": requests}, 
+            credential
+        )
         return response.get("result", [])
 
     async def batch_set_properties(
@@ -180,7 +186,11 @@ class AsyncDeviceRepositoryImpl(IDeviceRepository):
         Returns:
             结果列表
         """
-        response = await self._http.post("/miotspec/prop/set_batch", requests, credential)
+        response = await self._http.post(
+            "/miotspec/prop/set_batch", 
+            {"params": requests}, 
+            credential
+        )
 
         # 失效相关缓存
         self._cache.invalidate_pattern("devices:")

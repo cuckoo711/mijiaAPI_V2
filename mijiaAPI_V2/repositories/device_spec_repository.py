@@ -282,16 +282,12 @@ class DeviceSpecRepositoryImpl(IDeviceSpecRepository):
                 siid=siid,
                 piid=piid,
                 name=name,
-                description=name,
-                format=prop_type,
+                type=prop_type,
                 access=PropertyAccess.READ_WRITE if (readable and writable) else (
                     PropertyAccess.READ_ONLY if readable else PropertyAccess.WRITE_ONLY
                 ),
-                readable=readable,
-                writable=writable,
                 value_range=value_range,
                 value_list=value_list,
-                unit=prop_data.get("unit"),
             )
 
         except Exception as e:
@@ -314,28 +310,21 @@ class DeviceSpecRepositoryImpl(IDeviceSpecRepository):
             name = action_data.get("description", action_data.get("name", f"action_{aiid}"))
 
             # 输入参数
-            in_params = []
+            parameters = []
             for param in action_data.get("in", []):
-                in_params.append(ActionParameter(
-                    piid=param.get("piid", 0),
-                    type=param.get("type", "string"),
-                ))
-
-            # 输出参数
-            out_params = []
-            for param in action_data.get("out", []):
-                out_params.append(ActionParameter(
-                    piid=param.get("piid", 0),
-                    type=param.get("type", "string"),
+                param_name = param.get("description", f"param_{param.get('piid', 0)}")
+                param_type = self._parse_property_type(param.get("type", "string"))
+                parameters.append(ActionParameter(
+                    name=param_name,
+                    type=param_type,
+                    required=True,
                 ))
 
             return DeviceAction(
                 siid=siid,
                 aiid=aiid,
                 name=name,
-                description=name,
-                in_params=in_params,
-                out_params=out_params,
+                parameters=parameters,
             )
 
         except Exception as e:

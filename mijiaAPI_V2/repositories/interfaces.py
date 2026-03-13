@@ -4,7 +4,7 @@
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional
+from typing import Any, Coroutine, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -113,4 +113,53 @@ class IDeviceSpecRepository(ABC):
     @abstractmethod
     def cache_spec(self, model: str, spec: DeviceSpec) -> None:
         """缓存设备规格"""
+        pass
+
+
+class IAsyncDeviceRepository(ABC):
+    """异步设备仓储接口"""
+
+    @abstractmethod
+    async def get_all(self, home_id: str, credential: Credential) -> List[Device]:
+        """获取家庭下所有设备"""
+        pass
+
+    @abstractmethod
+    async def get_by_id(self, device_id: str, home_id: str, credential: Credential) -> Optional[Device]:
+        """根据ID获取设备"""
+        pass
+
+    @abstractmethod
+    async def get_properties(
+        self, device_id: str, siid: int, piid: int, credential: Credential
+    ) -> Any:
+        """获取设备属性"""
+        pass
+
+    @abstractmethod
+    async def set_property(
+        self, device_id: str, siid: int, piid: int, value: Any, credential: Credential
+    ) -> bool:
+        """设置设备属性"""
+        pass
+
+    @abstractmethod
+    async def call_action(
+        self, device_id: str, siid: int, aiid: int, params: List[Any], credential: Credential
+    ) -> Any:
+        """调用设备操作"""
+        pass
+
+    @abstractmethod
+    async def batch_get_properties(
+        self, requests: List[Dict[str, Any]], credential: Credential
+    ) -> List[Any]:
+        """批量获取属性"""
+        pass
+
+    @abstractmethod
+    async def batch_set_properties(
+        self, requests: List[Dict[str, Any]], credential: Credential
+    ) -> List[bool]:
+        """批量设置属性"""
         pass
