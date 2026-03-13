@@ -50,7 +50,7 @@ credential.json
 
 # ==================== 配置文件 ====================
 # 忽略实际使用的配置文件，只提交模板
-configs/default.toml
+configs/mijiaAPI.toml
 configs/*.toml
 !configs/*.toml.template
 

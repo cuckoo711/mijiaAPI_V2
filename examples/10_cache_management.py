@@ -195,11 +195,11 @@ def example_cache_best_practices():
     print("4. 调试技巧")
     print("   - 遇到数据不一致时，先尝试刷新缓存")
     print("   - 使用 clear_all_cache() 清空所有缓存")
-    print("   - 检查缓存配置（configs/default.toml）")
+    print("   - 检查缓存配置（configs/mijiaAPI.toml）")
     print()
     
     print("5. 配置缓存TTL")
-    print("   在 configs/default.toml 中配置:")
+    print("   在 configs/mijiaAPI.toml 中配置:")
     print("   ```toml")
     print("   [cache]")
     print("   device_list_ttl = 300      # 设备列表缓存5分钟")

@@ -24,8 +24,12 @@ def example_load_config():
     """示例：加载配置文件"""
     print("=== 方式1：加载配置文件 ===\n")
     
-    # 加载默认配置文件
-    config = create_config_manager(config_path=Path("configs/default.toml"))
+    # 加载配置文件（SDK会按优先级自动查找）
+    # 1. configs/mijiaAPI.toml（推荐）
+    # 2. config.toml
+    # 3. ~/.mijia/config.toml
+    # 4. SDK自带的默认配置
+    config = create_config_manager(config_path=Path("configs/mijiaAPI.toml"))
     
     print("配置加载成功")
     print(f"  API基础URL: {config.get('API_BASE_URL')}")
@@ -34,6 +38,13 @@ def example_load_config():
     print(f"  设备列表缓存TTL: {config.get('CACHE_DEVICE_LIST_TTL')} 秒")
     print(f"  凭据存储路径: {config.get('CREDENTIAL_PATH')}")
     print()
+    
+    print("配置文件查找顺序（优先级从高到低）：")
+    print("  1. configs/mijiaAPI.toml - 项目configs目录（推荐）")
+    print("  2. config.toml - 项目根目录")
+    print("  3. ~/.mijia/config.toml - 用户主目录")
+    print("  4. SDK自带的默认配置 - 最低优先级")
+    print()
 
 
 def example_credential_path_config():
@@ -41,7 +52,7 @@ def example_credential_path_config():
     print("=== 方式2：配置凭据存储路径 ===\n")
     
     # 创建认证服务（会自动从配置读取凭据路径）
-    auth_service = create_auth_service(config_path=Path("configs/default.toml"))
+    auth_service = create_auth_service(config_path=Path("configs/mijiaAPI.toml"))
     
     # 查看凭据存储路径
     store = auth_service._store
@@ -61,6 +72,13 @@ def example_credential_path_config():
     print("     -> 展开为用户主目录")
     print("  3. 绝对路径: /tmp/credential.json")
     print("     -> 直接使用绝对路径")
+    print()
+    
+    print("配置文件示例：")
+    print("  [security]")
+    print("  credential_path = '.mijia/credential.json'  # 项目级")
+    print("  # 或")
+    print("  credential_path = '~/.mijia/credential.json'  # 全局级")
     print()
 
 

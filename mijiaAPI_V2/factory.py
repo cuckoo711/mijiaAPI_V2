@@ -61,11 +61,15 @@ def create_config_manager(config_path: Optional[Path] = None) -> ConfigManager:
         配置管理器实例
     """
     if config_path is None:
-        # 尝试从默认位置加载配置
+        # SDK包的配置文件路径（相对于当前文件）
+        sdk_config = Path(__file__).parent.parent / "configs" / "mijiaAPI.toml"
+        
+        # 尝试从默认位置加载配置（优先级从高到低）
         default_paths = [
-            Path("configs/default.toml"),
-            Path("config.toml"),
-            Path.home() / ".mijia" / "config.toml",
+            Path("configs/mijiaAPI.toml"),  # 项目根目录的configs目录
+            Path("config.toml"),  # 项目根目录
+            Path.home() / ".mijia" / "config.toml",  # 用户主目录
+            sdk_config,  # SDK自带的默认配置（最低优先级）
         ]
 
         for path in default_paths:
