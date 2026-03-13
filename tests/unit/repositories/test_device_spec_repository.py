@@ -336,3 +336,54 @@ class TestDeviceSpecRepositoryImpl:
             # 验证从网络获取成功
             assert spec is not None
             assert spec.model == "test.device.v1"
+
+    @patch("httpx.get")
+    def test_parse_property_with_list_range(
+        self, mock_httpx_get, device_spec_repo, mock_cache_manager
+    ):
+        """测试解析列表格式的值范围"""
+        # Mock两次网络响应：第一次获取instances，第二次获取spec
+        instances_response = Mock()
+        instances_response.json.return_value = {
+            "instances": [
+                {"model": "test.device.v1", "type": "urn:miot-spec-v2:device:test:0000A001:test-v1:1"}
+            ]
+        }
+        
+        # 使用列表格式的 value-range
+        spec_response = Mock()
+        spec_response.json.return_value = {
+            "description": "测试设备",
+            "services": [
+                {
+                    "iid": 2,
+                    "type": "urn:miot-spec-v2:service:test:00000001:test-v1:1",
+                    "description": "测试服务",
+                    "properties": [
+                        {
+                            "iid": 1,
+                            "type": "urn:miot-spec-v2:property:temperature:00000020:test-v1:1",
+                            "description": "温度",
+                            "format": "uint8",
+                            "access": ["read", "write", "notify"],
+                            "unit": "celsius",
+                            "value-range": [30, 100, 1]  # 列表格式: [min, max, step]
+                        }
+                    ],
+                    "actions": []
+                }
+            ]
+        }
+        
+        mock_httpx_get.side_effect = [instances_response, spec_response]
+
+        spec = device_spec_repo.get_spec("test.device.v1")
+
+        # 验证属性解析正确
+        assert spec is not None
+        assert len(spec.properties) == 1
+        
+        temp_prop = spec.properties[0]
+        assert temp_prop.name == "温度"
+        assert temp_prop.type == PropertyType.UINT
+        assert temp_prop.value_range == [30, 100, 1]  # 应该保持列表格式
