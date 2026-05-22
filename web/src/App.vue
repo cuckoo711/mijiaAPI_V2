@@ -447,10 +447,15 @@ onMounted(() => {
             </el-table-column>
             <el-table-column label="访问" width="140">
               <template #default="{ row }">
-                <el-select v-model="row.access_mode">
-                  <el-option label="只读" value="read" />
-                  <el-option label="可控" value="write" />
-                </el-select>
+                <el-switch
+                  v-model="row.access_mode"
+                  active-value="write"
+                  inactive-value="read"
+                  active-text="可控"
+                  inactive-text="只读"
+                  inline-prompt
+                  class="access-switch"
+                />
               </template>
             </el-table-column>
             <el-table-column label="隐藏" width="90">

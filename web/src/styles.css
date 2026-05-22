@@ -151,6 +151,11 @@ body {
   font-weight: 500;
 }
 
+.access-switch {
+  --el-switch-on-color: #16a34a;
+  --el-switch-off-color: #9ca3af;
+}
+
 .one-time-key {
   margin-top: 16px;
   word-break: break-all;
