@@ -214,7 +214,7 @@ def _forwarded_client_host(request: Request) -> str:
 
 def _request_source_host(request: Request, config: dict[str, Any]) -> str:
     direct_host = request.client.host if request.client else ""
-    if not _config_bool(config, "TRUST_PROXY_HEADERS"):
+    if not _config_bool(config, "TRUST_PROXY_HEADERS", default=True):
         return direct_host
     trusted_cidrs = _config_string_list(
         config,

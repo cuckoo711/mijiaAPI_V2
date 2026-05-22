@@ -253,13 +253,16 @@ function resetDeviceFilters(): void {
   deviceFilters.hidden = "";
 }
 
-function configBool(key: string): boolean {
+function configBool(key: string, defaultValue = false): boolean {
   const value = runtimeConfig.value.get(key);
   if (typeof value === "boolean") {
     return value;
   }
   if (typeof value === "string") {
     return ["1", "true", "yes", "on"].includes(value.toLowerCase());
+  }
+  if (value === undefined || value === null) {
+    return defaultValue;
   }
   return Boolean(value);
 }
@@ -922,7 +925,7 @@ onMounted(() => {
                   </div>
                 </div>
                 <el-switch
-                  :model-value="configBool('TRUST_PROXY_HEADERS')"
+                  :model-value="configBool('TRUST_PROXY_HEADERS', true)"
                   active-text="开启"
                   inactive-text="关闭"
                   inline-prompt

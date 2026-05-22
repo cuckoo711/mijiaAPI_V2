@@ -103,6 +103,24 @@ def test_network_access_policy_uses_forwarded_for_from_trusted_proxy(tmp_path: P
     assert allowed_response.status_code == 200
 
 
+def test_network_access_policy_trusts_loopback_proxy_headers_by_default(tmp_path: Path) -> None:
+    settings = ServerSettings(
+        data_dir=tmp_path,
+        database_path=tmp_path / "server.sqlite3",
+        credential_path=tmp_path / "credential.json",
+    )
+    store = ServerStore(settings)
+    app = create_app(settings, store=store)
+    client = TestClient(app, client=("127.0.0.1", 50000))
+
+    blocked_response = client.get("/healthz", headers={"X-Forwarded-For": "8.8.8.8"})
+    assert blocked_response.status_code == 403
+
+    store.set_config("ALLOW_PUBLIC_ACCESS", True)
+    allowed_response = client.get("/healthz", headers={"X-Forwarded-For": "8.8.8.8"})
+    assert allowed_response.status_code == 200
+
+
 def test_network_access_policy_uses_real_ip_from_trusted_proxy(tmp_path: Path) -> None:
     settings = ServerSettings(
         data_dir=tmp_path,
