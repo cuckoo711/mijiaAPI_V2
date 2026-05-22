@@ -1,9 +1,16 @@
-# 米家API SDK - 重构版本 (V2)
+# 米家 API SDK 与 API Server 管理台
 
 [![Python Version](https://img.shields.io/badge/python-3.9%2B-blue)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-米家智能家居 Python SDK 的现代化重构版本，采用清晰的分层架构设计。专为需要集成米家设备控制的企业级应用和复杂项目而设计。
+米家智能家居 Python SDK 的现代化重构版本，同时内置一个 FastAPI + Vue3 + Element Plus 的 API Server 管理后台。
+
+本仓库可以作为两种形态使用：
+
+- **SDK**：在 Python 项目里直接调用米家登录、家庭、设备、场景、设备规格和控制能力。
+- **API Server 管理后台**：部署成一个本地或服务器上的米家 API 服务，通过网页完成扫码登录、同步家庭/设备/场景、创建 API Key，并向脚本、AI Agent、Home Assistant 或其他后端提供 HTTP API。
+
+API Server 按单米家账号设计。管理台和对外 API 默认只监听本机，公网能力需要显式开启访问来源开关，并建议放在 HTTPS 反向代理后面。
 
 ## 适用场景
 
@@ -35,7 +42,257 @@
 - ✅ **结构化日志系统** - JSON 格式日志，支持请求追踪和敏感信息脱敏
 - ✅ **依赖注入** - 便捷的工厂函数，自动组装所有依赖组件
 
-## 快速开始
+## API Server 管理后台
+
+### 功能范围
+
+管理后台已经包含：
+
+- 管理员初始化、登录和会话鉴权。
+- 米家二维码登录、凭据状态查看、刷新和删除。
+- 同步家庭、设备、场景到本地 SQLite。
+- 家庭与设备列表、分类筛选、分页、设备 slug 维护、隐藏和只读/可控开关。
+- 场景列表、允许执行和隐藏开关。
+- API Key 创建、启停、删除、调用次数统计和中文权限说明。
+- 独立 API 使用说明页，包含 Header、curl/fetch 示例、常用接口和访问策略。
+- 系统自检、运行时配置、系统安全、审计日志。
+- 局域网/公网来源开关，以及可信反向代理的 `X-Forwarded-For` / `X-Real-IP` 识别。
+- 同步互斥保护，避免多次点击同时触发米家同步。
+
+### 最短部署路径
+
+适合本机、家里服务器、NAS 或云服务器。示例默认监听 `127.0.0.1:8123`，先保证本机可用，再按需接反向代理。
+
+#### 1. 准备运行环境
+
+- Python 3.9+
+- uv
+- Node.js 18+
+- npm
+
+```bash
+git clone git@github.com:cuckoo711/mijiaAPI_V2.git
+cd mijiaAPI_V2
+
+uv sync
+cd web
+npm ci
+npm run build
+cd ..
+```
+
+#### 2. 初始化本地数据
+
+```bash
+uv run python -m server.cli init
+```
+
+也可以在命令行直接创建初始管理员：
+
+```bash
+uv run python -m server.cli init --admin admin
+```
+
+没有用命令行创建管理员也没关系，第一次打开管理台会出现初始化页面。
+
+#### 3. 启动服务
+
+```bash
+uv run python -m server.cli run
+```
+
+默认访问地址：
+
+```text
+http://127.0.0.1:8123
+```
+
+#### 4. 首次使用流程
+
+1. 打开 `http://127.0.0.1:8123`。
+2. 创建管理员并登录。
+3. 进入“米家登录”，点击二维码登录，用米家 App 扫码。
+4. 登录成功后点击“同步家庭/设备/场景”。
+5. 进入“家庭与设备”，确认设备状态、访问权限和隐藏状态。
+6. 进入“场景管理”，按需开启允许执行。
+7. 进入“API Key”，创建调用方需要的最小权限。
+8. 进入“API 使用”，复制调用示例。
+
+### 常用环境变量
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `MIJIA_SERVER_HOST` | `127.0.0.1` | API Server 监听地址。公网或局域网直连才需要改成 `0.0.0.0`。 |
+| `MIJIA_SERVER_PORT` | `8123` | API Server 监听端口。 |
+| `MIJIA_SERVER_DATA_DIR` | `.mijia/server` | 服务端数据目录。 |
+| `MIJIA_SERVER_DATABASE_PATH` | `${MIJIA_SERVER_DATA_DIR}/server.sqlite3` | SQLite 数据库路径。 |
+| `MIJIA_CREDENTIAL_PATH` | `.mijia/credential.json` | 米家扫码登录凭据文件路径。 |
+| `MIJIA_PUBLIC_BASE_URL` | 空 | 对外展示的服务地址，例如 `https://miapi.example.com`。 |
+| `MIJIA_WEB_DIST_DIR` | `web/dist` | 前端构建产物目录。 |
+| `MIJIA_OPENAPI_ENABLED` | `false` | 是否开启 `/api/v1/openapi.json`。 |
+| `MIJIA_DOCS_ENABLED` | `false` | 是否开启 `/docs` 和 `/redoc`。 |
+
+### systemd 部署示例
+
+假设项目放在 `/opt/mijia_server`，运行用户为 `root` 或你自己的服务用户：
+
+```ini
+[Unit]
+Description=Mijia API Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/mijia_server
+Environment=MIJIA_SERVER_HOST=127.0.0.1
+Environment=MIJIA_SERVER_PORT=8123
+Environment=MIJIA_SERVER_DATA_DIR=/opt/mijia_server/.mijia/server
+Environment=MIJIA_SERVER_DATABASE_PATH=/opt/mijia_server/.mijia/server/server.sqlite3
+Environment=MIJIA_CREDENTIAL_PATH=/opt/mijia_server/.mijia/credential.json
+Environment=MIJIA_WEB_DIST_DIR=/opt/mijia_server/web/dist
+Environment=MIJIA_PUBLIC_BASE_URL=https://miapi.example.com
+ExecStart=/usr/bin/env uv run python -m server.cli run
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+```
+
+部署和更新：
+
+```bash
+cd /opt/mijia_server
+git pull --ff-only
+uv sync
+cd web
+npm ci
+npm run build
+cd ..
+uv run python -m server.cli init
+systemctl daemon-reload
+systemctl enable --now mijia-server
+systemctl restart mijia-server
+```
+
+### Nginx 反向代理示例
+
+推荐公网只暴露 HTTPS 反向代理，后端继续监听 `127.0.0.1`：
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name miapi.example.com;
+
+    ssl_certificate /path/to/fullchain.pem;
+    ssl_certificate_key /path/to/privkey.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:8123;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+管理台默认信任来自 `127.0.0.1/32` 和 `::1/128` 的反向代理头。反向代理在其他机器上时，需要在“系统安全”里把代理 IP 加入“可信代理地址”。
+
+### 访问来源策略
+
+本机请求始终允许。局域网和公网请求需要在“系统安全”里显式开启：
+
+- **允许局域网请求**：允许私有网段访问对外 API 和 `/healthz`。
+- **允许公网请求**：允许公网来源访问对外 API 和 `/healthz`。
+- **反向代理模式**：信任可信代理传来的真实客户端 IP，再按真实来源判断。
+
+管理台页面和 `/api/admin/*` 仍由管理员登录保护，不受局域网/公网来源开关拦截。这样清库或首次部署后，仍然可以通过反向代理完成初始化。
+
+如果公网访问 `/healthz` 返回 `403 NETWORK_ACCESS_DENIED`，通常表示公网来源开关没有打开，这是预期的安全行为。管理台本身不会依赖公网 `/healthz`。
+
+### 对外 API 使用
+
+创建 API Key 后，把密钥放到 HTTP Header：
+
+```bash
+curl -H "Authorization: Bearer YOUR_API_KEY" \
+  http://127.0.0.1:8123/api/v1/devices
+```
+
+JavaScript 示例：
+
+```js
+const response = await fetch("http://127.0.0.1:8123/api/v1/devices", {
+  headers: {
+    Authorization: "Bearer YOUR_API_KEY",
+  },
+});
+const payload = await response.json();
+```
+
+常用接口：
+
+| 方法 | 路径 | 权限 | 说明 |
+| --- | --- | --- | --- |
+| `GET` | `/api/v1/status` | 读取服务状态 | 服务状态、版本、运行时间。 |
+| `GET` | `/api/v1/account` | 读取服务状态 | 米家凭据状态。 |
+| `GET` | `/api/v1/homes` | 读取家庭与设备 | 家庭列表。 |
+| `GET` | `/api/v1/devices` | 读取家庭与设备 | 设备列表。 |
+| `GET` | `/api/v1/devices/{device_slug}/state` | 读取家庭与设备 | 读取设备属性状态。 |
+| `POST` | `/api/v1/devices/{device_slug}/properties` | 控制设备 | 设置设备属性。 |
+| `POST` | `/api/v1/devices/{device_slug}/actions` | 控制设备 | 调用设备动作。 |
+| `GET` | `/api/v1/scenes` | 读取家庭与设备 | 场景列表。 |
+| `POST` | `/api/v1/scenes/{scene_id}/execute` | 执行场景 | 执行已授权场景。 |
+| `GET` | `/api/v1/logs` | 读取审计日志 | 查看审计日志。 |
+
+### 日常维护
+
+```bash
+# 查看服务自检
+uv run python -m server.cli check
+
+# 导出诊断信息
+uv run python -m server.cli diagnose --output diagnose.json
+
+# 更新代码和前端
+git pull --ff-only
+uv sync
+cd web && npm ci && npm run build && cd ..
+systemctl restart mijia-server
+```
+
+需要备份的关键文件：
+
+- SQLite 数据库：`MIJIA_SERVER_DATABASE_PATH`
+- 米家凭据：`MIJIA_CREDENTIAL_PATH`
+- 如使用默认路径，还需要整个 `.mijia/` 目录
+
+### 常见问题
+
+**初始化后页面没有变化**
+
+先刷新页面，再检查后端日志。初始化成功后 `/api/admin/bootstrap/state` 应返回 `{"initialized": true, ...}`。
+
+**同步按钮可以连续点吗**
+
+前端会在同步过程中禁用按钮，后端也会拒绝第二个同步请求并返回 `409 SYNC_IN_PROGRESS`。
+
+**API 返回 `NETWORK_ACCESS_DENIED`**
+
+当前请求来源没有被允许。进入“系统安全”开启局域网或公网请求；如果走反向代理，还要确认可信代理地址和转发头。
+
+**API Key 创建后还能再次查看完整密钥吗**
+
+不能。完整 API Key 只在创建时显示一次，之后只保存哈希和前缀。
+
+**可以不用 Docker 吗**
+
+可以。当前服务只要求 Python、Node 和 SQLite，直接运行、systemd、NAS 套件、Docker 或反向代理后部署都可以。仓库的核心要求是保证服务能访问数据目录、数据库、凭据文件和前端构建产物。
+
+## SDK 快速开始
 
 ### 安装
 
@@ -44,7 +301,7 @@
 uv sync
 
 # 或使用 pip
-pip install -r requirements.txt
+pip install -e .
 ```
 
 ### 首次使用：登录认证
@@ -269,6 +526,16 @@ api = create_api_client(credential, redis_client=redis_client)
 
 ```
 mijiaAPI_V2/
+├── server/                 # FastAPI API Server 与管理端接口
+│   ├── app.py             # 应用工厂、路由和鉴权
+│   ├── cli.py             # mijia-server 命令行
+│   ├── config.py          # 服务端环境变量配置
+│   ├── db.py              # SQLite 初始化
+│   ├── mijia_runtime.py   # SDK 与服务端运行时桥接
+│   └── store.py           # SQLite 数据读写
+├── web/                    # Vue3 + Element Plus 管理台
+│   ├── src/               # 前端源码
+│   └── dist/              # npm run build 后的静态产物
 ├── core/                   # 核心配置和工具
 │   ├── config.py          # 配置管理器
 │   └── logging.py         # 日志系统
@@ -403,6 +670,18 @@ MIT License
 欢迎提交 Issue 和 Pull Request！
 
 ## 更新日志
+
+完整更新记录见 [CHANGELOG.md](CHANGELOG.md)。
+
+### 2026-05-22
+
+- 新增 FastAPI + Vue3 + Element Plus 管理后台部署和使用说明。
+- 管理后台支持管理员初始化、二维码登录、家庭/设备/场景同步、API Key、访问来源策略、反向代理模式、系统自检和审计日志。
+- 系统自检增加中文解释。
+- 同步增加前端 loading 和后端互斥保护，避免重复触发同步。
+- API 使用说明从 API Key 页面拆分为独立菜单页。
+- 管理台菜单改成分级导航。
+- 家庭与设备默认分页调整为每页 20 条。
 
 ### v2.0.0 (2026.03.13)
 

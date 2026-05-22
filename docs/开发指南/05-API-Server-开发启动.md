@@ -7,19 +7,19 @@
 初始化本地 SQLite 数据库：
 
 ```bash
-uv run mijia-server init
+uv run python -m server.cli init
 ```
 
 启动 API Server：
 
 ```bash
-uv run mijia-server run
+uv run python -m server.cli run
 ```
 
 执行自检：
 
 ```bash
-uv run mijia-server check
+uv run python -m server.cli check
 ```
 
 默认监听 `127.0.0.1:8123`，可通过环境变量调整：
