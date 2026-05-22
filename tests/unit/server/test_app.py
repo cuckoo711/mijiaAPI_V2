@@ -1,11 +1,13 @@
 """Tests for the FastAPI server application."""
 
 from pathlib import Path
+from typing import Any
 
 from fastapi.testclient import TestClient
 
 from server.app import create_app
 from server.config import ServerSettings
+from server.mijia_runtime import SyncInProgressError
 from server.store import ServerStore
 
 
@@ -219,6 +221,33 @@ def test_network_access_policy_ignores_forwarded_for_from_untrusted_proxy(tmp_pa
     response = client.get("/healthz", headers={"X-Forwarded-For": "8.8.8.8"})
 
     assert response.status_code == 200
+
+
+def test_admin_sync_reports_conflict_when_sync_is_running(tmp_path: Path) -> None:
+    settings = ServerSettings(
+        data_dir=tmp_path,
+        database_path=tmp_path / "server.sqlite3",
+        credential_path=tmp_path / "credential.json",
+    )
+    store = ServerStore(settings)
+    app = create_app(settings, store=store)
+    client = TestClient(app)
+    token = admin_token(client)
+
+    class BusyRuntime:
+        def sync_all(self) -> dict[str, Any]:
+            raise SyncInProgressError("同步正在进行中，请稍后再试")
+
+    app.state.runtime = BusyRuntime()
+
+    response = client.post(
+        "/api/admin/sync",
+        headers={"Authorization": f"Bearer {token}"},
+        json={},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "SYNC_IN_PROGRESS"
 
 
 def test_bootstrap_login_create_key_and_status_flow(tmp_path: Path) -> None:

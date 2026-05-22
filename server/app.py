@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 
 import mijiaAPI_V2
 from server.config import ServerSettings
-from server.mijia_runtime import LoginJobManager, MijiaRuntime
+from server.mijia_runtime import LoginJobManager, MijiaRuntime, SyncInProgressError
 from server.store import (
     AuthenticationFailedError,
     BootstrapAlreadyCompletedError,
@@ -290,6 +290,18 @@ def create_app(  # noqa: C901
     async def permission_error_handler(request: Request, exc: PermissionError) -> JSONResponse:
         request_id = getattr(request.state, "request_id", "")
         return _json_error(status.HTTP_403_FORBIDDEN, "FORBIDDEN", str(exc), request_id)
+
+    @app.exception_handler(SyncInProgressError)
+    async def sync_in_progress_error_handler(
+        request: Request, exc: SyncInProgressError
+    ) -> JSONResponse:
+        request_id = getattr(request.state, "request_id", "")
+        return _json_error(
+            status.HTTP_409_CONFLICT,
+            "SYNC_IN_PROGRESS",
+            str(exc),
+            request_id,
+        )
 
     @app.exception_handler(RuntimeError)
     async def runtime_error_handler(request: Request, exc: RuntimeError) -> JSONResponse:

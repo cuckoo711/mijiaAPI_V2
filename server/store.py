@@ -24,6 +24,45 @@ DEFAULT_API_KEY_POLICY: dict[str, list[str]] = {
     "scenes": [],
 }
 
+SYSTEM_CHECK_METADATA: dict[str, dict[str, str]] = {
+    "server": {
+        "label": "服务进程",
+        "description": "确认 FastAPI 服务进程正在运行并能响应管理台请求。",
+    },
+    "data_dir": {
+        "label": "数据目录",
+        "description": "确认数据目录存在，并且当前服务用户有写入权限。",
+    },
+    "sqlite": {
+        "label": "SQLite 数据库",
+        "description": "确认本地 SQLite 数据库可连接并能执行基础查询。",
+    },
+    "admin_configured": {
+        "label": "管理员账号",
+        "description": "确认管理台初始化管理员已经创建。",
+    },
+    "credential_file": {
+        "label": "米家凭据文件",
+        "description": "确认扫码登录后的米家凭据文件是否已经保存到本机。",
+    },
+    "public_base_url": {
+        "label": "公网访问地址",
+        "description": "确认 PUBLIC_BASE_URL 是否已配置，供外部调用示例和回调地址展示使用。",
+    },
+    "api_key_exists": {
+        "label": "API Key",
+        "description": "确认至少已经创建一个外部调用用的 API Key。",
+    },
+    "homes_synced": {
+        "label": "家庭同步",
+        "description": "确认米家家庭数据已经同步到本地数据库。",
+    },
+    "openapi_enabled": {
+        "label": "OpenAPI 文档",
+        "description": "显示 OpenAPI 文档接口当前是否对外启用。",
+    },
+}
+
 
 def utc_now() -> datetime:
     """Return the current UTC time with timezone information."""
@@ -743,7 +782,14 @@ class ServerStore:
                 "message": "enabled" if self._settings.openapi_enabled else "disabled",
             }
         )
-        return checks
+        return [self._with_check_metadata(check) for check in checks]
+
+    def _with_check_metadata(self, check: dict[str, Any]) -> dict[str, Any]:
+        metadata = SYSTEM_CHECK_METADATA.get(
+            str(check["key"]),
+            {"label": str(check["key"]), "description": "系统运行检查项。"},
+        )
+        return {**check, **metadata}
 
     def _check_path_writable(self, key: str, path: Path) -> dict[str, Any]:
         try:

@@ -133,6 +133,10 @@ class LoginJobManager:
                 job.completed_at = datetime.now(timezone.utc).isoformat()
 
 
+class SyncInProgressError(RuntimeError):
+    """Raised when a new sync is requested while another sync is running."""
+
+
 class MijiaRuntime:
     """Runtime helper that loads credentials and calls the SDK."""
 
@@ -140,6 +144,7 @@ class MijiaRuntime:
         self._settings = settings
         self._store = store
         self._credential_lock = threading.RLock()
+        self._sync_lock = threading.Lock()
 
     def load_credential(self) -> Optional[Credential]:
         return FileCredentialStore(self._settings.credential_path).load()
@@ -173,6 +178,14 @@ class MijiaRuntime:
         FileCredentialStore(self._settings.credential_path).delete()
 
     def sync_all(self) -> dict[str, Any]:
+        if not self._sync_lock.acquire(blocking=False):
+            raise SyncInProgressError("同步正在进行中，请稍后再试")
+        try:
+            return self._sync_all_unlocked()
+        finally:
+            self._sync_lock.release()
+
+    def _sync_all_unlocked(self) -> dict[str, Any]:
         api = self._api()
         homes = api.get_homes()
         home_dicts = [model_to_dict(home) for home in homes]

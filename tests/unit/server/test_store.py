@@ -63,4 +63,8 @@ def test_system_checks_include_sqlite_and_admin_state(tmp_path: Path) -> None:
     checks = {item["key"]: item for item in store.system_checks()}
 
     assert checks["sqlite"]["status"] == "pass"
+    assert checks["sqlite"]["label"] == "SQLite 数据库"
+    assert checks["sqlite"]["description"] == "确认本地 SQLite 数据库可连接并能执行基础查询。"
     assert checks["admin_configured"]["status"] == "warn"
+    assert checks["admin_configured"]["label"] == "管理员账号"
+    assert checks["admin_configured"]["description"] == "确认管理台初始化管理员已经创建。"

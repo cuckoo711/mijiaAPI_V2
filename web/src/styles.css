@@ -191,6 +191,11 @@ body {
   --el-switch-off-color: #9ca3af;
 }
 
+.check-name {
+  color: #1f2937;
+  font-weight: 600;
+}
+
 .permission-table {
   width: 100%;
 }
@@ -234,6 +239,12 @@ body {
 .usage-code code,
 .usage-note code {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.endpoint-path {
+  color: #374151;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 13px;
 }
 
 .security-switch-list {

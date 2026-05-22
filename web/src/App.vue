@@ -11,10 +11,28 @@ import {
   Tickets,
 } from "@element-plus/icons-vue";
 import { ElMessage } from "element-plus";
+import type { Component } from "vue";
 import { computed, onMounted, reactive, ref, watch } from "vue";
 
 type ApiList<T> = { items: T[] };
-type CheckItem = { key: string; status: string; message: string };
+type PageItem = {
+  key: string;
+  label: string;
+  icon: Component;
+};
+type MenuSection = {
+  key: string;
+  label: string;
+  icon: Component;
+  pages: PageItem[];
+};
+type CheckItem = {
+  key: string;
+  label: string;
+  description: string;
+  status: string;
+  message: string;
+};
 type DeviceItem = {
   id: string;
   did_masked: string;
@@ -59,6 +77,7 @@ type ApiKeyItem = {
 const token = ref(localStorage.getItem("mijia_admin_token") || "");
 const activeMenu = ref("dashboard");
 const loading = ref(false);
+const syncing = ref(false);
 const health = ref<{ status: string; version: string } | null>(null);
 const initialized = ref(false);
 const account = ref<Record<string, unknown>>({});
@@ -73,7 +92,7 @@ const oneTimeApiKey = ref("");
 const qrJob = ref<Record<string, string> | null>(null);
 const proxyCidrs = ref("");
 const devicePage = ref(1);
-const devicePageSize = ref(10);
+const devicePageSize = ref(20);
 let qrTimer: number | undefined;
 
 const defaultTrustedProxyCidrs = "127.0.0.1/32\n::1/128";
@@ -92,17 +111,47 @@ const deviceFilters = reactive({
   hidden: "",
 });
 
-const pages = [
-  { key: "dashboard", label: "总览", icon: Monitor },
-  { key: "checks", label: "系统自检", icon: Cpu },
-  { key: "mijia", label: "米家登录", icon: Connection },
-  { key: "devices", label: "家庭与设备", icon: House },
-  { key: "scenes", label: "场景管理", icon: Tickets },
-  { key: "keys", label: "API Key", icon: Key },
-  { key: "security", label: "系统安全", icon: Lock },
-  { key: "settings", label: "配置中心", icon: Setting },
-  { key: "audit", label: "日志与审计", icon: Document },
+const dashboardPage: PageItem = { key: "dashboard", label: "总览", icon: Monitor };
+const menuSections: MenuSection[] = [
+  {
+    key: "runtime",
+    label: "运行管理",
+    icon: Cpu,
+    pages: [
+      { key: "checks", label: "系统自检", icon: Cpu },
+      { key: "mijia", label: "米家登录", icon: Connection },
+    ],
+  },
+  {
+    key: "resources",
+    label: "资源管理",
+    icon: House,
+    pages: [
+      { key: "devices", label: "家庭与设备", icon: House },
+      { key: "scenes", label: "场景管理", icon: Tickets },
+    ],
+  },
+  {
+    key: "access",
+    label: "访问控制",
+    icon: Key,
+    pages: [
+      { key: "keys", label: "API Key", icon: Key },
+      { key: "api-docs", label: "API 使用", icon: Document },
+      { key: "security", label: "系统安全", icon: Lock },
+    ],
+  },
+  {
+    key: "system",
+    label: "系统配置",
+    icon: Setting,
+    pages: [
+      { key: "settings", label: "配置中心", icon: Setting },
+      { key: "audit", label: "日志与审计", icon: Document },
+    ],
+  },
 ];
+const pages = [dashboardPage, ...menuSections.flatMap((section) => section.pages)];
 
 const apiPermissionRows: Array<{
   scope: string;
@@ -181,11 +230,72 @@ const securityRows = [
   },
 ];
 
+const apiEndpointRows = [
+  {
+    method: "GET",
+    path: "/api/v1/status",
+    purpose: "读取服务状态",
+    permission: "读取服务状态",
+  },
+  {
+    method: "GET",
+    path: "/api/v1/account",
+    purpose: "读取米家账号凭据状态",
+    permission: "读取服务状态",
+  },
+  {
+    method: "GET",
+    path: "/api/v1/homes",
+    purpose: "读取家庭列表",
+    permission: "读取家庭与设备",
+  },
+  {
+    method: "GET",
+    path: "/api/v1/devices",
+    purpose: "读取设备列表",
+    permission: "读取家庭与设备",
+  },
+  {
+    method: "GET",
+    path: "/api/v1/devices/{device_slug}/state",
+    purpose: "读取设备状态",
+    permission: "读取家庭与设备",
+  },
+  {
+    method: "POST",
+    path: "/api/v1/devices/{device_slug}/properties",
+    purpose: "设置设备属性",
+    permission: "控制设备",
+  },
+  {
+    method: "POST",
+    path: "/api/v1/devices/{device_slug}/actions",
+    purpose: "调用设备动作",
+    permission: "控制设备",
+  },
+  {
+    method: "POST",
+    path: "/api/v1/scenes/{scene_id}/execute",
+    purpose: "执行米家场景",
+    permission: "执行场景",
+  },
+  {
+    method: "GET",
+    path: "/api/v1/logs",
+    purpose: "读取审计日志",
+    permission: "读取审计日志",
+  },
+];
+
 const isAuthed = computed(() => Boolean(token.value));
 const initializedLabel = computed(() => (initialized.value ? "已初始化" : "待初始化"));
+const activePage = computed(
+  () => pages.find((page) => page.key === activeMenu.value) || dashboardPage
+);
 const runtimeConfig = computed(
   () => new Map(configs.value.map((item) => [String(item.key), item.value]))
 );
+const apiBaseUrl = computed(() => configText("PUBLIC_BASE_URL") || window.location.origin);
 const homeNameMap = computed(() => new Map(homes.value.map((home) => [home.id, home.name])));
 const filteredDevices = computed(() => {
   return devices.value.filter((device) => {
@@ -240,6 +350,33 @@ function deviceStatusTag(status: string): "success" | "danger" | "warning" | "in
     return "warning";
   }
   return "info";
+}
+
+function checkStatusLabel(status: string): string {
+  const labels: Record<string, string> = {
+    pass: "通过",
+    warn: "提醒",
+    fail: "失败",
+    info: "信息",
+  };
+  return labels[status] || status || "-";
+}
+
+function checkStatusTag(status: string): "success" | "danger" | "warning" | "info" {
+  if (status === "pass") {
+    return "success";
+  }
+  if (status === "fail") {
+    return "danger";
+  }
+  if (status === "warn") {
+    return "warning";
+  }
+  return "info";
+}
+
+function methodTag(method: string): "success" | "warning" | "info" {
+  return method === "POST" ? "warning" : method === "GET" ? "success" : "info";
 }
 
 function homeName(homeId: string): string {
@@ -441,20 +578,31 @@ async function pollQrLogin(): Promise<void> {
 }
 
 async function syncMijia(): Promise<void> {
-  const result = await request<{
-    homes: number;
-    devices: number;
-    scenes: number;
-    warnings?: Array<{ kind: string; home_name: string; message: string }>;
-  }>("/api/admin/sync", {
-    method: "POST",
-    body: "{}",
-  });
-  const warningText = result.warnings?.length ? `，${result.warnings.length} 个警告` : "";
-  ElMessage.success(
-    `同步完成：${result.homes} 个家庭，${result.devices} 个设备，${result.scenes} 个场景${warningText}`
-  );
-  await refreshAll();
+  if (syncing.value) {
+    ElMessage.warning("同步正在进行中，请稍候");
+    return;
+  }
+  syncing.value = true;
+  try {
+    const result = await request<{
+      homes: number;
+      devices: number;
+      scenes: number;
+      warnings?: Array<{ kind: string; home_name: string; message: string }>;
+    }>("/api/admin/sync", {
+      method: "POST",
+      body: "{}",
+    });
+    const warningText = result.warnings?.length ? `，${result.warnings.length} 个警告` : "";
+    ElMessage.success(
+      `同步完成：${result.homes} 个家庭，${result.devices} 个设备，${result.scenes} 个场景${warningText}`
+    );
+    await refreshAll();
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : "同步失败");
+  } finally {
+    syncing.value = false;
+  }
 }
 
 async function createApiKey(): Promise<void> {
@@ -588,17 +736,27 @@ onMounted(() => {
         </div>
       </div>
       <el-menu class="nav-menu" :default-active="activeMenu" @select="selectPage">
-        <el-menu-item v-for="page in pages" :key="page.key" :index="page.key">
-          <el-icon><component :is="page.icon" /></el-icon>
-          <span>{{ page.label }}</span>
+        <el-menu-item :index="dashboardPage.key">
+          <el-icon><component :is="dashboardPage.icon" /></el-icon>
+          <span>{{ dashboardPage.label }}</span>
         </el-menu-item>
+        <el-sub-menu v-for="section in menuSections" :key="section.key" :index="section.key">
+          <template #title>
+            <el-icon><component :is="section.icon" /></el-icon>
+            <span>{{ section.label }}</span>
+          </template>
+          <el-menu-item v-for="page in section.pages" :key="page.key" :index="page.key">
+            <el-icon><component :is="page.icon" /></el-icon>
+            <span>{{ page.label }}</span>
+          </el-menu-item>
+        </el-sub-menu>
       </el-menu>
     </el-aside>
 
     <el-container>
       <el-header class="topbar">
         <div>
-          <h1>{{ pages.find((page) => page.key === activeMenu)?.label }}</h1>
+          <h1>{{ activePage.label }}</h1>
           <p>版本 {{ health?.version || "..." }} · {{ initializedLabel }}</p>
         </div>
         <div class="toolbar">
@@ -675,15 +833,20 @@ onMounted(() => {
 
         <section v-else-if="activeMenu === 'checks'">
           <el-table :data="checks" border>
-            <el-table-column prop="key" label="检查项" width="180" />
+            <el-table-column label="检查项" min-width="180">
+              <template #default="{ row }">
+                <div class="check-name">{{ row.label || row.key }}</div>
+              </template>
+            </el-table-column>
+            <el-table-column prop="description" label="说明" min-width="280" />
             <el-table-column label="状态" width="120">
               <template #default="{ row }">
-                <el-tag :type="row.status === 'pass' ? 'success' : row.status === 'fail' ? 'danger' : 'warning'">
-                  {{ row.status }}
+                <el-tag :type="checkStatusTag(row.status)">
+                  {{ checkStatusLabel(row.status) }}
                 </el-tag>
               </template>
             </el-table-column>
-            <el-table-column prop="message" label="结果" />
+            <el-table-column prop="message" label="结果" min-width="240" />
           </el-table>
         </section>
 
@@ -700,7 +863,9 @@ onMounted(() => {
           <el-card shadow="never">
             <template #header>二维码登录</template>
             <el-button type="primary" @click="startQrLogin">开始扫码登录</el-button>
-            <el-button @click="syncMijia">同步家庭/设备/场景</el-button>
+            <el-button :loading="syncing" :disabled="syncing" @click="syncMijia">
+              同步家庭/设备/场景
+            </el-button>
             <div v-if="qrJob" class="qr-box">
               <img :src="qrJob.qr_url" alt="米家登录二维码" />
               <div>{{ qrJob.status }} · {{ qrJob.message }}</div>
@@ -710,7 +875,7 @@ onMounted(() => {
 
         <section v-else-if="activeMenu === 'devices'" class="devices-page">
           <div class="device-filter-bar">
-            <el-button @click="syncMijia">重新同步</el-button>
+            <el-button :loading="syncing" :disabled="syncing" @click="syncMijia">重新同步</el-button>
             <el-select v-model="deviceFilters.home" clearable placeholder="家庭" class="filter-control">
               <el-option v-for="home in homes" :key="home.id" :label="home.name" :value="home.id" />
             </el-select>
@@ -785,7 +950,7 @@ onMounted(() => {
             <el-pagination
               v-model:current-page="devicePage"
               v-model:page-size="devicePageSize"
-              :page-sizes="[10, 20, 50, 100]"
+              :page-sizes="[20, 50, 100]"
               :total="filteredDevices.length"
               background
               layout="total, sizes, prev, pager, next"
@@ -840,7 +1005,6 @@ onMounted(() => {
                   <el-table-column label="权限" width="170">
                     <template #default="{ row }">
                       <div class="permission-name">{{ row.name }}</div>
-                      <code>{{ row.scope }}</code>
                     </template>
                   </el-table-column>
                   <el-table-column prop="description" label="说明" min-width="260" />
@@ -860,22 +1024,6 @@ onMounted(() => {
               <div class="api-key-value">{{ oneTimeApiKey }}</div>
             </el-alert>
           </el-card>
-          <el-card shadow="never">
-            <template #header>API Key 怎么用</template>
-            <div class="usage-note">
-              外部调用时把 API Key 放到 HTTP Header：<code>Authorization: Bearer YOUR_API_KEY</code>
-            </div>
-            <pre class="usage-code"><code>curl -H "Authorization: Bearer YOUR_API_KEY" \
-  http://127.0.0.1:8123/api/v1/devices</code></pre>
-            <pre class="usage-code"><code>fetch("/api/v1/devices", {
-  headers: { Authorization: "Bearer YOUR_API_KEY" }
-})</code></pre>
-            <el-alert type="info" show-icon :closable="false">
-              <template #title>
-                只给调用方需要的最小权限。读取设备只选 read:devices；控制设备才勾选 write:devices。
-              </template>
-            </el-alert>
-          </el-card>
           <el-table :data="apiKeys" border>
             <el-table-column prop="name" label="名称" />
             <el-table-column prop="key_prefix" label="前缀" />
@@ -888,6 +1036,58 @@ onMounted(() => {
             </el-table-column>
             <el-table-column prop="use_count" label="调用次数" width="100" />
           </el-table>
+        </section>
+
+        <section v-else-if="activeMenu === 'api-docs'" class="stack">
+          <el-card shadow="never">
+            <template #header>调用方式</template>
+            <div class="usage-note">
+              外部调用时，把 API Key 放到 HTTP Header：<code>Authorization: Bearer YOUR_API_KEY</code>
+            </div>
+            <pre class="usage-code"><code>curl -H "Authorization: Bearer YOUR_API_KEY" \
+  {{ apiBaseUrl }}/api/v1/devices</code></pre>
+            <pre class="usage-code"><code>fetch("{{ apiBaseUrl }}/api/v1/devices", {
+  headers: {
+    Authorization: "Bearer YOUR_API_KEY"
+  }
+})</code></pre>
+            <el-alert type="info" show-icon :closable="false">
+              <template #title>
+                API Key 创建后只显示一次。调用失败时先检查来源访问开关、反向代理、API Key 状态和对应权限。
+              </template>
+            </el-alert>
+          </el-card>
+          <el-card shadow="never">
+            <template #header>常用接口</template>
+            <el-table :data="apiEndpointRows" border>
+              <el-table-column label="方法" width="92" align="center">
+                <template #default="{ row }">
+                  <el-tag :type="methodTag(row.method)" effect="light">{{ row.method }}</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="路径" min-width="280">
+                <template #default="{ row }">
+                  <code class="endpoint-path">{{ row.path }}</code>
+                </template>
+              </el-table-column>
+              <el-table-column prop="purpose" label="用途" min-width="180" />
+              <el-table-column prop="permission" label="所需权限" min-width="160" />
+            </el-table>
+          </el-card>
+          <el-card shadow="never">
+            <template #header>访问策略</template>
+            <el-descriptions :column="1" border>
+              <el-descriptions-item label="本机调用">
+                服务监听 127.0.0.1 时，只能从同一台机器访问，适合脚本或反向代理转发。
+              </el-descriptions-item>
+              <el-descriptions-item label="局域网调用">
+                在系统安全里开启“允许局域网请求”，再让服务监听可被局域网访问的地址。
+              </el-descriptions-item>
+              <el-descriptions-item label="公网调用">
+                在系统安全里开启“允许公网请求”，并建议只通过 HTTPS 反向代理暴露。
+              </el-descriptions-item>
+            </el-descriptions>
+          </el-card>
         </section>
 
         <section v-else-if="activeMenu === 'security'" class="stack">
