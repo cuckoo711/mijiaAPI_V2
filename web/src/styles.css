@@ -146,6 +146,20 @@ body {
   margin-bottom: 12px;
 }
 
+.table-toolbar {
+  display: grid;
+  grid-template-columns: auto minmax(260px, 420px);
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.table-pagination {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+
 .readonly-name {
   color: #1f2937;
   font-weight: 500;
@@ -197,5 +211,14 @@ body {
 
   .dashboard-grid {
     grid-template-columns: 1fr;
+  }
+
+  .table-toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .table-pagination {
+    justify-content: flex-start;
+    overflow-x: auto;
   }
 }

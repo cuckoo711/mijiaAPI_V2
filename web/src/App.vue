@@ -11,7 +11,7 @@ import {
   Tickets,
 } from "@element-plus/icons-vue";
 import { ElMessage } from "element-plus";
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, onMounted, reactive, ref, watch } from "vue";
 
 type ApiList<T> = { items: T[] };
 type CheckItem = { key: string; status: string; message: string };
@@ -29,6 +29,13 @@ type DeviceItem = {
   hidden: boolean;
   access_mode: string;
   status: string;
+};
+type HomeItem = {
+  id: string;
+  name: string;
+  uid: string;
+  rooms?: Array<Record<string, unknown>>;
+  last_synced_at?: string;
 };
 type SceneItem = {
   id: string;
@@ -56,6 +63,7 @@ const health = ref<{ status: string; version: string } | null>(null);
 const initialized = ref(false);
 const account = ref<Record<string, unknown>>({});
 const checks = ref<CheckItem[]>([]);
+const homes = ref<HomeItem[]>([]);
 const devices = ref<DeviceItem[]>([]);
 const scenes = ref<SceneItem[]>([]);
 const apiKeys = ref<ApiKeyItem[]>([]);
@@ -63,6 +71,9 @@ const configs = ref<Array<Record<string, unknown>>>([]);
 const audits = ref<Array<Record<string, unknown>>>([]);
 const oneTimeApiKey = ref("");
 const qrJob = ref<Record<string, string> | null>(null);
+const deviceFilter = ref("");
+const devicePage = ref(1);
+const devicePageSize = ref(10);
 let qrTimer: number | undefined;
 
 const adminForm = reactive({ username: "admin", password: "" });
@@ -131,6 +142,41 @@ const apiPermissionRows: Array<{
 
 const isAuthed = computed(() => Boolean(token.value));
 const initializedLabel = computed(() => (initialized.value ? "已初始化" : "待初始化"));
+const homeNameMap = computed(() => new Map(homes.value.map((home) => [home.id, home.name])));
+const filteredDevices = computed(() => {
+  const keyword = deviceFilter.value.trim().toLowerCase();
+  if (!keyword) {
+    return devices.value;
+  }
+  return devices.value.filter((device) => {
+    const haystack = [
+      device.display_name,
+      device.name,
+      device.slug,
+      device.model,
+      device.status,
+      homeName(device.home_id),
+    ]
+      .join(" ")
+      .toLowerCase();
+    return haystack.includes(keyword);
+  });
+});
+const paginatedDevices = computed(() => {
+  const start = (devicePage.value - 1) * devicePageSize.value;
+  return filteredDevices.value.slice(start, start + devicePageSize.value);
+});
+
+watch(deviceFilter, () => {
+  devicePage.value = 1;
+});
+
+watch([filteredDevices, devicePageSize], () => {
+  const maxPage = Math.max(1, Math.ceil(filteredDevices.value.length / devicePageSize.value));
+  if (devicePage.value > maxPage) {
+    devicePage.value = maxPage;
+  }
+});
 
 function deviceStatusLabel(status: string): string {
   const labels: Record<string, string> = {
@@ -152,6 +198,10 @@ function deviceStatusTag(status: string): "success" | "danger" | "warning" | "in
     return "warning";
   }
   return "info";
+}
+
+function homeName(homeId: string): string {
+  return homeNameMap.value.get(homeId) || homeId || "-";
 }
 
 function toggleApiKeyScope(scope: string, checked: string | number | boolean): void {
@@ -195,18 +245,28 @@ async function loadAdmin(): Promise<void> {
   if (!token.value) {
     return;
   }
-  const [checkPayload, accountPayload, devicePayload, scenePayload, keyPayload, configPayload, auditPayload] =
-    await Promise.all([
-      request<{ checks: CheckItem[] }>("/api/admin/system/check"),
-      request<Record<string, unknown>>("/api/admin/mijia/account"),
-      request<ApiList<DeviceItem>>("/api/admin/devices?include_hidden=true"),
-      request<ApiList<SceneItem>>("/api/admin/scenes?include_hidden=true"),
-      request<ApiList<ApiKeyItem>>("/api/admin/api-keys"),
-      request<ApiList<Record<string, unknown>>>("/api/admin/config"),
-      request<ApiList<Record<string, unknown>>>("/api/admin/audit?limit=50"),
-    ]);
+  const [
+    checkPayload,
+    accountPayload,
+    homePayload,
+    devicePayload,
+    scenePayload,
+    keyPayload,
+    configPayload,
+    auditPayload,
+  ] = await Promise.all([
+    request<{ checks: CheckItem[] }>("/api/admin/system/check"),
+    request<Record<string, unknown>>("/api/admin/mijia/account"),
+    request<ApiList<HomeItem>>("/api/admin/homes"),
+    request<ApiList<DeviceItem>>("/api/admin/devices?include_hidden=true"),
+    request<ApiList<SceneItem>>("/api/admin/scenes?include_hidden=true"),
+    request<ApiList<ApiKeyItem>>("/api/admin/api-keys"),
+    request<ApiList<Record<string, unknown>>>("/api/admin/config"),
+    request<ApiList<Record<string, unknown>>>("/api/admin/audit?limit=50"),
+  ]);
   checks.value = checkPayload.checks;
   account.value = accountPayload;
+  homes.value = homePayload.items;
   devices.value = devicePayload.items;
   scenes.value = scenePayload.items;
   apiKeys.value = keyPayload.items;
@@ -527,8 +587,15 @@ onMounted(() => {
         </section>
 
         <section v-else-if="activeMenu === 'devices'">
-          <el-button class="section-action" @click="syncMijia">重新同步</el-button>
-          <el-table :data="devices" border>
+          <div class="table-toolbar">
+            <el-button @click="syncMijia">重新同步</el-button>
+            <el-input
+              v-model="deviceFilter"
+              clearable
+              placeholder="搜索显示名 / Slug / 型号 / 家庭"
+            />
+          </div>
+          <el-table :data="paginatedDevices" border>
             <el-table-column label="显示名" min-width="180">
               <template #default="{ row }">
                 <span class="readonly-name">{{ row.display_name || row.name }}</span>
@@ -537,6 +604,11 @@ onMounted(() => {
             <el-table-column label="Slug" min-width="180">
               <template #default="{ row }">
                 <el-input v-model="row.slug" />
+              </template>
+            </el-table-column>
+            <el-table-column label="家庭" min-width="160">
+              <template #default="{ row }">
+                {{ homeName(row.home_id) }}
               </template>
             </el-table-column>
             <el-table-column prop="model" label="型号" min-width="180" />
@@ -575,12 +647,26 @@ onMounted(() => {
               </template>
             </el-table-column>
           </el-table>
+          <div class="table-pagination">
+            <el-pagination
+              v-model:current-page="devicePage"
+              v-model:page-size="devicePageSize"
+              :page-sizes="[10, 20, 50, 100]"
+              :total="filteredDevices.length"
+              background
+              layout="total, sizes, prev, pager, next"
+            />
+          </div>
         </section>
 
         <section v-else-if="activeMenu === 'scenes'">
           <el-table :data="scenes" border>
             <el-table-column prop="name" label="名称" min-width="180" />
-            <el-table-column prop="home_id" label="家庭" min-width="160" />
+            <el-table-column label="家庭" min-width="160">
+              <template #default="{ row }">
+                {{ homeName(row.home_id) }}
+              </template>
+            </el-table-column>
             <el-table-column label="允许执行" width="120">
               <template #default="{ row }">
                 <el-switch
