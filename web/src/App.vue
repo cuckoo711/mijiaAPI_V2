@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import {
   Connection,
+  CopyDocument,
   Cpu,
   Document,
   House,
@@ -377,6 +378,23 @@ function checkStatusTag(status: string): "success" | "danger" | "warning" | "inf
 
 function methodTag(method: string): "success" | "warning" | "info" {
   return method === "POST" ? "warning" : method === "GET" ? "success" : "info";
+}
+
+async function copyText(value: string, message: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+  } else {
+    const textarea = document.createElement("textarea");
+    textarea.value = value;
+    textarea.setAttribute("readonly", "readonly");
+    textarea.style.position = "fixed";
+    textarea.style.left = "-9999px";
+    document.body.appendChild(textarea);
+    textarea.select();
+    document.execCommand("copy");
+    document.body.removeChild(textarea);
+  }
+  ElMessage.success(message);
 }
 
 function homeName(homeId: string): string {
@@ -964,6 +982,20 @@ onMounted(() => {
             <el-table-column label="家庭" min-width="160">
               <template #default="{ row }">
                 {{ homeName(row.home_id) }}
+              </template>
+            </el-table-column>
+            <el-table-column label="场景 ID" min-width="260">
+              <template #default="{ row }">
+                <div class="copyable-id">
+                  <code>{{ row.scene_id }}</code>
+                  <el-button
+                    :icon="CopyDocument"
+                    circle
+                    size="small"
+                    title="复制场景 ID"
+                    @click="copyText(row.scene_id, '场景 ID 已复制')"
+                  />
+                </div>
               </template>
             </el-table-column>
             <el-table-column label="允许执行" width="120">

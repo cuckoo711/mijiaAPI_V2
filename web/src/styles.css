@@ -247,6 +247,22 @@ body {
   font-size: 13px;
 }
 
+.copyable-id {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 28px;
+  gap: 8px;
+  align-items: center;
+}
+
+.copyable-id code {
+  overflow: hidden;
+  color: #374151;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .security-switch-list {
   display: grid;
   gap: 12px;
