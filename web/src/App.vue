@@ -321,12 +321,13 @@ async function request<T>(url: string, options: RequestInit = {}): Promise<T> {
 }
 
 async function loadPublic(): Promise<void> {
-  const [healthPayload, bootstrapPayload] = await Promise.all([
-    request<{ status: string; version: string }>("/healthz"),
-    request<{ initialized: boolean }>("/api/admin/bootstrap/state"),
-  ]);
-  health.value = healthPayload;
+  const bootstrapPayload = await request<{ initialized: boolean }>("/api/admin/bootstrap/state");
   initialized.value = bootstrapPayload.initialized;
+  try {
+    health.value = await request<{ status: string; version: string }>("/healthz");
+  } catch {
+    health.value = health.value || { status: "restricted", version: "" };
+  }
 }
 
 async function loadAdmin(): Promise<void> {
@@ -374,23 +375,34 @@ async function refreshAll(): Promise<void> {
 }
 
 async function createAdmin(): Promise<void> {
-  await request("/api/admin/bootstrap/admin", {
-    method: "POST",
-    body: JSON.stringify(adminForm),
-  });
-  ElMessage.success("管理员已创建");
-  await loadPublic();
+  try {
+    await request("/api/admin/bootstrap/admin", {
+      method: "POST",
+      body: JSON.stringify(adminForm),
+    });
+    initialized.value = true;
+    loginForm.username = adminForm.username;
+    ElMessage.success("管理员已创建，请登录");
+    await loadPublic();
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : "管理员创建失败");
+    await loadPublic();
+  }
 }
 
 async function login(): Promise<void> {
-  const payload = await request<{ token: string }>("/api/admin/auth/login", {
-    method: "POST",
-    body: JSON.stringify(loginForm),
-  });
-  token.value = payload.token;
-  localStorage.setItem("mijia_admin_token", payload.token);
-  ElMessage.success("登录成功");
-  await refreshAll();
+  try {
+    const payload = await request<{ token: string }>("/api/admin/auth/login", {
+      method: "POST",
+      body: JSON.stringify(loginForm),
+    });
+    token.value = payload.token;
+    localStorage.setItem("mijia_admin_token", payload.token);
+    ElMessage.success("登录成功");
+    await refreshAll();
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : "登录失败");
+  }
 }
 
 function logout(): void {
