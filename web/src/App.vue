@@ -597,11 +597,6 @@ onMounted(() => {
                 />
               </template>
             </el-table-column>
-            <el-table-column label="操作" width="100">
-              <template #default="{ row }">
-                <el-button size="small" @click="updateScene(row)">保存</el-button>
-              </template>
-            </el-table-column>
           </el-table>
         </section>
 
