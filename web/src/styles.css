@@ -146,6 +146,11 @@ body {
   margin-bottom: 12px;
 }
 
+.readonly-name {
+  color: #1f2937;
+  font-weight: 500;
+}
+
 .one-time-key {
   margin-top: 16px;
   word-break: break-all;

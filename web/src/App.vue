@@ -88,6 +88,28 @@ const pages = [
 const isAuthed = computed(() => Boolean(token.value));
 const initializedLabel = computed(() => (initialized.value ? "已初始化" : "待初始化"));
 
+function deviceStatusLabel(status: string): string {
+  const labels: Record<string, string> = {
+    online: "在线",
+    offline: "离线",
+    unknown: "未知",
+  };
+  return labels[status] || status || "-";
+}
+
+function deviceStatusTag(status: string): "success" | "danger" | "warning" | "info" {
+  if (status === "online") {
+    return "success";
+  }
+  if (status === "offline") {
+    return "danger";
+  }
+  if (status === "unknown") {
+    return "warning";
+  }
+  return "info";
+}
+
 async function request<T>(url: string, options: RequestInit = {}): Promise<T> {
   const headers = new Headers(options.headers);
   headers.set("Content-Type", "application/json");
@@ -407,7 +429,7 @@ onMounted(() => {
           <el-table :data="devices" border>
             <el-table-column label="显示名" min-width="180">
               <template #default="{ row }">
-                <el-input v-model="row.alias" :placeholder="row.name" />
+                <span class="readonly-name">{{ row.display_name || row.name }}</span>
               </template>
             </el-table-column>
             <el-table-column label="Slug" min-width="180">
@@ -416,7 +438,13 @@ onMounted(() => {
               </template>
             </el-table-column>
             <el-table-column prop="model" label="型号" min-width="180" />
-            <el-table-column prop="status" label="状态" width="100" />
+            <el-table-column label="状态" width="100">
+              <template #default="{ row }">
+                <el-tag :type="deviceStatusTag(row.status)" effect="light">
+                  {{ deviceStatusLabel(row.status) }}
+                </el-tag>
+              </template>
+            </el-table-column>
             <el-table-column label="访问" width="140">
               <template #default="{ row }">
                 <el-select v-model="row.access_mode">
