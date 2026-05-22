@@ -49,6 +49,19 @@ def test_healthz_is_public(tmp_path: Path) -> None:
     assert response.json()["status"] == "ok"
 
 
+def test_bootstrap_state_includes_status_metadata(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+
+    response = client.get("/api/admin/bootstrap/state")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "initialized": False,
+        "status": "ok",
+        "version": "2.0.0",
+    }
+
+
 def test_network_access_policy_allows_lan_only_after_switch_enabled(tmp_path: Path) -> None:
     settings = ServerSettings(
         data_dir=tmp_path,
@@ -138,7 +151,11 @@ def test_network_access_policy_allows_admin_bootstrap_from_public_proxy(tmp_path
 
     state_response = client.get("/api/admin/bootstrap/state", headers=headers)
     assert state_response.status_code == 200
-    assert state_response.json() == {"initialized": False}
+    assert state_response.json() == {
+        "initialized": False,
+        "status": "ok",
+        "version": "2.0.0",
+    }
 
     created_admin = client.post(
         "/api/admin/bootstrap/admin",
@@ -208,7 +225,11 @@ def test_bootstrap_login_create_key_and_status_flow(tmp_path: Path) -> None:
     client = make_client(tmp_path)
 
     state = client.get("/api/admin/bootstrap/state")
-    assert state.json() == {"initialized": False}
+    assert state.json() == {
+        "initialized": False,
+        "status": "ok",
+        "version": "2.0.0",
+    }
 
     created_admin = client.post(
         "/api/admin/bootstrap/admin",

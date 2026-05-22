@@ -34,6 +34,8 @@ class BootstrapStateResponse(BaseModel):
     """Current bootstrap state."""
 
     initialized: bool
+    status: str
+    version: str
 
 
 class CreateAdminRequest(BaseModel):
@@ -383,8 +385,12 @@ def create_app(  # noqa: C901
         return {"status": "ok", "version": mijiaAPI_V2.__version__}
 
     @app.get("/api/admin/bootstrap/state", response_model=BootstrapStateResponse)
-    def bootstrap_state(current_store: ServerStore = Depends(get_store)) -> dict[str, bool]:
-        return {"initialized": current_store.has_admin()}
+    def bootstrap_state(current_store: ServerStore = Depends(get_store)) -> dict[str, Any]:
+        return {
+            "initialized": current_store.has_admin(),
+            "status": "ok",
+            "version": mijiaAPI_V2.__version__,
+        }
 
     @app.post("/api/admin/bootstrap/admin", status_code=status.HTTP_201_CREATED)
     def create_initial_admin(

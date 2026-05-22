@@ -321,13 +321,16 @@ async function request<T>(url: string, options: RequestInit = {}): Promise<T> {
 }
 
 async function loadPublic(): Promise<void> {
-  const bootstrapPayload = await request<{ initialized: boolean }>("/api/admin/bootstrap/state");
+  const bootstrapPayload = await request<{
+    initialized: boolean;
+    status: string;
+    version: string;
+  }>("/api/admin/bootstrap/state");
   initialized.value = bootstrapPayload.initialized;
-  try {
-    health.value = await request<{ status: string; version: string }>("/healthz");
-  } catch {
-    health.value = health.value || { status: "restricted", version: "" };
-  }
+  health.value = {
+    status: bootstrapPayload.status,
+    version: bootstrapPayload.version,
+  };
 }
 
 async function loadAdmin(): Promise<void> {
