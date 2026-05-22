@@ -71,7 +71,6 @@ const configs = ref<Array<Record<string, unknown>>>([]);
 const audits = ref<Array<Record<string, unknown>>>([]);
 const oneTimeApiKey = ref("");
 const qrJob = ref<Record<string, string> | null>(null);
-const deviceFilter = ref("");
 const devicePage = ref(1);
 const devicePageSize = ref(10);
 let qrTimer: number | undefined;
@@ -83,6 +82,12 @@ const keyForm = reactive({
   scopes: ["read:status", "read:devices"] as string[],
 });
 const configForm = reactive({ key: "PUBLIC_BASE_URL", value: "" });
+const deviceFilters = reactive({
+  home: "",
+  status: "",
+  access: "",
+  hidden: "",
+});
 
 const pages = [
   { key: "dashboard", label: "总览", icon: Monitor },
@@ -140,26 +145,57 @@ const apiPermissionRows: Array<{
   },
 ];
 
+const securityRows = [
+  {
+    item: "管理员登录",
+    status: "已启用",
+    description: "管理台需要管理员会话才能进入，管理员密码只保存哈希。",
+  },
+  {
+    item: "API Key",
+    status: "已启用",
+    description: "外部调用必须使用 Bearer API Key，并受权限 scope 限制。",
+  },
+  {
+    item: "设备控制授权",
+    status: "已启用",
+    description: "设备默认为只读，只有切到可控后才允许外部控制。",
+  },
+  {
+    item: "米家凭据",
+    status: "本地保存",
+    description: "扫码后的米家凭据保存在本机 credential 文件中，服务启动后读取。",
+  },
+  {
+    item: "OpenAPI 文档",
+    status: "默认关闭",
+    description: "接口文档默认不公开，可通过环境变量按需开启。",
+  },
+  {
+    item: "审计日志",
+    status: "保留 30 天",
+    description: "管理操作和外部 API 调用会写入 SQLite 审计日志。",
+  },
+];
+
 const isAuthed = computed(() => Boolean(token.value));
 const initializedLabel = computed(() => (initialized.value ? "已初始化" : "待初始化"));
 const homeNameMap = computed(() => new Map(homes.value.map((home) => [home.id, home.name])));
 const filteredDevices = computed(() => {
-  const keyword = deviceFilter.value.trim().toLowerCase();
-  if (!keyword) {
-    return devices.value;
-  }
   return devices.value.filter((device) => {
-    const haystack = [
-      device.display_name,
-      device.name,
-      device.slug,
-      device.model,
-      device.status,
-      homeName(device.home_id),
-    ]
-      .join(" ")
-      .toLowerCase();
-    return haystack.includes(keyword);
+    if (deviceFilters.home && device.home_id !== deviceFilters.home) {
+      return false;
+    }
+    if (deviceFilters.status && device.status !== deviceFilters.status) {
+      return false;
+    }
+    if (deviceFilters.access && device.access_mode !== deviceFilters.access) {
+      return false;
+    }
+    if (deviceFilters.hidden && String(device.hidden) !== deviceFilters.hidden) {
+      return false;
+    }
+    return true;
   });
 });
 const paginatedDevices = computed(() => {
@@ -167,7 +203,7 @@ const paginatedDevices = computed(() => {
   return filteredDevices.value.slice(start, start + devicePageSize.value);
 });
 
-watch(deviceFilter, () => {
+watch(deviceFilters, () => {
   devicePage.value = 1;
 });
 
@@ -202,6 +238,13 @@ function deviceStatusTag(status: string): "success" | "danger" | "warning" | "in
 
 function homeName(homeId: string): string {
   return homeNameMap.value.get(homeId) || homeId || "-";
+}
+
+function resetDeviceFilters(): void {
+  deviceFilters.home = "";
+  deviceFilters.status = "";
+  deviceFilters.access = "";
+  deviceFilters.hidden = "";
 }
 
 function toggleApiKeyScope(scope: string, checked: string | number | boolean): void {
@@ -586,16 +629,28 @@ onMounted(() => {
           </el-card>
         </section>
 
-        <section v-else-if="activeMenu === 'devices'">
-          <div class="table-toolbar">
+        <section v-else-if="activeMenu === 'devices'" class="devices-page">
+          <div class="device-filter-bar">
             <el-button @click="syncMijia">重新同步</el-button>
-            <el-input
-              v-model="deviceFilter"
-              clearable
-              placeholder="搜索显示名 / Slug / 型号 / 家庭"
-            />
+            <el-select v-model="deviceFilters.home" clearable placeholder="家庭" class="filter-control">
+              <el-option v-for="home in homes" :key="home.id" :label="home.name" :value="home.id" />
+            </el-select>
+            <el-select v-model="deviceFilters.status" clearable placeholder="状态" class="filter-control">
+              <el-option label="在线" value="online" />
+              <el-option label="离线" value="offline" />
+              <el-option label="未知" value="unknown" />
+            </el-select>
+            <el-select v-model="deviceFilters.access" clearable placeholder="访问" class="filter-control">
+              <el-option label="只读" value="read" />
+              <el-option label="可控" value="write" />
+            </el-select>
+            <el-select v-model="deviceFilters.hidden" clearable placeholder="隐藏" class="filter-control">
+              <el-option label="显示" value="false" />
+              <el-option label="隐藏" value="true" />
+            </el-select>
+            <el-button @click="resetDeviceFilters">重置</el-button>
           </div>
-          <el-table :data="paginatedDevices" border>
+          <el-table :data="paginatedDevices" border height="100%" class="devices-table">
             <el-table-column label="显示名" min-width="180">
               <template #default="{ row }">
                 <span class="readonly-name">{{ row.display_name || row.name }}</span>
@@ -722,7 +777,24 @@ onMounted(() => {
               <el-button type="primary" @click="createApiKey">创建</el-button>
             </el-form>
             <el-alert v-if="oneTimeApiKey" class="one-time-key" type="warning" show-icon :closable="false">
-              <template #title>一次性密钥：{{ oneTimeApiKey }}</template>
+              <template #title>一次性密钥，只显示这一次</template>
+              <div class="api-key-value">{{ oneTimeApiKey }}</div>
+            </el-alert>
+          </el-card>
+          <el-card shadow="never">
+            <template #header>API Key 怎么用</template>
+            <div class="usage-note">
+              外部调用时把 API Key 放到 HTTP Header：<code>Authorization: Bearer YOUR_API_KEY</code>
+            </div>
+            <pre class="usage-code"><code>curl -H "Authorization: Bearer YOUR_API_KEY" \
+  http://127.0.0.1:8123/api/v1/devices</code></pre>
+            <pre class="usage-code"><code>fetch("/api/v1/devices", {
+  headers: { Authorization: "Bearer YOUR_API_KEY" }
+})</code></pre>
+            <el-alert type="info" show-icon :closable="false">
+              <template #title>
+                只给调用方需要的最小权限。读取设备只选 read:devices；控制设备才勾选 write:devices。
+              </template>
             </el-alert>
           </el-card>
           <el-table :data="apiKeys" border>
@@ -736,6 +808,26 @@ onMounted(() => {
               </template>
             </el-table-column>
             <el-table-column prop="use_count" label="调用次数" width="100" />
+          </el-table>
+        </section>
+
+        <section v-else-if="activeMenu === 'security'" class="stack">
+          <el-card shadow="never">
+            <template #header>系统安全说明</template>
+            <el-alert type="warning" show-icon :closable="false">
+              <template #title>
+                管理台只负责配置和授权，不负责暴露公网。部署到公网前，请在反向代理层启用 HTTPS 和访问控制。
+              </template>
+            </el-alert>
+          </el-card>
+          <el-table :data="securityRows" border>
+            <el-table-column prop="item" label="项目" width="160" />
+            <el-table-column label="状态" width="120">
+              <template #default="{ row }">
+                <el-tag type="success" effect="light">{{ row.status }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="description" label="说明" />
           </el-table>
         </section>
 
@@ -769,7 +861,7 @@ onMounted(() => {
         </section>
 
         <section v-else class="placeholder-panel">
-          <el-empty description="安全策略会在后续细化为独立表单" />
+          <el-empty description="暂未配置页面" />
         </section>
       </el-main>
     </el-container>
