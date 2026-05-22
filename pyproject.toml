@@ -22,8 +22,10 @@ classifiers = [
 
 dependencies = [
     "pydantic>=2.0.0",
-    "httpx>=0.25.0",
+    "httpx[socks]>=0.25.0",
     "aiohttp>=3.9.0",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
     "tenacity>=8.2.0",
     "cachetools>=5.3.0",
     "pycryptodome>=3.23.0",
@@ -60,13 +62,14 @@ docs = [
 
 [project.scripts]
 mijia = "mijiaAPI_V2.cli:main"
+mijia-server = "server.cli:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["mijiaAPI_V2"]
+packages = ["mijiaAPI_V2", "server"]
 
 [tool.black]
 line-length = 100

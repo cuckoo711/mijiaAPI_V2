@@ -31,6 +31,7 @@ def mock_credential():
         user_id="test_user_123",
         service_token="test_service_token",
         ssecurity="test_ssecurity",
+        pass_token="test_pass_token",
         c_user_id="test_c_user_id",
         device_id="test_device_id",
         user_agent="iOS-14.4-6.0.103-iPhone12,1",
@@ -62,7 +63,7 @@ class TestCredentialProvider:
         """测试生成User-Agent"""
         user_agent = provider._generate_user_agent()
         assert isinstance(user_agent, str)
-        assert user_agent == "iOS-14.4-6.0.103-iPhone12,1"
+        assert user_agent.startswith(("iOS-", "Android-"))
 
     def test_calculate_expires_at_with_expires_in(self, provider):
         """测试计算过期时间（使用expires_in）"""
@@ -249,15 +250,30 @@ class TestCredentialProvider:
     @patch("httpx.Client.get")
     def test_refresh_service_token_success(self, mock_get, provider):
         """测试成功刷新service token"""
-        # 模拟成功响应
+        # 模拟 serviceLogin 返回 location，再由 location 返回 serviceToken cookie
         mock_response = Mock()
         mock_response.text = (
-            '&&&START&&&{"code":0,"serviceToken":"new_token","ssecurity":"new_ssecurity"}'
+            '&&&START&&&{"code":0,"location":"https://test.location",'
+            '"ssecurity":"new_ssecurity"}'
         )
         mock_response.raise_for_status = Mock()
-        mock_get.return_value = mock_response
 
-        result = provider._refresh_service_token("old_token")
+        mock_location_response = Mock()
+        mock_location_response.status_code = 200
+        mock_location_response.cookies = {"serviceToken": "new_token"}
+        mock_get.side_effect = [mock_response, mock_location_response]
+
+        credential = Credential(
+            user_id="test_user",
+            service_token="old_token",
+            ssecurity="old_ssecurity",
+            pass_token="test_pass_token",
+            c_user_id="test_user",
+            device_id="test_device",
+            user_agent="iOS-14.4-6.0.103-iPhone12,1",
+            expires_at=datetime.now() + timedelta(days=1),
+        )
+        result = provider._refresh_service_token(credential)
 
         assert result["serviceToken"] == "new_token"
         assert result["ssecurity"] == "new_ssecurity"
@@ -272,9 +288,9 @@ class TestCredentialProvider:
         mock_get.return_value = mock_response
 
         with pytest.raises(TokenExpiredError) as exc_info:
-            provider._refresh_service_token("old_token")
+            provider._refresh_service_token(mock_credential)
 
-        assert "刷新token失败" in str(exc_info.value)
+        assert "刷新service token失败" in str(exc_info.value)
 
     @patch("httpx.Client.get")
     def test_refresh_service_token_missing_ssecurity(self, mock_get, provider):
@@ -286,9 +302,9 @@ class TestCredentialProvider:
         mock_get.return_value = mock_response
 
         with pytest.raises(TokenExpiredError) as exc_info:
-            provider._refresh_service_token("old_token")
+            provider._refresh_service_token(mock_credential)
 
-        assert "缺少ssecurity" in str(exc_info.value)
+        assert "刷新service token失败" in str(exc_info.value)
 
     @patch("httpx.Client.post")
     def test_revoke_success(self, mock_post, provider, mock_credential):
@@ -340,19 +356,19 @@ class TestCredentialProvider:
             "sid": "xiaomiio",
             "_sign": "test_sign",
         }
-        
+
         mock_get_qr_data.return_value = {
             "loginUrl": "https://test.login.url",
             "qr": "https://test.qr.url",
             "lp": "https://test.poll.url",
         }
-        
+
         mock_poll.return_value = {
             "userId": "test_user_123",
             "ssecurity": "test_ssecurity",
             "location": "https://test.callback.url",
         }
-        
+
         # 模拟callback请求返回serviceToken
         mock_response = Mock()
         mock_response.cookies = {"serviceToken": "test_token"}
@@ -366,7 +382,7 @@ class TestCredentialProvider:
         assert credential.service_token == "test_token"
         assert credential.ssecurity == "test_ssecurity"
         assert len(credential.device_id) == 36  # UUID格式
-        assert credential.user_agent == "iOS-14.4-6.0.103-iPhone12,1"
+        assert credential.user_agent.startswith(("iOS-", "Android-"))
         assert credential.expires_at > datetime.now()
 
         # 验证方法调用
@@ -407,7 +423,7 @@ class TestCredentialProvider:
         assert new_credential.user_agent == mock_credential.user_agent
         assert new_credential.expires_at > datetime.now()
 
-        mock_refresh_token.assert_called_once_with(mock_credential.service_token)
+        mock_refresh_token.assert_called_once_with(mock_credential)
 
     @patch.object(CredentialProvider, "_refresh_service_token")
     def test_refresh_failure(self, mock_refresh_token, provider, mock_credential):

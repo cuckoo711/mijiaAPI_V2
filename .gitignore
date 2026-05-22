@@ -37,6 +37,12 @@ ehthumbs.db
 .cache/
 *.cache
 
+# ==================== 前端 ====================
+web/node_modules/
+web/dist/
+web/.vite/
+web/.tsbuildinfo
+
 # ==================== 测试覆盖率 ====================
 .coverage
 htmlcov/

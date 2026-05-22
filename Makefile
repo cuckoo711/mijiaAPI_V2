@@ -41,18 +41,18 @@ test-cov:
 
 format:
 	@echo "格式化代码..."
-	@uv run black mijiaAPI_V2/ tests/ examples/ scripts/
-	@uv run isort mijiaAPI_V2/ tests/ examples/ scripts/
+	@uv run black mijiaAPI_V2/ server/ tests/ examples/ scripts/
+	@uv run isort mijiaAPI_V2/ server/ tests/ examples/ scripts/
 	@echo "✓ 代码格式化完成"
 
 lint:
 	@echo "代码质量检查..."
-	@uv run flake8 mijiaAPI_V2/ --max-line-length=120 --extend-ignore=E203,W503
+	@uv run flake8 mijiaAPI_V2/ server/ --max-line-length=120 --extend-ignore=E203,W503
 	@echo "✓ flake8 检查通过"
 
 type-check:
 	@echo "类型检查..."
-	@uv run mypy mijiaAPI_V2/ --ignore-missing-imports
+	@uv run mypy mijiaAPI_V2/ server/ --ignore-missing-imports
 	@echo "✓ 类型检查通过"
 
 install:
