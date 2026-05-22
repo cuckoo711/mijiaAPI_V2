@@ -85,6 +85,50 @@ const pages = [
   { key: "audit", label: "日志与审计", icon: Document },
 ];
 
+const apiPermissionRows: Array<{
+  scope: string;
+  name: string;
+  description: string;
+  level: "success" | "warning" | "danger" | "info";
+}> = [
+  {
+    scope: "read:status",
+    name: "读取服务状态",
+    description: "允许调用方读取服务健康状态、版本和基础运行信息。",
+    level: "success",
+  },
+  {
+    scope: "read:devices",
+    name: "读取家庭与设备",
+    description: "允许读取已同步的家庭、设备列表、设备状态和设备规格。",
+    level: "info",
+  },
+  {
+    scope: "write:devices",
+    name: "控制设备",
+    description: "允许调用方修改设备属性、调用设备动作和批量控制设备。",
+    level: "danger",
+  },
+  {
+    scope: "write:scenes",
+    name: "执行场景",
+    description: "允许调用方执行已授权的米家场景。",
+    level: "danger",
+  },
+  {
+    scope: "manage:cache",
+    name: "管理缓存",
+    description: "允许刷新或清理 SDK 本地缓存。",
+    level: "warning",
+  },
+  {
+    scope: "read:logs",
+    name: "读取审计日志",
+    description: "允许读取接口调用记录和审计日志。",
+    level: "warning",
+  },
+];
+
 const isAuthed = computed(() => Boolean(token.value));
 const initializedLabel = computed(() => (initialized.value ? "已初始化" : "待初始化"));
 
@@ -108,6 +152,17 @@ function deviceStatusTag(status: string): "success" | "danger" | "warning" | "in
     return "warning";
   }
   return "info";
+}
+
+function toggleApiKeyScope(scope: string, checked: string | number | boolean): void {
+  const selected = Boolean(checked);
+  const scopes = new Set(keyForm.scopes);
+  if (selected) {
+    scopes.add(scope);
+  } else {
+    scopes.delete(scope);
+  }
+  keyForm.scopes = Array.from(scopes);
 }
 
 async function request<T>(url: string, options: RequestInit = {}): Promise<T> {
@@ -558,14 +613,30 @@ onMounted(() => {
                 <el-input v-model="keyForm.name" />
               </el-form-item>
               <el-form-item label="权限">
-                <el-checkbox-group v-model="keyForm.scopes">
-                  <el-checkbox label="read:status" />
-                  <el-checkbox label="read:devices" />
-                  <el-checkbox label="write:devices" />
-                  <el-checkbox label="write:scenes" />
-                  <el-checkbox label="manage:cache" />
-                  <el-checkbox label="read:logs" />
-                </el-checkbox-group>
+                <el-table :data="apiPermissionRows" border class="permission-table">
+                  <el-table-column label="选择" width="80" align="center">
+                    <template #default="{ row }">
+                      <el-checkbox
+                        :model-value="keyForm.scopes.includes(row.scope)"
+                        @change="(checked: string | number | boolean) => toggleApiKeyScope(row.scope, checked)"
+                      />
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="权限" width="170">
+                    <template #default="{ row }">
+                      <div class="permission-name">{{ row.name }}</div>
+                      <code>{{ row.scope }}</code>
+                    </template>
+                  </el-table-column>
+                  <el-table-column prop="description" label="说明" min-width="260" />
+                  <el-table-column label="风险" width="90" align="center">
+                    <template #default="{ row }">
+                      <el-tag :type="row.level" effect="light">
+                        {{ row.level === "danger" ? "高" : row.level === "warning" ? "中" : "低" }}
+                      </el-tag>
+                    </template>
+                  </el-table-column>
+                </el-table>
               </el-form-item>
               <el-button type="primary" @click="createApiKey">创建</el-button>
             </el-form>

@@ -156,6 +156,21 @@ body {
   --el-switch-off-color: #9ca3af;
 }
 
+.permission-table {
+  width: 100%;
+}
+
+.permission-name {
+  margin-bottom: 2px;
+  color: #1f2937;
+  font-weight: 600;
+}
+
+.permission-table code {
+  color: #6b7280;
+  font-size: 12px;
+}
+
 .one-time-key {
   margin-top: 16px;
   word-break: break-all;
