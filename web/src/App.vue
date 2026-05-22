@@ -200,11 +200,19 @@ async function pollQrLogin(): Promise<void> {
 }
 
 async function syncMijia(): Promise<void> {
-  const result = await request<Record<string, number>>("/api/admin/sync", {
+  const result = await request<{
+    homes: number;
+    devices: number;
+    scenes: number;
+    warnings?: Array<{ kind: string; home_name: string; message: string }>;
+  }>("/api/admin/sync", {
     method: "POST",
     body: "{}",
   });
-  ElMessage.success(`同步完成：${result.homes} 个家庭，${result.devices} 个设备，${result.scenes} 个场景`);
+  const warningText = result.warnings?.length ? `，${result.warnings.length} 个警告` : "";
+  ElMessage.success(
+    `同步完成：${result.homes} 个家庭，${result.devices} 个设备，${result.scenes} 个场景${warningText}`
+  );
   await refreshAll();
 }
 

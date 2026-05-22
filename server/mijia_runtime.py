@@ -180,15 +180,23 @@ class MijiaRuntime:
 
         devices: list[dict[str, Any]] = []
         scenes: list[dict[str, Any]] = []
+        warnings: list[dict[str, str]] = []
         for home in homes:
-            devices.extend(self._device_dicts(api, home))
-            scenes.extend(self._scene_dicts(api, home))
+            try:
+                devices.extend(self._device_dicts(api, home))
+            except Exception as exc:
+                warnings.append(self._sync_warning("devices", home, exc))
+            try:
+                scenes.extend(self._scene_dicts(api, home))
+            except Exception as exc:
+                warnings.append(self._sync_warning("scenes", home, exc))
         self._store.upsert_devices(devices)
         self._store.upsert_scenes(scenes)
         return {
             "homes": len(home_dicts),
             "devices": len(devices),
             "scenes": len(scenes),
+            "warnings": warnings,
         }
 
     def get_device_state(self, device_slug: str) -> list[dict[str, Any]]:
@@ -296,6 +304,14 @@ class MijiaRuntime:
             payload["id"] = str(uuid.uuid4())
             scenes.append(payload)
         return scenes
+
+    def _sync_warning(self, kind: str, home: Home, exc: Exception) -> dict[str, str]:
+        return {
+            "kind": kind,
+            "home_id": str(home.id),
+            "home_name": str(home.name),
+            "message": str(exc),
+        }
 
     def _safe_spec(self, api: Any, device: Device) -> dict[str, Any] | None:
         try:

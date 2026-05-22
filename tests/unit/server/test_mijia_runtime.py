@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from mijiaAPI_V2.domain.models import Credential
+from mijiaAPI_V2.domain.models import Credential, Home
 from mijiaAPI_V2.infrastructure.credential_store import FileCredentialStore
 from server.config import ServerSettings
 from server.mijia_runtime import MijiaRuntime
@@ -71,3 +71,46 @@ def test_runtime_refreshes_expiring_credential_before_creating_api(
 
     assert seen_tokens == ["old-token", "new-token"]
     assert FileCredentialStore(settings.credential_path).load().service_token == "new-token"
+
+
+def test_sync_continues_when_one_home_scene_sync_fails(tmp_path: Path, monkeypatch: Any) -> None:
+    settings = make_settings(tmp_path)
+    store = ServerStore(settings)
+    store.initialize()
+    FileCredentialStore(settings.credential_path).save(
+        make_credential("token", datetime.now() + timedelta(days=30))
+    )
+
+    class FakeApi:
+        def get_homes(self) -> list[Home]:
+            return [
+                Home(id="home-ok", name="主家庭", uid="user-1", rooms=[]),
+                Home(id="home-bad", name="异常家庭", uid="user-1", rooms=[]),
+            ]
+
+        def get_devices(self, home_id: str) -> list[Any]:
+            return []
+
+        def get_scenes(self, home_id: str) -> list[Any]:
+            if home_id == "home-bad":
+                raise RuntimeError("homeId is not home")
+            return []
+
+    monkeypatch.setattr(
+        "server.mijia_runtime.create_api_client",
+        lambda credential, **_: FakeApi(),
+    )
+
+    result = MijiaRuntime(settings, store).sync_all()
+
+    assert result["homes"] == 2
+    assert result["devices"] == 0
+    assert result["scenes"] == 0
+    assert result["warnings"] == [
+        {
+            "kind": "scenes",
+            "home_id": "home-bad",
+            "home_name": "异常家庭",
+            "message": "homeId is not home",
+        }
+    ]
