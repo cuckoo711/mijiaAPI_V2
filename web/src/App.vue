@@ -249,7 +249,7 @@ async function createApiKey(): Promise<void> {
   await loadAdmin();
 }
 
-async function updateDevice(device: DeviceItem): Promise<void> {
+async function updateDevice(device: DeviceItem, message = "设备已更新"): Promise<void> {
   await request(`/api/admin/devices/${device.id}`, {
     method: "PATCH",
     body: JSON.stringify({
@@ -261,17 +261,64 @@ async function updateDevice(device: DeviceItem): Promise<void> {
       access_mode: device.access_mode,
     }),
   });
-  ElMessage.success("设备已更新");
+  ElMessage.success(message);
   await loadAdmin();
 }
 
-async function updateScene(scene: SceneItem): Promise<void> {
+async function autoSaveDeviceAccess(
+  device: DeviceItem,
+  value: string | number | boolean
+): Promise<void> {
+  const nextValue = String(value);
+  const previousValue = nextValue === "write" ? "read" : "write";
+  try {
+    await updateDevice(device, "访问权限已保存");
+  } catch (error) {
+    device.access_mode = previousValue;
+    ElMessage.error(error instanceof Error ? error.message : "访问权限保存失败");
+  }
+}
+
+async function autoSaveDeviceHidden(device: DeviceItem, value: string | number | boolean): Promise<void> {
+  const previousValue = !Boolean(value);
+  try {
+    await updateDevice(device, "隐藏状态已保存");
+  } catch (error) {
+    device.hidden = previousValue;
+    ElMessage.error(error instanceof Error ? error.message : "隐藏状态保存失败");
+  }
+}
+
+async function updateScene(scene: SceneItem, message = "场景已更新"): Promise<void> {
   await request(`/api/admin/scenes/${scene.id}`, {
     method: "PATCH",
     body: JSON.stringify({ hidden: scene.hidden, executable: scene.executable }),
   });
-  ElMessage.success("场景已更新");
+  ElMessage.success(message);
   await loadAdmin();
+}
+
+async function autoSaveSceneExecutable(
+  scene: SceneItem,
+  value: string | number | boolean
+): Promise<void> {
+  const previousValue = !Boolean(value);
+  try {
+    await updateScene(scene, "执行权限已保存");
+  } catch (error) {
+    scene.executable = previousValue;
+    ElMessage.error(error instanceof Error ? error.message : "执行权限保存失败");
+  }
+}
+
+async function autoSaveSceneHidden(scene: SceneItem, value: string | number | boolean): Promise<void> {
+  const previousValue = !Boolean(value);
+  try {
+    await updateScene(scene, "隐藏状态已保存");
+  } catch (error) {
+    scene.hidden = previousValue;
+    ElMessage.error(error instanceof Error ? error.message : "隐藏状态保存失败");
+  }
 }
 
 async function setConfig(): Promise<void> {
@@ -455,12 +502,16 @@ onMounted(() => {
                   inactive-text="只读"
                   inline-prompt
                   class="access-switch"
+                  @change="(value: string | number | boolean) => autoSaveDeviceAccess(row, value)"
                 />
               </template>
             </el-table-column>
             <el-table-column label="隐藏" width="90">
               <template #default="{ row }">
-                <el-switch v-model="row.hidden" />
+                <el-switch
+                  v-model="row.hidden"
+                  @change="(value: string | number | boolean) => autoSaveDeviceHidden(row, value)"
+                />
               </template>
             </el-table-column>
             <el-table-column label="操作" width="100">
@@ -477,12 +528,18 @@ onMounted(() => {
             <el-table-column prop="home_id" label="家庭" min-width="160" />
             <el-table-column label="允许执行" width="120">
               <template #default="{ row }">
-                <el-switch v-model="row.executable" />
+                <el-switch
+                  v-model="row.executable"
+                  @change="(value: string | number | boolean) => autoSaveSceneExecutable(row, value)"
+                />
               </template>
             </el-table-column>
             <el-table-column label="隐藏" width="90">
               <template #default="{ row }">
-                <el-switch v-model="row.hidden" />
+                <el-switch
+                  v-model="row.hidden"
+                  @change="(value: string | number | boolean) => autoSaveSceneHidden(row, value)"
+                />
               </template>
             </el-table-column>
             <el-table-column label="操作" width="100">
