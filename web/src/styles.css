@@ -257,6 +257,21 @@ body {
   background: #fff7f7;
 }
 
+.proxy-config {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid #d7dde5;
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.proxy-config-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .security-switch-title {
   color: #1f2937;
   font-weight: 700;
@@ -307,5 +322,9 @@ body {
 
   .security-switch-row {
     grid-template-columns: 1fr;
+  }
+
+  .proxy-config-actions {
+    justify-content: flex-start;
   }
 }

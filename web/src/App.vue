@@ -71,9 +71,12 @@ const configs = ref<Array<Record<string, unknown>>>([]);
 const audits = ref<Array<Record<string, unknown>>>([]);
 const oneTimeApiKey = ref("");
 const qrJob = ref<Record<string, string> | null>(null);
+const proxyCidrs = ref("");
 const devicePage = ref(1);
 const devicePageSize = ref(10);
 let qrTimer: number | undefined;
+
+const defaultTrustedProxyCidrs = "127.0.0.1/32\n::1/128";
 
 const adminForm = reactive({ username: "admin", password: "" });
 const loginForm = reactive({ username: "admin", password: "" });
@@ -261,6 +264,31 @@ function configBool(key: string): boolean {
   return Boolean(value);
 }
 
+function configText(key: string, defaultValue = ""): string {
+  const value = runtimeConfig.value.get(key);
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item)).join("\n");
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  if (value === undefined || value === null) {
+    return defaultValue;
+  }
+  return String(value);
+}
+
+function syncProxyCidrsForm(): void {
+  proxyCidrs.value = configText("TRUSTED_PROXY_CIDRS", defaultTrustedProxyCidrs);
+}
+
+function parseProxyCidrs(): string[] {
+  return proxyCidrs.value
+    .split(/[\n,]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 function toggleApiKeyScope(scope: string, checked: string | number | boolean): void {
   const selected = Boolean(checked);
   const scopes = new Set(keyForm.scopes);
@@ -329,6 +357,7 @@ async function loadAdmin(): Promise<void> {
   apiKeys.value = keyPayload.items;
   configs.value = configPayload.items;
   audits.value = auditPayload.items;
+  syncProxyCidrsForm();
 }
 
 async function refreshAll(): Promise<void> {
@@ -509,6 +538,15 @@ async function setRuntimeSwitch(key: string, value: string | number | boolean): 
     body: JSON.stringify({ value: Boolean(value) }),
   });
   ElMessage.success("访问策略已保存");
+  await loadAdmin();
+}
+
+async function saveTrustedProxyCidrs(): Promise<void> {
+  await request("/api/admin/config/TRUSTED_PROXY_CIDRS", {
+    method: "PUT",
+    body: JSON.stringify({ value: parseProxyCidrs() }),
+  });
+  ElMessage.success("可信代理已保存");
   await loadAdmin();
 }
 
@@ -875,6 +913,39 @@ onMounted(() => {
                   inline-prompt
                   @change="(value: string | number | boolean) => setRuntimeSwitch('ALLOW_PUBLIC_ACCESS', value)"
                 />
+              </div>
+              <div class="security-switch-row">
+                <div>
+                  <div class="security-switch-title">反向代理模式</div>
+                  <div class="security-switch-desc">
+                    信任来自可信代理的 X-Forwarded-For / X-Real-IP，再按真实客户端来源判断访问权限。
+                  </div>
+                </div>
+                <el-switch
+                  :model-value="configBool('TRUST_PROXY_HEADERS')"
+                  active-text="开启"
+                  inactive-text="关闭"
+                  inline-prompt
+                  @change="(value: string | number | boolean) => setRuntimeSwitch('TRUST_PROXY_HEADERS', value)"
+                />
+              </div>
+              <div class="proxy-config">
+                <div>
+                  <div class="security-switch-title">可信代理地址</div>
+                  <div class="security-switch-desc">
+                    每行一个 IP 或 CIDR。只有这些代理传来的转发头会被采用。
+                  </div>
+                </div>
+                <el-input
+                  v-model="proxyCidrs"
+                  type="textarea"
+                  :rows="4"
+                  placeholder="127.0.0.1/32&#10;::1/128&#10;192.168.1.10/32"
+                />
+                <div class="proxy-config-actions">
+                  <el-button @click="syncProxyCidrsForm">还原</el-button>
+                  <el-button type="primary" @click="saveTrustedProxyCidrs">保存可信代理</el-button>
+                </div>
               </div>
             </div>
             <el-alert class="security-hint" type="info" show-icon :closable="false">

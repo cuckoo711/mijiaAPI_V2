@@ -31,6 +31,28 @@ uv run mijia-server check
 - `MIJIA_CREDENTIAL_PATH`
 - `MIJIA_PUBLIC_BASE_URL`
 
+## 访问来源与反向代理
+
+服务默认只监听本机，并且本机请求始终允许。要让局域网或公网客户端访问，需要同时满足两件事：
+
+1. 启动时监听可被外部访问的地址，例如 `MIJIA_SERVER_HOST=0.0.0.0`，或由 Nginx/Caddy/NAS 反向代理转发到本服务。
+2. 在管理台的“系统安全”中开启对应的“允许局域网请求”或“允许公网请求”开关。
+
+如果前面有反向代理，还需要开启“反向代理模式”，并在“可信代理地址”中填写代理自身的 IP 或 CIDR。后端只会信任这些地址传来的 `X-Forwarded-For` / `X-Real-IP`，再用真实客户端 IP 判断局域网/公网权限。默认可信代理仅包含：
+
+```text
+127.0.0.1/32
+::1/128
+```
+
+Nginx 示例：
+
+```nginx
+proxy_set_header X-Real-IP $remote_addr;
+proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+proxy_set_header X-Forwarded-Proto $scheme;
+```
+
 ## 前端
 
 开发期进入 `web/`：
@@ -65,6 +87,7 @@ npm run build
 - 场景隐藏和可执行权限维护。
 - 对外 REST API：账号、家庭、设备、设备状态、设备规格、设备控制、批量控制、场景执行、缓存和日志。
 - 运行时配置读写。
+- 局域网/公网访问来源开关，以及可信反向代理来源识别。
 - 审计日志写入和查询。
 
 ## 常用接口

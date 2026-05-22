@@ -83,6 +83,64 @@ def test_network_access_policy_allows_public_only_after_switch_enabled(tmp_path:
     assert allowed_client.get("/healthz").status_code == 200
 
 
+def test_network_access_policy_uses_forwarded_for_from_trusted_proxy(tmp_path: Path) -> None:
+    settings = ServerSettings(
+        data_dir=tmp_path,
+        database_path=tmp_path / "server.sqlite3",
+        credential_path=tmp_path / "credential.json",
+    )
+    store = ServerStore(settings)
+    app = create_app(settings, store=store)
+    store.set_config("TRUST_PROXY_HEADERS", True)
+    store.set_config("TRUSTED_PROXY_CIDRS", ["127.0.0.1/32", "::1/128"])
+    client = TestClient(app, client=("127.0.0.1", 50000))
+
+    blocked_response = client.get("/healthz", headers={"X-Forwarded-For": "8.8.8.8"})
+    assert blocked_response.status_code == 403
+
+    store.set_config("ALLOW_PUBLIC_ACCESS", True)
+    allowed_response = client.get("/healthz", headers={"X-Forwarded-For": "8.8.8.8"})
+    assert allowed_response.status_code == 200
+
+
+def test_network_access_policy_uses_real_ip_from_trusted_proxy(tmp_path: Path) -> None:
+    settings = ServerSettings(
+        data_dir=tmp_path,
+        database_path=tmp_path / "server.sqlite3",
+        credential_path=tmp_path / "credential.json",
+    )
+    store = ServerStore(settings)
+    app = create_app(settings, store=store)
+    store.set_config("TRUST_PROXY_HEADERS", True)
+    store.set_config("TRUSTED_PROXY_CIDRS", ["127.0.0.1/32", "::1/128"])
+    client = TestClient(app, client=("127.0.0.1", 50000))
+
+    blocked_response = client.get("/healthz", headers={"X-Real-IP": "192.168.1.20"})
+    assert blocked_response.status_code == 403
+
+    store.set_config("ALLOW_LAN_ACCESS", True)
+    allowed_response = client.get("/healthz", headers={"X-Real-IP": "192.168.1.20"})
+    assert allowed_response.status_code == 200
+
+
+def test_network_access_policy_ignores_forwarded_for_from_untrusted_proxy(tmp_path: Path) -> None:
+    settings = ServerSettings(
+        data_dir=tmp_path,
+        database_path=tmp_path / "server.sqlite3",
+        credential_path=tmp_path / "credential.json",
+    )
+    store = ServerStore(settings)
+    app = create_app(settings, store=store)
+    store.set_config("TRUST_PROXY_HEADERS", True)
+    store.set_config("TRUSTED_PROXY_CIDRS", ["127.0.0.1/32", "::1/128"])
+    store.set_config("ALLOW_LAN_ACCESS", True)
+    client = TestClient(app, client=("192.168.1.20", 50000))
+
+    response = client.get("/healthz", headers={"X-Forwarded-For": "8.8.8.8"})
+
+    assert response.status_code == 200
+
+
 def test_bootstrap_login_create_key_and_status_flow(tmp_path: Path) -> None:
     client = make_client(tmp_path)
 

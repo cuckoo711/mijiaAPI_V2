@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from ipaddress import ip_address
+from ipaddress import ip_address, ip_network
 from pathlib import Path
 from typing import Annotated, Any, Optional
 
@@ -20,6 +20,8 @@ from server.store import (
     BootstrapAlreadyCompletedError,
     ServerStore,
 )
+
+DEFAULT_TRUSTED_PROXY_CIDRS = ("127.0.0.1/32", "::1/128")
 
 
 class ErrorEnvelope(BaseModel):
@@ -157,12 +159,78 @@ def _config_bool(config: dict[str, Any], key: str, default: bool = False) -> boo
     return bool(value)
 
 
+def _config_string_list(
+    config: dict[str, Any],
+    key: str,
+    default: tuple[str, ...] = (),
+) -> list[str]:
+    value = config.get(key, default)
+    if isinstance(value, str):
+        items = value.replace("\n", ",").split(",")
+    elif isinstance(value, (list, tuple, set)):
+        items = [str(item) for item in value]
+    else:
+        items = list(default)
+    return [item.strip() for item in items if item.strip()]
+
+
+def _parse_ip(host: str) -> Any:
+    value = host.strip()
+    if value.startswith("[") and "]" in value:
+        value = value[1 : value.index("]")]
+    elif value.count(":") == 1 and value.rsplit(":", 1)[1].isdigit():
+        value = value.rsplit(":", 1)[0]
+    try:
+        return ip_address(value)
+    except ValueError:
+        return None
+
+
+def _host_in_cidrs(host: str, cidrs: list[str]) -> bool:
+    address = _parse_ip(host)
+    if address is None:
+        return False
+    for cidr in cidrs:
+        try:
+            network = ip_network(cidr, strict=False)
+        except ValueError:
+            continue
+        if address.version == network.version and address in network:
+            return True
+    return False
+
+
+def _forwarded_client_host(request: Request) -> str:
+    x_forwarded_for = request.headers.get("X-Forwarded-For", "")
+    if x_forwarded_for:
+        forwarded_host = x_forwarded_for.split(",", 1)[0].strip()
+        if _parse_ip(forwarded_host) is not None:
+            return forwarded_host
+    x_real_ip = request.headers.get("X-Real-IP", "").strip()
+    if x_real_ip and _parse_ip(x_real_ip) is not None:
+        return x_real_ip
+    return ""
+
+
+def _request_source_host(request: Request, config: dict[str, Any]) -> str:
+    direct_host = request.client.host if request.client else ""
+    if not _config_bool(config, "TRUST_PROXY_HEADERS"):
+        return direct_host
+    trusted_cidrs = _config_string_list(
+        config,
+        "TRUSTED_PROXY_CIDRS",
+        DEFAULT_TRUSTED_PROXY_CIDRS,
+    )
+    if not _host_in_cidrs(direct_host, trusted_cidrs):
+        return direct_host
+    return _forwarded_client_host(request) or direct_host
+
+
 def _request_network_allowed(host: str, config: dict[str, Any]) -> bool:
     if not host:
         return True
-    try:
-        address = ip_address(host)
-    except ValueError:
+    address = _parse_ip(host)
+    if address is None:
         return True
     if address.is_loopback:
         return True
@@ -226,8 +294,10 @@ def create_app(  # noqa: C901
     async def request_id_middleware(request: Request, call_next: Any) -> Any:
         request_id = request.headers.get("X-Request-ID") or f"req_{id(request)}"
         setattr(request.state, "request_id", request_id)
-        source_host = request.client.host if request.client else ""
-        if not _request_network_allowed(source_host, resolved_store.get_config_map()):
+        config_map = resolved_store.get_config_map()
+        source_host = _request_source_host(request, config_map)
+        setattr(request.state, "source_ip", source_host)
+        if not _request_network_allowed(source_host, config_map):
             return _json_error(
                 status.HTTP_403_FORBIDDEN,
                 "NETWORK_ACCESS_DENIED",
@@ -274,7 +344,7 @@ def create_app(  # noqa: C901
                 return current_store.validate_api_key(
                     key,
                     required_scope=required_scope,
-                    source_ip=request.client.host if request.client else None,
+                    source_ip=getattr(request.state, "source_ip", None),
                 )
             except AuthenticationFailedError as exc:
                 raise HTTPException(
