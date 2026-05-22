@@ -186,9 +186,16 @@ async function pollQrLogin(): Promise<void> {
     return;
   }
   qrJob.value = await request<Record<string, string>>(`/api/admin/mijia/login/${qrJob.value.id}`);
-  if (["success", "failed"].includes(String(qrJob.value.status))) {
+  const status = String(qrJob.value.status);
+  if (status === "success") {
     window.clearInterval(qrTimer);
     await refreshAll();
+    ElMessage.success("米家登录成功");
+    qrJob.value = null;
+    return;
+  }
+  if (status === "failed") {
+    window.clearInterval(qrTimer);
   }
 }
 

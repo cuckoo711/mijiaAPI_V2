@@ -43,6 +43,7 @@ class ServerSettings:
     public_base_url: str = ""
     audit_retention_days: int = 30
     admin_session_hours: int = 12
+    credential_refresh_before_seconds: int = 24 * 60 * 60
     openapi_enabled: bool = False
     docs_enabled: bool = False
     web_dist_dir: Path = Path("web/dist")
@@ -62,6 +63,9 @@ class ServerSettings:
             public_base_url=os.getenv("MIJIA_PUBLIC_BASE_URL", ""),
             audit_retention_days=_env_int("MIJIA_AUDIT_RETENTION_DAYS", 30),
             admin_session_hours=_env_int("MIJIA_ADMIN_SESSION_HOURS", 12),
+            credential_refresh_before_seconds=_env_int(
+                "MIJIA_CREDENTIAL_REFRESH_BEFORE_SECONDS", 24 * 60 * 60
+            ),
             openapi_enabled=_env_bool("MIJIA_OPENAPI_ENABLED", False),
             docs_enabled=_env_bool("MIJIA_DOCS_ENABLED", False),
             web_dist_dir=_env_path("MIJIA_WEB_DIST_DIR", Path("web/dist")),

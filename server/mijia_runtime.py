@@ -139,6 +139,7 @@ class MijiaRuntime:
     def __init__(self, settings: ServerSettings, store: ServerStore):
         self._settings = settings
         self._store = store
+        self._credential_lock = threading.RLock()
 
     def load_credential(self) -> Optional[Credential]:
         return FileCredentialStore(self._settings.credential_path).load()
@@ -156,13 +157,17 @@ class MijiaRuntime:
         }
 
     def refresh_credential(self) -> dict[str, Any]:
-        credential = self._require_credential()
+        credential = self._load_required_credential()
+        self._refresh_credential(credential)
+        return self.credential_status()
+
+    def _refresh_credential(self, credential: Credential) -> Credential:
         auth = create_auth_service(
             credential_store=FileCredentialStore(self._settings.credential_path)
         )
         refreshed = auth.refresh_credential(credential)
         auth.save_credential(refreshed)
-        return self.credential_status()
+        return refreshed
 
     def delete_credential(self) -> None:
         FileCredentialStore(self._settings.credential_path).delete()
@@ -250,6 +255,21 @@ class MijiaRuntime:
         self._api().clear_all_cache()
 
     def _require_credential(self) -> Credential:
+        credential = self._load_required_credential()
+        if credential.expires_in() > self._settings.credential_refresh_before_seconds:
+            return credential
+        with self._credential_lock:
+            credential = self._load_required_credential()
+            if credential.expires_in() > self._settings.credential_refresh_before_seconds:
+                return credential
+            try:
+                return self._refresh_credential(credential)
+            except Exception as exc:
+                if credential.is_valid():
+                    return credential
+                raise RuntimeError(f"米家凭据已过期且自动刷新失败：{exc}") from exc
+
+    def _load_required_credential(self) -> Credential:
         credential = self.load_credential()
         if credential is None:
             raise RuntimeError("米家凭据不存在，请先扫码登录")
