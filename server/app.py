@@ -239,6 +239,10 @@ def _request_network_allowed(host: str, config: dict[str, Any]) -> bool:
     return _config_bool(config, "ALLOW_PUBLIC_ACCESS")
 
 
+def _network_policy_required(path: str) -> bool:
+    return path == "/healthz" or path == "/api/v1" or path.startswith("/api/v1/")
+
+
 def create_app(  # noqa: C901
     settings: Optional[ServerSettings] = None,
     store: Optional[ServerStore] = None,
@@ -297,7 +301,9 @@ def create_app(  # noqa: C901
         config_map = resolved_store.get_config_map()
         source_host = _request_source_host(request, config_map)
         setattr(request.state, "source_ip", source_host)
-        if not _request_network_allowed(source_host, config_map):
+        if _network_policy_required(request.url.path) and not _request_network_allowed(
+            source_host, config_map
+        ):
             return _json_error(
                 status.HTTP_403_FORBIDDEN,
                 "NETWORK_ACCESS_DENIED",
@@ -364,7 +370,7 @@ def create_app(  # noqa: C901
             return current_store.validate_api_key(
                 key,
                 required_scope="read:status",
-                source_ip=request.client.host if request.client else None,
+                source_ip=getattr(request.state, "source_ip", None),
             )
         except AuthenticationFailedError as exc:
             raise HTTPException(

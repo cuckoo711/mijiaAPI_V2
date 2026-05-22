@@ -891,7 +891,7 @@ onMounted(() => {
                 <div>
                   <div class="security-switch-title">允许局域网请求</div>
                   <div class="security-switch-desc">
-                    允许 10.x、172.16-31.x、192.168.x、局域网 IPv6 等私有网段访问。
+                    允许 10.x、172.16-31.x、192.168.x、局域网 IPv6 等私有网段访问对外 API。
                   </div>
                 </div>
                 <el-switch
@@ -906,7 +906,7 @@ onMounted(() => {
                 <div>
                   <div class="security-switch-title">允许公网请求</div>
                   <div class="security-switch-desc">
-                    允许公网 IP 直接访问。开启前请确认 API Key 权限、HTTPS、反向代理和防火墙策略。
+                    允许公网客户端访问对外 API。开启前请确认 API Key 权限、HTTPS、反向代理和防火墙策略。
                   </div>
                 </div>
                 <el-switch

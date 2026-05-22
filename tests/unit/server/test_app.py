@@ -121,6 +121,51 @@ def test_network_access_policy_trusts_loopback_proxy_headers_by_default(tmp_path
     assert allowed_response.status_code == 200
 
 
+def test_network_access_policy_allows_admin_bootstrap_from_public_proxy(tmp_path: Path) -> None:
+    settings = ServerSettings(
+        data_dir=tmp_path,
+        database_path=tmp_path / "server.sqlite3",
+        credential_path=tmp_path / "credential.json",
+        web_dist_dir=tmp_path / "missing-web-dist",
+    )
+    store = ServerStore(settings)
+    app = create_app(settings, store=store)
+    client = TestClient(app, client=("127.0.0.1", 50000))
+    headers = {"X-Forwarded-For": "8.8.8.8"}
+
+    frontend_response = client.get("/", headers=headers)
+    assert frontend_response.status_code == 200
+
+    state_response = client.get("/api/admin/bootstrap/state", headers=headers)
+    assert state_response.status_code == 200
+    assert state_response.json() == {"initialized": False}
+
+    created_admin = client.post(
+        "/api/admin/bootstrap/admin",
+        headers=headers,
+        json={"username": "admin", "password": "strong-password"},
+    )
+    assert created_admin.status_code == 201
+
+    login = client.post(
+        "/api/admin/auth/login",
+        headers=headers,
+        json={"username": "admin", "password": "strong-password"},
+    )
+    assert login.status_code == 200
+    admin_token = login.json()["token"]
+
+    config_response = client.get(
+        "/api/admin/config",
+        headers={**headers, "Authorization": f"Bearer {admin_token}"},
+    )
+    assert config_response.status_code == 200
+
+    external_api_response = client.get("/api/v1/status", headers=headers)
+    assert external_api_response.status_code == 403
+    assert external_api_response.json()["error"]["code"] == "NETWORK_ACCESS_DENIED"
+
+
 def test_network_access_policy_uses_real_ip_from_trusted_proxy(tmp_path: Path) -> None:
     settings = ServerSettings(
         data_dir=tmp_path,
