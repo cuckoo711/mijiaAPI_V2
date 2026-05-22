@@ -74,6 +74,16 @@ type ApiKeyItem = {
   last_used_at?: string;
   use_count: number;
 };
+type ApiEndpointRow = {
+  method: "GET" | "POST";
+  path: string;
+  purpose: string;
+  permission: string;
+  request: string;
+  response: string;
+  note: string;
+  body?: string;
+};
 
 const token = ref(localStorage.getItem("mijia_admin_token") || "");
 const activeMenu = ref("dashboard");
@@ -231,60 +241,145 @@ const securityRows = [
   },
 ];
 
-const apiEndpointRows = [
+const apiEndpointRows: ApiEndpointRow[] = [
   {
     method: "GET",
     path: "/api/v1/status",
     purpose: "读取服务状态",
     permission: "读取服务状态",
+    request: "无请求体",
+    response: "返回服务名称、版本、启动时间、运行秒数和初始化状态。",
+    note: "适合健康探测或 AI Agent 启动前检查服务是否可用。",
   },
   {
     method: "GET",
     path: "/api/v1/account",
     purpose: "读取米家账号凭据状态",
     permission: "读取服务状态",
+    request: "无请求体",
+    response: "返回凭据是否存在、是否有效、用户 ID、过期时间和剩余秒数。",
+    note: "只返回凭据状态，不会返回 serviceToken 等敏感信息。",
   },
   {
     method: "GET",
     path: "/api/v1/homes",
     purpose: "读取家庭列表",
     permission: "读取家庭与设备",
+    request: "无请求体",
+    response: "返回已同步家庭列表，包含家庭 ID、名称、uid、房间和同步时间。",
+    note: "需要先在管理台完成“同步家庭/设备/场景”。",
   },
   {
     method: "GET",
     path: "/api/v1/devices",
     purpose: "读取设备列表",
     permission: "读取家庭与设备",
+    request: "无请求体",
+    response: "返回未隐藏设备列表，包含 slug、名称、型号、家庭 ID、访问模式和状态。",
+    note: "后续读取状态或控制设备时，优先使用这里返回的 device_slug。",
+  },
+  {
+    method: "GET",
+    path: "/api/v1/devices/{device_slug}",
+    purpose: "读取单个设备",
+    permission: "读取家庭与设备",
+    request: "无请求体",
+    response: "返回单个设备的完整本地登记信息。",
+    note: "{device_slug} 可以在“家庭与设备”页面查看和修改。",
   },
   {
     method: "GET",
     path: "/api/v1/devices/{device_slug}/state",
     purpose: "读取设备状态",
     permission: "读取家庭与设备",
+    request: "无请求体",
+    response: "返回设备可读属性的当前值列表。",
+    note: "如果设备规格没有可读属性，items 可能为空。",
+  },
+  {
+    method: "GET",
+    path: "/api/v1/devices/{device_slug}/spec",
+    purpose: "读取设备规格",
+    permission: "读取家庭与设备",
+    request: "无请求体",
+    response: "返回设备 MiOT 规格，用于确认 siid、piid、aiid 和参数。",
+    note: "控制设备前通常先看这个接口，确认要设置的属性或动作编号。",
   },
   {
     method: "POST",
     path: "/api/v1/devices/{device_slug}/properties",
     purpose: "设置设备属性",
     permission: "控制设备",
+    request: "JSON：siid、piid、value。",
+    response: "返回 success 布尔值。",
+    note: "设备必须先在“家庭与设备”页面切到可控。",
+    body: '{\n  "siid": 2,\n  "piid": 1,\n  "value": true\n}',
   },
   {
     method: "POST",
     path: "/api/v1/devices/{device_slug}/actions",
     purpose: "调用设备动作",
     permission: "控制设备",
+    request: "JSON：siid、aiid、params。",
+    response: "返回米家动作调用结果。",
+    note: "params 按设备规格填写；无参数时传空对象。",
+    body: '{\n  "siid": 2,\n  "aiid": 1,\n  "params": {}\n}',
+  },
+  {
+    method: "POST",
+    path: "/api/v1/batch/devices/properties",
+    purpose: "批量设置属性",
+    permission: "控制设备",
+    request: "JSON：items 数组，每项包含 device、siid、piid、value。",
+    response: "返回每个属性设置的结果列表。",
+    note: "每个被控制设备都必须处于可控状态。",
+    body:
+      '{\n  "items": [\n    {\n      "device": "living-room-light",\n      "siid": 2,\n      "piid": 1,\n      "value": true\n    }\n  ]\n}',
+  },
+  {
+    method: "GET",
+    path: "/api/v1/scenes",
+    purpose: "读取场景列表",
+    permission: "读取家庭与设备",
+    request: "无请求体",
+    response: "返回未隐藏场景列表，包含 id、scene_id、名称、家庭 ID 和可执行状态。",
+    note: "scene_id 可在“场景管理”页面复制，执行场景时使用。",
   },
   {
     method: "POST",
     path: "/api/v1/scenes/{scene_id}/execute",
     purpose: "执行米家场景",
     permission: "执行场景",
+    request: "无请求体",
+    response: "返回 success 布尔值。",
+    note: "{scene_id} 在“场景管理”页面复制；场景必须开启“允许执行”。",
+  },
+  {
+    method: "POST",
+    path: "/api/v1/cache/refresh?home_id={home_id}",
+    purpose: "刷新 SDK 缓存",
+    permission: "管理缓存",
+    request: "无请求体；home_id 是可选查询参数。",
+    response: "返回 success 布尔值。",
+    note: "不传 home_id 时刷新当前账号所有可刷新缓存。",
+  },
+  {
+    method: "POST",
+    path: "/api/v1/cache/clear",
+    purpose: "清理 SDK 和本地缓存",
+    permission: "管理缓存",
+    request: "无请求体",
+    response: "返回 success 和本地缓存删除数量。",
+    note: "用于排查设备规格或本地缓存不一致问题。",
   },
   {
     method: "GET",
-    path: "/api/v1/logs",
+    path: "/api/v1/logs?limit=100",
     purpose: "读取审计日志",
     permission: "读取审计日志",
+    request: "无请求体；limit 是可选查询参数，范围 1-500。",
+    response: "返回审计日志列表。",
+    note: "用于查看 API Key 调用和管理操作记录。",
   },
 ];
 
@@ -378,6 +473,16 @@ function checkStatusTag(status: string): "success" | "danger" | "warning" | "inf
 
 function methodTag(method: string): "success" | "warning" | "info" {
   return method === "POST" ? "warning" : method === "GET" ? "success" : "info";
+}
+
+function endpointCurl(row: ApiEndpointRow): string {
+  const lines = [`curl -X ${row.method} \\`, `  -H "Authorization: Bearer YOUR_API_KEY" \\`];
+  if (row.body) {
+    lines.push(`  -H "Content-Type: application/json" \\`);
+    lines.push(`  -d '${row.body.replace(/\n/g, "")}' \\`);
+  }
+  lines.push(`  ${apiBaseUrl.value}${row.path}`);
+  return lines.join("\n");
 }
 
 async function copyText(value: string, message: string): Promise<void> {
@@ -1076,6 +1181,11 @@ onMounted(() => {
             <div class="usage-note">
               外部调用时，把 API Key 放到 HTTP Header：<code>Authorization: Bearer YOUR_API_KEY</code>
             </div>
+            <div class="doc-link-row">
+              <el-button tag="a" href="/docs" target="_blank">Swagger 文档</el-button>
+              <el-button tag="a" href="/redoc" target="_blank">ReDoc 文档</el-button>
+              <el-button tag="a" href="/api/v1/openapi.json" target="_blank">OpenAPI JSON</el-button>
+            </div>
             <pre class="usage-code"><code>curl -H "Authorization: Bearer YOUR_API_KEY" \
   {{ apiBaseUrl }}/api/v1/devices</code></pre>
             <pre class="usage-code"><code>fetch("{{ apiBaseUrl }}/api/v1/devices", {
@@ -1085,13 +1195,27 @@ onMounted(() => {
 })</code></pre>
             <el-alert type="info" show-icon :closable="false">
               <template #title>
-                API Key 创建后只显示一次。调用失败时先检查来源访问开关、反向代理、API Key 状态和对应权限。
+                API Key 创建后只显示一次。Swagger/ReDoc 默认关闭，需要设置 MIJIA_DOCS_ENABLED=true；
+                OpenAPI JSON 需要设置 MIJIA_OPENAPI_ENABLED=true。
               </template>
             </el-alert>
           </el-card>
           <el-card shadow="never">
-            <template #header>常用接口</template>
+            <template #header>接口文档</template>
             <el-table :data="apiEndpointRows" border>
+              <el-table-column type="expand" width="48">
+                <template #default="{ row }">
+                  <div class="endpoint-detail">
+                    <el-descriptions :column="1" border>
+                      <el-descriptions-item label="请求数据">{{ row.request }}</el-descriptions-item>
+                      <el-descriptions-item label="返回数据">{{ row.response }}</el-descriptions-item>
+                      <el-descriptions-item label="注意事项">{{ row.note }}</el-descriptions-item>
+                    </el-descriptions>
+                    <pre v-if="row.body" class="usage-code endpoint-body"><code>{{ row.body }}</code></pre>
+                    <pre class="usage-code endpoint-curl"><code>{{ endpointCurl(row) }}</code></pre>
+                  </div>
+                </template>
+              </el-table-column>
               <el-table-column label="方法" width="92" align="center">
                 <template #default="{ row }">
                   <el-tag :type="methodTag(row.method)" effect="light">{{ row.method }}</el-tag>
@@ -1104,6 +1228,7 @@ onMounted(() => {
               </el-table-column>
               <el-table-column prop="purpose" label="用途" min-width="180" />
               <el-table-column prop="permission" label="所需权限" min-width="160" />
+              <el-table-column prop="request" label="请求数据" min-width="180" />
             </el-table>
           </el-card>
           <el-card shadow="never">

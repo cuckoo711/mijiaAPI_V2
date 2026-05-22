@@ -241,10 +241,32 @@ body {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
+.doc-link-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0;
+}
+
 .endpoint-path {
   color: #374151;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 13px;
+}
+
+.endpoint-detail {
+  display: grid;
+  gap: 12px;
+  padding: 10px 24px 14px 48px;
+  background: #f9fafb;
+}
+
+.endpoint-body {
+  margin: 0;
+}
+
+.endpoint-curl {
+  margin: 0;
 }
 
 .copyable-id {

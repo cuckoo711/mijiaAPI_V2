@@ -54,7 +54,7 @@ API Server 按单米家账号设计。管理台和对外 API 默认只监听本�
 - 家庭与设备列表、分类筛选、分页、设备 slug 维护、隐藏和只读/可控开关。
 - 场景列表、场景 ID 复制、允许执行和隐藏开关。
 - API Key 创建、启停、删除、调用次数统计和中文权限说明。
-- 独立 API 使用说明页，包含 Header、curl/fetch 示例、常用接口和访问策略。
+- 独立 API 使用说明页，包含 Header、curl/fetch 示例、每个接口的请求数据、返回说明和访问策略。
 - 系统自检、运行时配置、系统安全、审计日志。
 - 局域网/公网来源开关，以及可信反向代理的 `X-Forwarded-For` / `X-Real-IP` 识别。
 - 同步互斥保护，避免多次点击同时触发米家同步。
@@ -235,18 +235,37 @@ const payload = await response.json();
 
 常用接口：
 
-| 方法 | 路径 | 权限 | 说明 |
-| --- | --- | --- | --- |
-| `GET` | `/api/v1/status` | 读取服务状态 | 服务状态、版本、运行时间。 |
-| `GET` | `/api/v1/account` | 读取服务状态 | 米家凭据状态。 |
-| `GET` | `/api/v1/homes` | 读取家庭与设备 | 家庭列表。 |
-| `GET` | `/api/v1/devices` | 读取家庭与设备 | 设备列表。 |
-| `GET` | `/api/v1/devices/{device_slug}/state` | 读取家庭与设备 | 读取设备属性状态。 |
-| `POST` | `/api/v1/devices/{device_slug}/properties` | 控制设备 | 设置设备属性。 |
-| `POST` | `/api/v1/devices/{device_slug}/actions` | 控制设备 | 调用设备动作。 |
-| `GET` | `/api/v1/scenes` | 读取家庭与设备 | 场景列表。 |
-| `POST` | `/api/v1/scenes/{scene_id}/execute` | 执行场景 | 执行已授权场景。 |
-| `GET` | `/api/v1/logs` | 读取审计日志 | 查看审计日志。 |
+| 方法 | 路径 | 权限 | 请求数据 | 说明 |
+| --- | --- | --- | --- | --- |
+| `GET` | `/api/v1/status` | 读取服务状态 | 无 | 服务状态、版本、运行时间。 |
+| `GET` | `/api/v1/account` | 读取服务状态 | 无 | 米家凭据状态。 |
+| `GET` | `/api/v1/homes` | 读取家庭与设备 | 无 | 家庭列表。 |
+| `GET` | `/api/v1/devices` | 读取家庭与设备 | 无 | 设备列表。 |
+| `GET` | `/api/v1/devices/{device_slug}` | 读取家庭与设备 | 无 | 单个设备详情。 |
+| `GET` | `/api/v1/devices/{device_slug}/state` | 读取家庭与设备 | 无 | 读取设备属性状态。 |
+| `GET` | `/api/v1/devices/{device_slug}/spec` | 读取家庭与设备 | 无 | 读取设备规格，确认 `siid`、`piid`、`aiid`。 |
+| `POST` | `/api/v1/devices/{device_slug}/properties` | 控制设备 | `{"siid":2,"piid":1,"value":true}` | 设置设备属性。 |
+| `POST` | `/api/v1/devices/{device_slug}/actions` | 控制设备 | `{"siid":2,"aiid":1,"params":{}}` | 调用设备动作。 |
+| `POST` | `/api/v1/batch/devices/properties` | 控制设备 | `{"items":[...]}` | 批量设置设备属性。 |
+| `GET` | `/api/v1/scenes` | 读取家庭与设备 | 无 | 场景列表。 |
+| `POST` | `/api/v1/scenes/{scene_id}/execute` | 执行场景 | 无 | 执行已授权场景。 |
+| `POST` | `/api/v1/cache/refresh?home_id={home_id}` | 管理缓存 | 无 | 刷新 SDK 缓存，`home_id` 可选。 |
+| `POST` | `/api/v1/cache/clear` | 管理缓存 | 无 | 清理 SDK 和本地缓存。 |
+| `GET` | `/api/v1/logs?limit=100` | 读取审计日志 | 无 | 查看审计日志。 |
+
+管理台“API 使用”页面会展示每个接口的请求数据、返回说明、注意事项和 curl 示例。若需要自动生成文档，可启动时设置：
+
+```bash
+export MIJIA_DOCS_ENABLED=true
+export MIJIA_OPENAPI_ENABLED=true
+uv run python -m server.cli run
+```
+
+然后访问：
+
+- Swagger UI：`/docs`
+- ReDoc：`/redoc`
+- OpenAPI JSON：`/api/v1/openapi.json`
 
 ### 日常维护
 
