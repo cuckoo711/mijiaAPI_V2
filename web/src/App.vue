@@ -180,6 +180,9 @@ const securityRows = [
 
 const isAuthed = computed(() => Boolean(token.value));
 const initializedLabel = computed(() => (initialized.value ? "已初始化" : "待初始化"));
+const runtimeConfig = computed(
+  () => new Map(configs.value.map((item) => [String(item.key), item.value]))
+);
 const homeNameMap = computed(() => new Map(homes.value.map((home) => [home.id, home.name])));
 const filteredDevices = computed(() => {
   return devices.value.filter((device) => {
@@ -245,6 +248,17 @@ function resetDeviceFilters(): void {
   deviceFilters.status = "";
   deviceFilters.access = "";
   deviceFilters.hidden = "";
+}
+
+function configBool(key: string): boolean {
+  const value = runtimeConfig.value.get(key);
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "string") {
+    return ["1", "true", "yes", "on"].includes(value.toLowerCase());
+  }
+  return Boolean(value);
 }
 
 function toggleApiKeyScope(scope: string, checked: string | number | boolean): void {
@@ -486,6 +500,15 @@ async function setConfig(): Promise<void> {
   });
   configForm.value = "";
   ElMessage.success("配置已保存");
+  await loadAdmin();
+}
+
+async function setRuntimeSwitch(key: string, value: string | number | boolean): Promise<void> {
+  await request(`/api/admin/config/${key}`, {
+    method: "PUT",
+    body: JSON.stringify({ value: Boolean(value) }),
+  });
+  ElMessage.success("访问策略已保存");
   await loadAdmin();
 }
 
@@ -817,6 +840,47 @@ onMounted(() => {
             <el-alert type="warning" show-icon :closable="false">
               <template #title>
                 管理台只负责配置和授权，不负责暴露公网。部署到公网前，请在反向代理层启用 HTTPS 和访问控制。
+              </template>
+            </el-alert>
+          </el-card>
+          <el-card shadow="never">
+            <template #header>访问来源</template>
+            <div class="security-switch-list">
+              <div class="security-switch-row">
+                <div>
+                  <div class="security-switch-title">允许局域网请求</div>
+                  <div class="security-switch-desc">
+                    允许 10.x、172.16-31.x、192.168.x、局域网 IPv6 等私有网段访问。
+                  </div>
+                </div>
+                <el-switch
+                  :model-value="configBool('ALLOW_LAN_ACCESS')"
+                  active-text="允许"
+                  inactive-text="关闭"
+                  inline-prompt
+                  @change="(value: string | number | boolean) => setRuntimeSwitch('ALLOW_LAN_ACCESS', value)"
+                />
+              </div>
+              <div class="security-switch-row danger">
+                <div>
+                  <div class="security-switch-title">允许公网请求</div>
+                  <div class="security-switch-desc">
+                    允许公网 IP 直接访问。开启前请确认 API Key 权限、HTTPS、反向代理和防火墙策略。
+                  </div>
+                </div>
+                <el-switch
+                  :model-value="configBool('ALLOW_PUBLIC_ACCESS')"
+                  active-text="允许"
+                  inactive-text="关闭"
+                  inline-prompt
+                  @change="(value: string | number | boolean) => setRuntimeSwitch('ALLOW_PUBLIC_ACCESS', value)"
+                />
+              </div>
+            </div>
+            <el-alert class="security-hint" type="info" show-icon :closable="false">
+              <template #title>
+                如果服务启动时仍监听 127.0.0.1，外部机器无法连进来。需要用
+                MIJIA_SERVER_HOST=0.0.0.0 重启服务，或由反向代理转发到本服务。
               </template>
             </el-alert>
           </el-card>

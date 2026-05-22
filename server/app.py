@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from ipaddress import ip_address
 from pathlib import Path
 from typing import Annotated, Any, Optional
 
@@ -147,6 +148,29 @@ def _resource_allowed(api_key: dict[str, Any], kind: str, resource: dict[str, An
     return any(str(item) in candidates for item in allowed)
 
 
+def _config_bool(config: dict[str, Any], key: str, default: bool = False) -> bool:
+    value = config.get(key, default)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
+def _request_network_allowed(host: str, config: dict[str, Any]) -> bool:
+    if not host:
+        return True
+    try:
+        address = ip_address(host)
+    except ValueError:
+        return True
+    if address.is_loopback:
+        return True
+    if address.is_private or address.is_link_local:
+        return _config_bool(config, "ALLOW_LAN_ACCESS")
+    return _config_bool(config, "ALLOW_PUBLIC_ACCESS")
+
+
 def create_app(  # noqa: C901
     settings: Optional[ServerSettings] = None,
     store: Optional[ServerStore] = None,
@@ -202,6 +226,14 @@ def create_app(  # noqa: C901
     async def request_id_middleware(request: Request, call_next: Any) -> Any:
         request_id = request.headers.get("X-Request-ID") or f"req_{id(request)}"
         setattr(request.state, "request_id", request_id)
+        source_host = request.client.host if request.client else ""
+        if not _request_network_allowed(source_host, resolved_store.get_config_map()):
+            return _json_error(
+                status.HTTP_403_FORBIDDEN,
+                "NETWORK_ACCESS_DENIED",
+                "当前访问来源未被允许，请在系统安全中开启局域网或公网访问",
+                request_id,
+            )
         response = await call_next(request)
         response.headers["X-Request-ID"] = request_id
         return response

@@ -49,6 +49,40 @@ def test_healthz_is_public(tmp_path: Path) -> None:
     assert response.json()["status"] == "ok"
 
 
+def test_network_access_policy_allows_lan_only_after_switch_enabled(tmp_path: Path) -> None:
+    settings = ServerSettings(
+        data_dir=tmp_path,
+        database_path=tmp_path / "server.sqlite3",
+        credential_path=tmp_path / "credential.json",
+    )
+    store = ServerStore(settings)
+    app = create_app(settings, store=store)
+
+    blocked_client = TestClient(app, client=("192.168.1.20", 50000))
+    assert blocked_client.get("/healthz").status_code == 403
+
+    store.set_config("ALLOW_LAN_ACCESS", True)
+    allowed_client = TestClient(app, client=("192.168.1.20", 50000))
+    assert allowed_client.get("/healthz").status_code == 200
+
+
+def test_network_access_policy_allows_public_only_after_switch_enabled(tmp_path: Path) -> None:
+    settings = ServerSettings(
+        data_dir=tmp_path,
+        database_path=tmp_path / "server.sqlite3",
+        credential_path=tmp_path / "credential.json",
+    )
+    store = ServerStore(settings)
+    app = create_app(settings, store=store)
+
+    blocked_client = TestClient(app, client=("8.8.8.8", 50000))
+    assert blocked_client.get("/healthz").status_code == 403
+
+    store.set_config("ALLOW_PUBLIC_ACCESS", True)
+    allowed_client = TestClient(app, client=("8.8.8.8", 50000))
+    assert allowed_client.get("/healthz").status_code == 200
+
+
 def test_bootstrap_login_create_key_and_status_flow(tmp_path: Path) -> None:
     client = make_client(tmp_path)
 
