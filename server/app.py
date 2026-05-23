@@ -242,6 +242,8 @@ def _request_network_allowed(host: str, config: dict[str, Any]) -> bool:
 
 
 def _network_policy_required(path: str) -> bool:
+    if path == "/api/v1/openapi.json":
+        return False
     return path == "/healthz" or path == "/api/v1" or path.startswith("/api/v1/")
 
 

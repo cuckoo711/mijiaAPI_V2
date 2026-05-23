@@ -201,6 +201,30 @@ def test_network_access_policy_allows_admin_bootstrap_from_public_proxy(tmp_path
     assert external_api_response.json()["error"]["code"] == "NETWORK_ACCESS_DENIED"
 
 
+def test_openapi_json_is_available_when_docs_are_enabled_from_public_proxy(
+    tmp_path: Path,
+) -> None:
+    settings = ServerSettings(
+        data_dir=tmp_path,
+        database_path=tmp_path / "server.sqlite3",
+        credential_path=tmp_path / "credential.json",
+        openapi_enabled=True,
+        docs_enabled=True,
+    )
+    store = ServerStore(settings)
+    app = create_app(settings, store=store)
+    client = TestClient(app, client=("127.0.0.1", 50000))
+    headers = {"X-Forwarded-For": "8.8.8.8"}
+
+    openapi_response = client.get("/api/v1/openapi.json", headers=headers)
+    external_api_response = client.get("/api/v1/status", headers=headers)
+
+    assert openapi_response.status_code == 200
+    assert openapi_response.json()["info"]["title"] == "Mijia API Server"
+    assert external_api_response.status_code == 403
+    assert external_api_response.json()["error"]["code"] == "NETWORK_ACCESS_DENIED"
+
+
 def test_network_access_policy_uses_real_ip_from_trusted_proxy(tmp_path: Path) -> None:
     settings = ServerSettings(
         data_dir=tmp_path,
