@@ -61,6 +61,10 @@ SYSTEM_CHECK_METADATA: dict[str, dict[str, str]] = {
         "label": "OpenAPI 文档",
         "description": "显示 OpenAPI 文档接口当前是否对外启用。",
     },
+    "docs_enabled": {
+        "label": "交互式 API 文档",
+        "description": "显示 Swagger UI 与 ReDoc 文档页面当前是否启用。",
+    },
 }
 
 
@@ -82,6 +86,17 @@ def parse_datetime(value: Optional[str]) -> Optional[datetime]:
     if not value:
         return None
     return datetime.fromisoformat(value)
+
+
+def runtime_config_bool(config: dict[str, Any], key: str, default: bool = False) -> bool:
+    """Read a boolean runtime configuration value from SQLite-backed config."""
+
+    value = config.get(key, default)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.lower() in {"1", "true", "yes", "on"}
+    return bool(value)
 
 
 class AuthenticationFailedError(Exception):
@@ -754,6 +769,9 @@ class ServerStore:
         """Return deployment-agnostic checks for the current runtime."""
 
         checks: list[dict[str, Any]] = []
+        config_map = self.get_config_map()
+        docs_enabled = runtime_config_bool(config_map, "DOCS_ENABLED")
+        openapi_enabled = docs_enabled or runtime_config_bool(config_map, "OPENAPI_ENABLED")
         checks.append(
             {
                 "key": "server",
@@ -808,9 +826,16 @@ class ServerStore:
         )
         checks.append(
             {
+                "key": "docs_enabled",
+                "status": "info",
+                "message": "enabled" if docs_enabled else "disabled",
+            }
+        )
+        checks.append(
+            {
                 "key": "openapi_enabled",
                 "status": "info",
-                "message": "enabled" if self._settings.openapi_enabled else "disabled",
+                "message": "enabled" if openapi_enabled else "disabled",
             }
         )
         return [self._with_check_metadata(check) for check in checks]

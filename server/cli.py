@@ -59,9 +59,8 @@ def diagnose_command(args: argparse.Namespace) -> None:
             "database_path": str(settings.database_path),
             "credential_path": str(settings.credential_path),
             "public_base_url": settings.public_base_url,
-            "openapi_enabled": settings.openapi_enabled,
-            "docs_enabled": settings.docs_enabled,
         },
+        "runtime_config": store.get_config_map(),
         "checks": store.system_checks(),
     }
     if args.output:

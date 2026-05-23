@@ -22,6 +22,8 @@ from server.store import (
 )
 
 DEFAULT_TRUSTED_PROXY_CIDRS = ("127.0.0.1/32", "::1/128")
+DOCS_ROUTES = {"/docs", "/redoc", "/docs/oauth2-redirect"}
+OPENAPI_JSON_ROUTE = "/api/v1/openapi.json"
 
 
 class ErrorEnvelope(BaseModel):
@@ -242,9 +244,20 @@ def _request_network_allowed(host: str, config: dict[str, Any]) -> bool:
 
 
 def _network_policy_required(path: str) -> bool:
-    if path == "/api/v1/openapi.json":
+    if path == OPENAPI_JSON_ROUTE:
         return False
     return path == "/healthz" or path == "/api/v1" or path.startswith("/api/v1/")
+
+
+def _docs_route_disabled(path: str, config: dict[str, Any]) -> bool:
+    normalized_path = path.rstrip("/") or "/"
+    docs_enabled = _config_bool(config, "DOCS_ENABLED")
+    openapi_enabled = _config_bool(config, "OPENAPI_ENABLED")
+    if normalized_path in DOCS_ROUTES:
+        return not docs_enabled
+    if normalized_path == OPENAPI_JSON_ROUTE:
+        return not (docs_enabled or openapi_enabled)
+    return False
 
 
 def create_app(  # noqa: C901
@@ -261,9 +274,9 @@ def create_app(  # noqa: C901
     app = FastAPI(
         title="Mijia API Server",
         version=mijiaAPI_V2.__version__,
-        docs_url="/docs" if resolved_settings.docs_enabled else None,
-        redoc_url="/redoc" if resolved_settings.docs_enabled else None,
-        openapi_url="/api/v1/openapi.json" if resolved_settings.openapi_enabled else None,
+        docs_url="/docs",
+        redoc_url="/redoc",
+        openapi_url=OPENAPI_JSON_ROUTE,
     )
     app.state.settings = resolved_settings
     app.state.store = resolved_store
@@ -317,6 +330,13 @@ def create_app(  # noqa: C901
         config_map = resolved_store.get_config_map()
         source_host = _request_source_host(request, config_map)
         setattr(request.state, "source_ip", source_host)
+        if _docs_route_disabled(request.url.path, config_map):
+            return _json_error(
+                status.HTTP_404_NOT_FOUND,
+                "NOT_FOUND",
+                "API documentation is disabled",
+                request_id,
+            )
         if _network_policy_required(request.url.path) and not _request_network_allowed(
             source_host, config_map
         ):

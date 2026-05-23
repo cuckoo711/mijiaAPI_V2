@@ -7,13 +7,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-def _env_bool(name: str, default: bool) -> bool:
-    value = os.getenv(name)
-    if value is None:
-        return default
-    return value.lower() in {"1", "true", "yes", "on"}
-
-
 def _env_int(name: str, default: int) -> int:
     value = os.getenv(name)
     if value is None:
@@ -44,8 +37,6 @@ class ServerSettings:
     audit_retention_days: int = 30
     admin_session_hours: int = 12
     credential_refresh_before_seconds: int = 24 * 60 * 60
-    openapi_enabled: bool = False
-    docs_enabled: bool = False
     web_dist_dir: Path = Path("web/dist")
 
     @classmethod
@@ -66,8 +57,6 @@ class ServerSettings:
             credential_refresh_before_seconds=_env_int(
                 "MIJIA_CREDENTIAL_REFRESH_BEFORE_SECONDS", 24 * 60 * 60
             ),
-            openapi_enabled=_env_bool("MIJIA_OPENAPI_ENABLED", False),
-            docs_enabled=_env_bool("MIJIA_DOCS_ENABLED", False),
             web_dist_dir=_env_path("MIJIA_WEB_DIST_DIR", Path("web/dist")),
         )
 

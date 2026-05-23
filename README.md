@@ -129,8 +129,6 @@ http://127.0.0.1:8123
 | `MIJIA_CREDENTIAL_PATH` | `.mijia/credential.json` | 米家扫码登录凭据文件路径。 |
 | `MIJIA_PUBLIC_BASE_URL` | 空 | 对外展示的服务地址，例如 `https://miapi.example.com`。 |
 | `MIJIA_WEB_DIST_DIR` | `web/dist` | 前端构建产物目录。 |
-| `MIJIA_OPENAPI_ENABLED` | `false` | 是否开启 `/api/v1/openapi.json`。 |
-| `MIJIA_DOCS_ENABLED` | `false` | 是否开启 `/docs` 和 `/redoc`。 |
 
 ### systemd 部署示例
 
@@ -253,19 +251,13 @@ const payload = await response.json();
 | `POST` | `/api/v1/cache/clear` | 管理缓存 | 无 | 清理 SDK 和本地缓存。 |
 | `GET` | `/api/v1/logs?limit=100` | 读取审计日志 | 无 | 查看审计日志。 |
 
-管理台“API 使用”页面会展示每个接口的请求数据、返回说明、注意事项和 curl 示例。若需要自动生成文档，可启动时设置：
-
-```bash
-export MIJIA_DOCS_ENABLED=true
-export MIJIA_OPENAPI_ENABLED=true
-uv run python -m server.cli run
-```
-
-然后访问：
+管理台“API 使用”页面会展示每个接口的请求数据、返回说明、注意事项和 curl 示例。交互式文档默认关闭，可在管理台“系统安全”里开启，切换后立即生效，不需要重启服务。开启后可访问：
 
 - Swagger UI：`/docs`
 - ReDoc：`/redoc`
 - OpenAPI JSON：`/api/v1/openapi.json`
+
+“启用交互式文档”会开启 Swagger/ReDoc，并允许文档页面加载 OpenAPI JSON；“开放 OpenAPI JSON”只开放 JSON 定义，适合给自动化工具或 AI Agent 读取接口结构。文档开关不等于放开业务 API，`/api/v1/*` 调用仍受系统安全里的来源策略和 API Key 权限控制。
 
 ### 日常维护
 

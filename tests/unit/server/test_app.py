@@ -16,6 +16,7 @@ def make_client(tmp_path: Path) -> TestClient:
         data_dir=tmp_path,
         database_path=tmp_path / "server.sqlite3",
         credential_path=tmp_path / "credential.json",
+        web_dist_dir=tmp_path / "missing-web-dist",
     )
     return TestClient(create_app(settings))
 
@@ -25,6 +26,7 @@ def make_client_with_store(tmp_path: Path) -> tuple[TestClient, ServerStore]:
         data_dir=tmp_path,
         database_path=tmp_path / "server.sqlite3",
         credential_path=tmp_path / "credential.json",
+        web_dist_dir=tmp_path / "missing-web-dist",
     )
     store = ServerStore(settings)
     return TestClient(create_app(settings, store=store)), store
@@ -85,6 +87,7 @@ def test_network_access_policy_allows_lan_only_after_switch_enabled(tmp_path: Pa
         data_dir=tmp_path,
         database_path=tmp_path / "server.sqlite3",
         credential_path=tmp_path / "credential.json",
+        web_dist_dir=tmp_path / "missing-web-dist",
     )
     store = ServerStore(settings)
     app = create_app(settings, store=store)
@@ -102,6 +105,7 @@ def test_network_access_policy_allows_public_only_after_switch_enabled(tmp_path:
         data_dir=tmp_path,
         database_path=tmp_path / "server.sqlite3",
         credential_path=tmp_path / "credential.json",
+        web_dist_dir=tmp_path / "missing-web-dist",
     )
     store = ServerStore(settings)
     app = create_app(settings, store=store)
@@ -201,18 +205,47 @@ def test_network_access_policy_allows_admin_bootstrap_from_public_proxy(tmp_path
     assert external_api_response.json()["error"]["code"] == "NETWORK_ACCESS_DENIED"
 
 
-def test_openapi_json_is_available_when_docs_are_enabled_from_public_proxy(
+def test_docs_routes_follow_runtime_config_without_restart(tmp_path: Path) -> None:
+    settings = ServerSettings(
+        data_dir=tmp_path,
+        database_path=tmp_path / "server.sqlite3",
+        credential_path=tmp_path / "credential.json",
+        web_dist_dir=tmp_path / "missing-web-dist",
+    )
+    store = ServerStore(settings)
+    app = create_app(settings, store=store)
+    client = TestClient(app)
+
+    assert client.get("/docs").status_code == 404
+    assert client.get("/redoc").status_code == 404
+    assert client.get("/api/v1/openapi.json").status_code == 404
+
+    store.set_config("DOCS_ENABLED", True)
+
+    assert client.get("/docs").status_code == 200
+    assert client.get("/redoc").status_code == 200
+    assert client.get("/api/v1/openapi.json").status_code == 200
+
+    store.set_config("DOCS_ENABLED", False)
+    store.set_config("OPENAPI_ENABLED", True)
+
+    assert client.get("/docs").status_code == 404
+    assert client.get("/redoc").status_code == 404
+    assert client.get("/api/v1/openapi.json").status_code == 200
+
+
+def test_openapi_json_is_available_when_runtime_docs_are_enabled_from_public_proxy(
     tmp_path: Path,
 ) -> None:
     settings = ServerSettings(
         data_dir=tmp_path,
         database_path=tmp_path / "server.sqlite3",
         credential_path=tmp_path / "credential.json",
-        openapi_enabled=True,
-        docs_enabled=True,
+        web_dist_dir=tmp_path / "missing-web-dist",
     )
     store = ServerStore(settings)
     app = create_app(settings, store=store)
+    store.set_config("DOCS_ENABLED", True)
     client = TestClient(app, client=("127.0.0.1", 50000))
     headers = {"X-Forwarded-For": "8.8.8.8"}
 

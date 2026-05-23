@@ -81,3 +81,13 @@ def test_system_checks_include_sqlite_and_admin_state(tmp_path: Path) -> None:
     assert checks["admin_configured"]["status"] == "warn"
     assert checks["admin_configured"]["label"] == "管理员账号"
     assert checks["admin_configured"]["description"] == "确认管理台初始化管理员已经创建。"
+    assert checks["docs_enabled"]["status"] == "info"
+    assert checks["docs_enabled"]["message"] == "disabled"
+    assert checks["openapi_enabled"]["message"] == "disabled"
+
+    store.set_config("DOCS_ENABLED", True)
+    store.set_config("OPENAPI_ENABLED", True)
+    updated_checks = {item["key"]: item for item in store.system_checks()}
+
+    assert updated_checks["docs_enabled"]["message"] == "enabled"
+    assert updated_checks["openapi_enabled"]["message"] == "enabled"

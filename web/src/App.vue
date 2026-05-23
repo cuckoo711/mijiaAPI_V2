@@ -921,7 +921,7 @@ async function setRuntimeSwitch(key: string, value: string | number | boolean): 
     method: "PUT",
     body: JSON.stringify({ value: Boolean(value) }),
   });
-  ElMessage.success("访问策略已保存");
+  ElMessage.success("配置已保存");
   await loadAdmin();
 }
 
@@ -1295,8 +1295,7 @@ onBeforeUnmount(() => {
 })</code></pre>
             <el-alert type="info" show-icon :closable="false">
               <template #title>
-                API Key 创建后只显示一次。Swagger/ReDoc 默认关闭，需要设置 MIJIA_DOCS_ENABLED=true；
-                OpenAPI JSON 需要设置 MIJIA_OPENAPI_ENABLED=true。
+                API Key 创建后只显示一次。Swagger/ReDoc 和 OpenAPI JSON 可在“系统安全”中开启，切换后立即生效。
               </template>
             </el-alert>
           </el-card>
@@ -1429,6 +1428,41 @@ onBeforeUnmount(() => {
                 MIJIA_SERVER_HOST=0.0.0.0 重启服务，或由反向代理转发到本服务。
               </template>
             </el-alert>
+          </el-card>
+          <el-card shadow="never">
+            <template #header>API 文档</template>
+            <div class="security-switch-list">
+              <div class="security-switch-row">
+                <div>
+                  <div class="security-switch-title">启用交互式文档</div>
+                  <div class="security-switch-desc">
+                    开启 Swagger UI 与 ReDoc。开启后会同步允许文档页面加载 OpenAPI JSON。
+                  </div>
+                </div>
+                <el-switch
+                  :model-value="configBool('DOCS_ENABLED')"
+                  active-text="开启"
+                  inactive-text="关闭"
+                  inline-prompt
+                  @change="(value: string | number | boolean) => setRuntimeSwitch('DOCS_ENABLED', value)"
+                />
+              </div>
+              <div class="security-switch-row">
+                <div>
+                  <div class="security-switch-title">开放 OpenAPI JSON</div>
+                  <div class="security-switch-desc">
+                    单独开放 /api/v1/openapi.json，方便工具或 Agent 读取接口定义；不会放开业务 API 访问来源。
+                  </div>
+                </div>
+                <el-switch
+                  :model-value="configBool('OPENAPI_ENABLED')"
+                  active-text="开启"
+                  inactive-text="关闭"
+                  inline-prompt
+                  @change="(value: string | number | boolean) => setRuntimeSwitch('OPENAPI_ENABLED', value)"
+                />
+              </div>
+            </div>
           </el-card>
           <el-table :data="securityRows" border>
             <el-table-column prop="item" label="项目" width="160" />
