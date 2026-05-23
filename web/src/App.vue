@@ -14,6 +14,7 @@ import {
 import { ElMessage } from "element-plus";
 import type { Component } from "vue";
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import { buildSceneExecuteCurl, curlApiKey, normalizeApiBaseUrl } from "./apiExamples";
 
 type ApiList<T> = { items: T[] };
 type PageItem = {
@@ -374,7 +375,7 @@ const apiEndpointRows: ApiEndpointRow[] = [
     permission: "执行场景",
     request: "无请求体",
     response: "返回 success 布尔值。",
-    note: "{scene_id} 在“场景管理”页面复制；场景必须开启“允许执行”。",
+    note: "“场景管理”页面的复制按钮会复制完整执行 curl；场景必须开启“允许执行”。",
   },
   {
     method: "POST",
@@ -413,7 +414,9 @@ const activePage = computed(
 const runtimeConfig = computed(
   () => new Map(configs.value.map((item) => [String(item.key), item.value]))
 );
-const apiBaseUrl = computed(() => configText("PUBLIC_BASE_URL") || window.location.origin);
+const apiBaseUrl = computed(() =>
+  normalizeApiBaseUrl(configText("PUBLIC_BASE_URL"), window.location.origin)
+);
 const homeNameMap = computed(() => new Map(homes.value.map((home) => [home.id, home.name])));
 const filteredDevices = computed(() => {
   return devices.value.filter((device) => {
@@ -498,13 +501,28 @@ function methodTag(method: string): "success" | "warning" | "info" {
 }
 
 function endpointCurl(row: ApiEndpointRow): string {
-  const lines = [`curl -X ${row.method} \\`, `  -H "Authorization: Bearer YOUR_API_KEY" \\`];
+  const lines = [`curl -X ${row.method} \\`, `  -H "Authorization: Bearer ${curlApiKey(oneTimeApiKey.value)}" \\`];
   if (row.body) {
     lines.push(`  -H "Content-Type: application/json" \\`);
     lines.push(`  -d '${row.body.replace(/\n/g, "")}' \\`);
   }
   lines.push(`  ${apiBaseUrl.value}${row.path}`);
   return lines.join("\n");
+}
+
+function sceneExecuteCurl(sceneId: string): string {
+  return buildSceneExecuteCurl({
+    sceneId,
+    baseUrl: apiBaseUrl.value,
+    apiKey: oneTimeApiKey.value,
+  });
+}
+
+async function copySceneExecuteCurl(sceneId: string): Promise<void> {
+  const message = oneTimeApiKey.value.trim()
+    ? "场景执行命令已复制"
+    : "场景执行命令已复制，请替换 YOUR_API_KEY";
+  await copyText(sceneExecuteCurl(sceneId), message);
 }
 
 async function copyText(value: string, message: string): Promise<void> {
@@ -1197,8 +1215,8 @@ onBeforeUnmount(() => {
                     :icon="CopyDocument"
                     circle
                     size="small"
-                    title="复制场景 ID"
-                    @click="copyText(row.scene_id, '场景 ID 已复制')"
+                    title="复制执行 curl"
+                    @click="copySceneExecuteCurl(row.scene_id)"
                   />
                 </div>
               </template>
