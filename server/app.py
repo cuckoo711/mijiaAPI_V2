@@ -430,6 +430,20 @@ def create_app(  # noqa: C901
                 detail={"code": "ADMIN_AUTH_FAILED", "message": str(exc)},
             ) from exc
 
+    @app.post("/api/admin/auth/refresh")
+    def admin_refresh_session(
+        authorization: Annotated[Optional[str], Header()] = None,
+        current_store: ServerStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        token = _extract_bearer_token(authorization)
+        try:
+            return current_store.refresh_admin_session(token)
+        except AuthenticationFailedError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"code": "ADMIN_AUTH_FAILED", "message": str(exc)},
+            ) from exc
+
     @app.get("/api/admin/system/check")
     def admin_system_check(
         _admin: dict[str, Any] = Depends(require_admin),

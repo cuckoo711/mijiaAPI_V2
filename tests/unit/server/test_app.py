@@ -42,6 +42,22 @@ def admin_token(client: TestClient) -> str:
     return str(login.json()["token"])
 
 
+def test_admin_auth_refresh_extends_session(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    token = admin_token(client)
+
+    response = client.post(
+        "/api/admin/auth/refresh",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["token"] == token
+    assert payload["expires_at"]
+    assert payload["admin"]["username"] == "admin"
+
+
 def test_healthz_is_public(tmp_path: Path) -> None:
     client = make_client(tmp_path)
 

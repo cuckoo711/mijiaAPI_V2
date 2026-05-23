@@ -44,6 +44,19 @@ def test_admin_login_creates_valid_session(tmp_path: Path) -> None:
     assert session["token"].startswith("ms_")
 
 
+def test_admin_session_refresh_extends_expiry(tmp_path: Path) -> None:
+    store = ServerStore(make_settings(tmp_path))
+    store.initialize()
+    store.create_initial_admin("admin", "strong-password")
+    session = store.authenticate_admin("admin", "strong-password")
+
+    refreshed = store.refresh_admin_session(session["token"])
+
+    assert refreshed["token"] == session["token"]
+    assert refreshed["expires_at"] >= session["expires_at"]
+    assert refreshed["admin"]["username"] == "admin"
+
+
 def test_api_key_scope_is_enforced(tmp_path: Path) -> None:
     store = ServerStore(make_settings(tmp_path))
     store.initialize()

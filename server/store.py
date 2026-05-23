@@ -219,6 +219,37 @@ class ServerStore:
 
         raise AuthenticationFailedError("Invalid administrator session")
 
+    def refresh_admin_session(self, token: str) -> dict[str, Any]:
+        """Extend a valid administrator session and return its new expiry."""
+
+        now = utc_now()
+        expires_at = now + timedelta(hours=self._settings.admin_session_hours)
+        with self._database.connect() as conn:
+            rows = conn.execute("""
+                SELECT s.token_hash, s.expires_at, s.revoked_at, u.id, u.username
+                FROM admin_sessions s
+                JOIN admin_users u ON u.id = s.admin_id
+                WHERE s.revoked_at IS NULL
+                """).fetchall()
+
+            for row in rows:
+                if not verify_secret(token, row["token_hash"]):
+                    continue
+                current_expires_at = parse_datetime(row["expires_at"])
+                if current_expires_at is None or current_expires_at <= now:
+                    raise AuthenticationFailedError("Administrator session expired")
+                conn.execute(
+                    "UPDATE admin_sessions SET expires_at = ? WHERE token_hash = ?",
+                    (isoformat(expires_at), row["token_hash"]),
+                )
+                return {
+                    "token": token,
+                    "expires_at": isoformat(expires_at),
+                    "admin": {"id": row["id"], "username": row["username"]},
+                }
+
+        raise AuthenticationFailedError("Invalid administrator session")
+
     def create_api_key(
         self,
         name: str,

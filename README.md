@@ -307,6 +307,10 @@ systemctl restart mijia-server
 
 不能。完整 API Key 只在创建时显示一次，之后只保存哈希和前缀。
 
+**管理台登录过期后会怎样**
+
+管理台登录成功后会保存管理员会话 token 和过期时间。页面启动、手动刷新和到期前 5 分钟会自动调用 `/api/admin/auth/refresh` 续期；如果后端返回 `ADMIN_AUTH_FAILED`，前端会清理本地登录态并回到管理员登录页。已经过期的 token 不会静默续期，需要重新输入管理员密码。
+
 **可以不用 Docker 吗**
 
 可以。当前服务只要求 Python、Node 和 SQLite，直接运行、systemd、NAS 套件、Docker 或反向代理后部署都可以。仓库的核心要求是保证服务能访问数据目录、数据库、凭据文件和前端构建产物。

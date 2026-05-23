@@ -13,7 +13,7 @@ import {
 } from "@element-plus/icons-vue";
 import { ElMessage } from "element-plus";
 import type { Component } from "vue";
-import { computed, onMounted, reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 
 type ApiList<T> = { items: T[] };
 type PageItem = {
@@ -84,8 +84,29 @@ type ApiEndpointRow = {
   note: string;
   body?: string;
 };
+type AdminSessionPayload = {
+  token: string;
+  expires_at: string;
+  admin?: { id: string; username: string };
+};
+type RequestBehavior = {
+  skipAuthRedirect?: boolean;
+};
+
+class ApiRequestError extends Error {
+  status: number;
+  code?: string;
+
+  constructor(message: string, status: number, code?: string) {
+    super(message);
+    this.name = "ApiRequestError";
+    this.status = status;
+    this.code = code;
+  }
+}
 
 const token = ref(localStorage.getItem("mijia_admin_token") || "");
+const tokenExpiresAt = ref(localStorage.getItem("mijia_admin_expires_at") || "");
 const activeMenu = ref("dashboard");
 const loading = ref(false);
 const syncing = ref(false);
@@ -105,6 +126,7 @@ const proxyCidrs = ref("");
 const devicePage = ref(1);
 const devicePageSize = ref(20);
 let qrTimer: number | undefined;
+let adminRefreshTimer: number | undefined;
 
 const defaultTrustedProxyCidrs = "127.0.0.1/32\n::1/128";
 
@@ -563,7 +585,71 @@ function toggleApiKeyScope(scope: string, checked: string | number | boolean): v
   keyForm.scopes = Array.from(scopes);
 }
 
-async function request<T>(url: string, options: RequestInit = {}): Promise<T> {
+function clearAdminSession(message?: string): void {
+  const hadToken = Boolean(token.value);
+  token.value = "";
+  tokenExpiresAt.value = "";
+  localStorage.removeItem("mijia_admin_token");
+  localStorage.removeItem("mijia_admin_expires_at");
+  window.clearTimeout(adminRefreshTimer);
+  if (message && hadToken) {
+    ElMessage.warning(message);
+  }
+}
+
+function saveAdminSession(payload: AdminSessionPayload): void {
+  token.value = payload.token;
+  tokenExpiresAt.value = payload.expires_at;
+  localStorage.setItem("mijia_admin_token", payload.token);
+  localStorage.setItem("mijia_admin_expires_at", payload.expires_at);
+  scheduleAdminTokenRefresh(payload.expires_at);
+}
+
+function scheduleAdminTokenRefresh(expiresAt: string): void {
+  window.clearTimeout(adminRefreshTimer);
+  const expiresAtMs = new Date(expiresAt).getTime();
+  if (!Number.isFinite(expiresAtMs)) {
+    return;
+  }
+  const refreshAtMs = expiresAtMs - 5 * 60 * 1000;
+  const delayMs = Math.max(5000, refreshAtMs - Date.now());
+  adminRefreshTimer = window.setTimeout(() => {
+    void refreshAdminSession();
+  }, delayMs);
+}
+
+async function refreshAdminSession(): Promise<boolean> {
+  if (!token.value) {
+    return false;
+  }
+  try {
+    const payload = await request<AdminSessionPayload>(
+      "/api/admin/auth/refresh",
+      {
+        method: "POST",
+        body: "{}",
+      },
+      { skipAuthRedirect: true },
+    );
+    saveAdminSession(payload);
+    return true;
+  } catch (error) {
+    if (error instanceof ApiRequestError && error.status === 401) {
+      clearAdminSession("登录已过期，请重新登录");
+    } else if (token.value) {
+      adminRefreshTimer = window.setTimeout(() => {
+        void refreshAdminSession();
+      }, 60_000);
+    }
+    return false;
+  }
+}
+
+async function request<T>(
+  url: string,
+  options: RequestInit = {},
+  behavior: RequestBehavior = {},
+): Promise<T> {
   const headers = new Headers(options.headers);
   headers.set("Content-Type", "application/json");
   if (token.value) {
@@ -572,7 +658,17 @@ async function request<T>(url: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch(url, { ...options, headers });
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}));
-    throw new Error(payload?.error?.message || `请求失败 ${response.status}`);
+    const errorCode = payload?.error?.code;
+    const errorMessage = payload?.error?.message || `请求失败 ${response.status}`;
+    const requestError = new ApiRequestError(errorMessage, response.status, errorCode);
+    if (
+      response.status === 401 &&
+      errorCode === "ADMIN_AUTH_FAILED" &&
+      !behavior.skipAuthRedirect
+    ) {
+      clearAdminSession("登录已过期，请重新登录");
+    }
+    throw requestError;
   }
   if (response.status === 204) {
     return undefined as T;
@@ -631,6 +727,7 @@ async function refreshAll(): Promise<void> {
   loading.value = true;
   try {
     await loadPublic();
+    await refreshAdminSession();
     await loadAdmin();
   } finally {
     loading.value = false;
@@ -655,12 +752,11 @@ async function createAdmin(): Promise<void> {
 
 async function login(): Promise<void> {
   try {
-    const payload = await request<{ token: string }>("/api/admin/auth/login", {
+    const payload = await request<AdminSessionPayload>("/api/admin/auth/login", {
       method: "POST",
       body: JSON.stringify(loginForm),
     });
-    token.value = payload.token;
-    localStorage.setItem("mijia_admin_token", payload.token);
+    saveAdminSession(payload);
     ElMessage.success("登录成功");
     await refreshAll();
   } catch (error) {
@@ -669,8 +765,7 @@ async function login(): Promise<void> {
 }
 
 function logout(): void {
-  token.value = "";
-  localStorage.removeItem("mijia_admin_token");
+  clearAdminSession();
 }
 
 async function startQrLogin(): Promise<void> {
@@ -845,6 +940,11 @@ function selectPage(index: string): void {
 
 onMounted(() => {
   void refreshAll();
+});
+
+onBeforeUnmount(() => {
+  window.clearInterval(qrTimer);
+  window.clearTimeout(adminRefreshTimer);
 });
 </script>
 
