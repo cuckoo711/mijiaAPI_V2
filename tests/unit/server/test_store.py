@@ -84,10 +84,15 @@ def test_system_checks_include_sqlite_and_admin_state(tmp_path: Path) -> None:
     assert checks["docs_enabled"]["status"] == "info"
     assert checks["docs_enabled"]["message"] == "disabled"
     assert checks["openapi_enabled"]["message"] == "disabled"
+    assert checks["public_base_url"]["status"] == "warn"
+    assert checks["public_base_url"]["message"] == "PUBLIC_BASE_URL is not configured"
 
     store.set_config("DOCS_ENABLED", True)
     store.set_config("OPENAPI_ENABLED", True)
+    store.set_config("PUBLIC_BASE_URL", "https://miapi.example.com")
     updated_checks = {item["key"]: item for item in store.system_checks()}
 
     assert updated_checks["docs_enabled"]["message"] == "enabled"
     assert updated_checks["openapi_enabled"]["message"] == "enabled"
+    assert updated_checks["public_base_url"]["status"] == "pass"
+    assert updated_checks["public_base_url"]["message"] == "https://miapi.example.com"

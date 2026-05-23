@@ -772,6 +772,7 @@ class ServerStore:
         config_map = self.get_config_map()
         docs_enabled = runtime_config_bool(config_map, "DOCS_ENABLED")
         openapi_enabled = docs_enabled or runtime_config_bool(config_map, "OPENAPI_ENABLED")
+        public_base_url = str(config_map.get("PUBLIC_BASE_URL") or self._settings.public_base_url)
         checks.append(
             {
                 "key": "server",
@@ -802,8 +803,8 @@ class ServerStore:
         checks.append(
             {
                 "key": "public_base_url",
-                "status": "pass" if self._settings.public_base_url else "warn",
-                "message": self._settings.public_base_url or "PUBLIC_BASE_URL is not configured",
+                "status": "pass" if public_base_url else "warn",
+                "message": public_base_url or "PUBLIC_BASE_URL is not configured",
             }
         )
         checks.append(

@@ -127,7 +127,7 @@ http://127.0.0.1:8123
 | `MIJIA_SERVER_DATA_DIR` | `.mijia/server` | 服务端数据目录。 |
 | `MIJIA_SERVER_DATABASE_PATH` | `${MIJIA_SERVER_DATA_DIR}/server.sqlite3` | SQLite 数据库路径。 |
 | `MIJIA_CREDENTIAL_PATH` | `.mijia/credential.json` | 米家扫码登录凭据文件路径。 |
-| `MIJIA_PUBLIC_BASE_URL` | 空 | 对外展示的服务地址，例如 `https://miapi.example.com`。 |
+| `MIJIA_PUBLIC_BASE_URL` | 空 | 对外展示地址的启动兜底值；管理台配置中心的 `PUBLIC_BASE_URL` 会优先生效，例如 `https://miapi.example.com`。 |
 | `MIJIA_WEB_DIST_DIR` | `web/dist` | 前端构建产物目录。 |
 
 ### systemd 部署示例
@@ -149,6 +149,7 @@ Environment=MIJIA_SERVER_DATA_DIR=/opt/mijia_server/.mijia/server
 Environment=MIJIA_SERVER_DATABASE_PATH=/opt/mijia_server/.mijia/server/server.sqlite3
 Environment=MIJIA_CREDENTIAL_PATH=/opt/mijia_server/.mijia/credential.json
 Environment=MIJIA_WEB_DIST_DIR=/opt/mijia_server/web/dist
+# 可选兜底值；也可以在管理台配置中心设置 PUBLIC_BASE_URL，且无需重启。
 Environment=MIJIA_PUBLIC_BASE_URL=https://miapi.example.com
 ExecStart=/usr/bin/env uv run python -m server.cli run
 Restart=always
