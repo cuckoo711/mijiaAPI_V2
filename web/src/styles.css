@@ -1,10 +1,9 @@
 :root {
-  /* Xiaomi Color System */
+  /* Mijia Color System */
+  --mi-green: #00C853;
+  --mi-green-light: #69F0AE;
+  --mi-green-dark: #00A844;
   --mi-orange: #FF6700;
-  --mi-orange-light: #FF8533;
-  --mi-orange-dark: #E65C00;
-  --mi-green: #4CAF50;
-  --mi-green-light: #81C784;
   --mi-red: #F44336;
   --mi-red-light: #E57373;
   --mi-blue: #2196F3;
@@ -82,7 +81,7 @@ body {
   border-radius: var(--radius-md);
   color: #ffffff;
   font-weight: 700;
-  background: linear-gradient(135deg, var(--mi-orange), var(--mi-orange-light));
+  background: linear-gradient(135deg, var(--mi-green), var(--mi-green-light));
 }
 
 .brand-title {
@@ -221,7 +220,7 @@ body {
 .icon-danger { background: linear-gradient(135deg, var(--mi-red), var(--mi-red-light)); }
 .icon-blue { background: linear-gradient(135deg, var(--mi-blue), var(--mi-blue-light)); }
 .icon-purple { background: linear-gradient(135deg, var(--mi-purple), #BA68C8); }
-.icon-orange { background: linear-gradient(135deg, var(--mi-orange), var(--mi-orange-light)); }
+.icon-orange { background: linear-gradient(135deg, var(--mi-green), var(--mi-green-light)); }
 
 .card-title {
   font-size: 16px;
@@ -298,18 +297,18 @@ body {
 }
 
 .el-button--primary {
-  background: var(--mi-orange);
-  border-color: var(--mi-orange);
+  background: var(--mi-green);
+  border-color: var(--mi-green);
 }
 
 .el-button--primary:hover {
-  background: var(--mi-orange-light);
-  border-color: var(--mi-orange-light);
+  background: var(--mi-green-light);
+  border-color: var(--mi-green-light);
 }
 
 .el-button--primary:active {
-  background: var(--mi-orange-dark);
-  border-color: var(--mi-orange-dark);
+  background: var(--mi-green-dark);
+  border-color: var(--mi-green-dark);
 }
 
 /* Tag styles */
@@ -519,7 +518,7 @@ body {
 }
 
 .endpoint-path {
-  color: var(--mi-orange);
+  color: var(--mi-green);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 13px;
   font-weight: 500;
@@ -658,7 +657,7 @@ body {
 
 /* Sync progress styles */
 .sync-progress-card {
-  border: 2px solid var(--mi-blue);
+  border: 2px solid var(--mi-green);
 }
 
 .sync-progress-content {
