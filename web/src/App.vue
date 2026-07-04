@@ -11,6 +11,7 @@ import {
   Setting,
   Tickets,
   User,
+  Loading,
 } from "@element-plus/icons-vue";
 import { ElMessage } from "element-plus";
 import type { Component } from "vue";
@@ -1247,49 +1248,77 @@ onBeforeUnmount(() => {
         </section>
 
         <section v-else-if="activeMenu === 'mijia'" class="stack">
-          <el-card shadow="never">
-            <template #header>账号状态</template>
-            <el-descriptions :column="2" border>
-              <el-descriptions-item label="状态">
+          <!-- 账号状态卡片 -->
+          <el-card shadow="hover" class="dashboard-card account-card">
+            <div class="card-header">
+              <div class="card-icon" :class="account.status === 'valid' ? 'icon-success' :
+                                           account.status === 'expiring_soon' ? 'icon-warning' : 'icon-danger'">
+                <el-icon><User /></el-icon>
+              </div>
+              <div class="card-title">账号状态</div>
+            </div>
+            <div class="card-content">
+              <div class="status-indicator">
                 <el-tag :type="account.status === 'valid' ? 'success' :
-                             account.status === 'expiring_soon' ? 'warning' : 'danger'">
+                             account.status === 'expiring_soon' ? 'warning' : 'danger'" size="large">
                   {{ account.status_text || (account.valid ? "有效" : "未登录或已过期") }}
                 </el-tag>
-              </el-descriptions-item>
-              <el-descriptions-item label="用户 ID">{{ account.user_id || "-" }}</el-descriptions-item>
-              <el-descriptions-item label="过期时间">{{ account.expires_at || "-" }}</el-descriptions-item>
-              <el-descriptions-item label="剩余时间">
-                {{ account.expires_in_days ? `${account.expires_in_days} 天 (${account.expires_in_hours} 小时)` : "-" }}
-              </el-descriptions-item>
-            </el-descriptions>
-          </el-card>
-          <el-card shadow="never">
-            <template #header>二维码登录</template>
-            <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-              <el-button type="primary" @click="startQrLogin">
-                {{ account.exists ? '重新扫码登录' : '开始扫码登录' }}
-              </el-button>
-              <el-button :loading="syncing" :disabled="syncing" @click="syncMijia">
-                {{ syncing ? '同步中...' : '同步家庭/设备/场景' }}
-              </el-button>
-              <el-button v-if="account.exists" type="danger" plain @click="deleteCredential">
-                移除账号
-              </el-button>
+              </div>
+              <div class="status-details">
+                <div v-if="account.exists && account.user_id">用户 ID: {{ account.user_id }}</div>
+                <div v-if="account.expires_at">过期时间: {{ account.expires_at }}</div>
+                <div v-if="account.expires_in_days">剩余时间: {{ account.expires_in_days }} 天 ({{ account.expires_in_hours }} 小时)</div>
+              </div>
             </div>
-            <div v-if="qrJob" class="qr-box">
-              <img :src="qrJob.qr_url" alt="米家登录二维码" />
-              <div>{{ qrJob.status }} · {{ qrJob.message }}</div>
+          </el-card>
+
+          <!-- 登录操作卡片 -->
+          <el-card shadow="hover" class="dashboard-card">
+            <div class="card-header">
+              <div class="card-icon icon-orange">
+                <el-icon><Tickets /></el-icon>
+              </div>
+              <div class="card-title">米家登录</div>
+            </div>
+            <div class="card-content">
+              <div class="login-actions">
+                <el-button type="primary" size="large" @click="startQrLogin">
+                  {{ account.exists ? '重新扫码登录' : '开始扫码登录' }}
+                </el-button>
+                <el-button :loading="syncing" :disabled="syncing" size="large" @click="syncMijia">
+                  {{ syncing ? '同步中...' : '同步家庭/设备/场景' }}
+                </el-button>
+                <el-button v-if="account.exists" type="danger" plain size="large" @click="deleteCredential">
+                  移除账号
+                </el-button>
+              </div>
+              <div v-if="qrJob" class="qr-box">
+                <img :src="qrJob.qr_url" alt="米家登录二维码" />
+                <div class="qr-status">
+                  <el-tag :type="qrJob.status === 'success' ? 'success' : 
+                               qrJob.status === 'failed' ? 'danger' : 'info'" size="large">
+                    {{ qrJob.status === 'success' ? '登录成功' : 
+                       qrJob.status === 'failed' ? '登录失败' : '等待扫码' }}
+                  </el-tag>
+                  <div class="qr-message">{{ qrJob.message }}</div>
+                </div>
+              </div>
             </div>
           </el-card>
 
           <!-- 同步进度显示 -->
-          <el-card v-if="syncProgress" shadow="never" class="sync-progress-card">
+          <el-card v-if="syncProgress" shadow="hover" class="sync-progress-card">
             <template #header>
               <div class="progress-header">
-                <span>同步进度</span>
-                <div style="display: flex; align-items: center; gap: 8px;">
+                <div class="card-header" style="margin-bottom: 0;">
+                  <div class="card-icon icon-blue">
+                    <el-icon><Loading /></el-icon>
+                  </div>
+                  <div class="card-title">同步进度</div>
+                </div>
+                <div style="display: flex; align-items: center; gap: 12px;">
                   <el-tag :type="syncProgress.status === 'completed' ? 'success' :
-                               syncProgress.status === 'failed' ? 'danger' : 'primary'">
+                               syncProgress.status === 'failed' ? 'danger' : 'primary'" size="large">
                     {{ syncProgress.status === 'running' ? '同步中' :
                        syncProgress.status === 'completed' ? '已完成' : '失败' }}
                   </el-tag>
@@ -1305,50 +1334,57 @@ onBeforeUnmount(() => {
               </div>
             </template>
 
-            <!-- 进度条 -->
-            <el-progress
-              :percentage="syncProgress.progress"
-              :status="syncProgress.status === 'completed' ? 'success' :
-                      syncProgress.status === 'failed' ? 'exception' : undefined"
-              :striped="syncProgress.status === 'running'"
-              :striped-flow="syncProgress.status === 'running'"
-            />
-
-            <!-- 当前步骤 -->
-            <div class="step-info">
-              <el-tag type="info">{{ syncProgress.step }}</el-tag>
-              <span v-if="syncProgress.current_home" class="home-info">
-                家庭：{{ syncProgress.current_home }}
-              </span>
-            </div>
-
-            <!-- 详细信息 -->
-            <el-descriptions :column="2" border size="small" class="progress-details">
-              <el-descriptions-item label="家庭">
-                {{ syncProgress.homes_processed }} / {{ syncProgress.homes_total }}
-              </el-descriptions-item>
-              <el-descriptions-item label="设备">
-                {{ syncProgress.devices_found }}
-              </el-descriptions-item>
-              <el-descriptions-item label="场景">
-                {{ syncProgress.scenes_found }}
-              </el-descriptions-item>
-              <el-descriptions-item label="警告">
-                {{ syncProgress.warnings.length }}
-              </el-descriptions-item>
-            </el-descriptions>
-
-            <!-- 警告信息 -->
-            <div v-if="syncProgress.warnings.length > 0" class="warnings">
-              <el-alert
-                v-for="(warning, index) in syncProgress.warnings"
-                :key="index"
-                :title="`${warning.kind} - ${warning.home_name}`"
-                :description="warning.message"
-                type="warning"
-                show-icon
-                :closable="false"
+            <div class="sync-progress-content">
+              <!-- 进度条 -->
+              <el-progress
+                :percentage="syncProgress.progress"
+                :status="syncProgress.status === 'completed' ? 'success' :
+                        syncProgress.status === 'failed' ? 'exception' : undefined"
+                :striped="syncProgress.status === 'running'"
+                :striped-flow="syncProgress.status === 'running'"
+                :stroke-width="12"
               />
+
+              <!-- 当前步骤 -->
+              <div class="step-info">
+                <el-tag type="info" size="large">{{ syncProgress.step }}</el-tag>
+                <span v-if="syncProgress.current_home" class="home-info">
+                  家庭：{{ syncProgress.current_home }}
+                </span>
+              </div>
+
+              <!-- 详细信息 -->
+              <div class="sync-stats">
+                <div class="sync-stat-item">
+                  <div class="sync-stat-value">{{ syncProgress.homes_processed }} / {{ syncProgress.homes_total }}</div>
+                  <div class="sync-stat-label">家庭</div>
+                </div>
+                <div class="sync-stat-item">
+                  <div class="sync-stat-value">{{ syncProgress.devices_found }}</div>
+                  <div class="sync-stat-label">设备</div>
+                </div>
+                <div class="sync-stat-item">
+                  <div class="sync-stat-value">{{ syncProgress.scenes_found }}</div>
+                  <div class="sync-stat-label">场景</div>
+                </div>
+                <div class="sync-stat-item">
+                  <div class="sync-stat-value">{{ syncProgress.warnings.length }}</div>
+                  <div class="sync-stat-label">警告</div>
+                </div>
+              </div>
+
+              <!-- 警告信息 -->
+              <div v-if="syncProgress.warnings.length > 0" class="warnings">
+                <el-alert
+                  v-for="(warning, index) in syncProgress.warnings"
+                  :key="index"
+                  :title="`${warning.kind} - ${warning.home_name}`"
+                  :description="warning.message"
+                  type="warning"
+                  show-icon
+                  :closable="false"
+                />
+              </div>
             </div>
           </el-card>
         </section>
