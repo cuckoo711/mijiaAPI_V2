@@ -847,6 +847,17 @@ def create_app(  # noqa: C901
         return {"items": current_store.list_audit(limit=limit)}
 
     _mount_frontend(app, resolved_settings.web_dist_dir)
+
+    @app.on_event("startup")
+    async def startup_event() -> None:
+        runtime: MijiaRuntime = app.state.runtime
+        runtime.start_credential_refresh_timer()
+
+    @app.on_event("shutdown")
+    async def shutdown_event() -> None:
+        runtime: MijiaRuntime = app.state.runtime
+        runtime.stop_credential_refresh_timer()
+
     return app
 
 

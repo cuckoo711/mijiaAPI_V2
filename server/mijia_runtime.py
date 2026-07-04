@@ -188,6 +188,8 @@ class MijiaRuntime:
         self._credential_lock = threading.RLock()
         self._sync_lock = threading.Lock()
         self._sync_progress: Optional[SyncProgress] = None
+        self._refresh_timer: Optional[threading.Timer] = None
+        self._refresh_interval = 6 * 60 * 60  # 每 6 小时检查一次
 
     def load_credential(self) -> Optional[Credential]:
         return FileCredentialStore(self._settings.credential_path).load()
@@ -219,6 +221,37 @@ class MijiaRuntime:
 
     def delete_credential(self) -> None:
         FileCredentialStore(self._settings.credential_path).delete()
+
+    def start_credential_refresh_timer(self) -> None:
+        """启动定时刷新凭据的后台任务"""
+        if self._refresh_timer is not None:
+            return
+        self._refresh_timer = threading.Timer(
+            self._refresh_interval, self._credential_refresh_job
+        )
+        self._refresh_timer.daemon = True
+        self._refresh_timer.start()
+
+    def stop_credential_refresh_timer(self) -> None:
+        """停止定时刷新凭据的后台任务"""
+        if self._refresh_timer is not None:
+            self._refresh_timer.cancel()
+            self._refresh_timer = None
+
+    def _credential_refresh_job(self) -> None:
+        """定时刷新凭据的任务"""
+        try:
+            credential = self.load_credential()
+            if credential is None:
+                return
+            # 如果凭据即将过期（剩余时间 < 24小时），自动刷新
+            if credential.is_valid() and credential.expires_in() < self._settings.credential_refresh_before_seconds:
+                self._refresh_credential(credential)
+        except Exception:
+            pass  # 静默处理，不影响服务
+        finally:
+            # 重新启动定时器
+            self.start_credential_refresh_timer()
 
     def sync_all(self) -> dict[str, Any]:
         if not self._sync_lock.acquire(blocking=False):
