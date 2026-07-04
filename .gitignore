@@ -60,5 +60,17 @@ configs/mijiaAPI.toml
 configs/*.toml
 !configs/*.toml.template
 
+# ==================== 配置目录数据文件 ====================
+# 忽略 configs 目录下的运行时数据
+configs/credential.json
+configs/server/
+configs/cache/
+configs/*.json
+!configs/*.json.template
+
+# ==================== 旧版本数据 ====================
+.mijia/
+.mijia_backup/
+
 # ==================== 其他 ====================
 __pypackages__/
