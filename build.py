@@ -63,38 +63,6 @@ def build_executable():
     ], check=True)
 
 
-def create_archive(system, arch):
-    """创建压缩包"""
-    dist_dir = Path('dist')
-    if not dist_dir.exists():
-        print("错误: dist 目录不存在")
-        return None
-
-    # 确定文件名
-    if system == 'windows':
-        archive_name = f'mijia-server-{system}-{arch}'
-        archive_path = dist_dir / f'{archive_name}.zip'
-        print(f"创建 ZIP 压缩包: {archive_path}")
-        shutil.make_archive(
-            str(dist_dir / archive_name),
-            'zip',
-            dist_dir,
-            'mijia-server'
-        )
-    else:
-        archive_name = f'mijia-server-{system}-{arch}'
-        archive_path = dist_dir / f'{archive_name}.tar.gz'
-        print(f"创建 TAR.GZ 压缩包: {archive_path}")
-        shutil.make_archive(
-            str(dist_dir / archive_name),
-            'gztar',
-            dist_dir,
-            'mijia-server'
-        )
-
-    return archive_path
-
-
 def main():
     """主函数"""
     print("=" * 60)
@@ -123,13 +91,17 @@ def main():
     # 构建可执行文件
     build_executable()
 
-    # 创建压缩包
-    archive_path = create_archive(system, arch)
+    # 获取输出文件路径
+    if system == 'windows':
+        output_file = dist_dir / 'mijia-server.exe'
+    else:
+        output_file = dist_dir / 'mijia-server'
 
     print("=" * 60)
     print("构建完成!")
-    if archive_path:
-        print(f"输出文件: {archive_path}")
+    if output_file.exists():
+        print(f"输出文件: {output_file}")
+        print(f"文件大小: {output_file.stat().st_size / 1024 / 1024:.2f} MB")
     print("=" * 60)
 
 

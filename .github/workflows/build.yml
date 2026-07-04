@@ -59,23 +59,11 @@ jobs:
       - name: Build executable
         run: pyinstaller --clean --noconfirm mijia-server.spec
 
-      - name: Create archive (Linux/macOS)
-        if: matrix.platform != 'windows'
-        run: |
-          cd dist
-          tar -czf mijia-server-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz mijia-server
-
-      - name: Create archive (Windows)
-        if: matrix.platform == 'windows'
-        run: |
-          cd dist
-          7z a mijia-server-${{ matrix.platform }}-${{ matrix.arch }}.zip mijia-server
-
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: mijia-server-${{ matrix.platform }}-${{ matrix.arch }}
-          path: dist/mijia-server-*
+          path: dist/mijia-server*
 
   release:
     needs: build
