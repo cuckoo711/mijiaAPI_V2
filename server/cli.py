@@ -86,7 +86,7 @@ def run_command(_args: argparse.Namespace) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="mijia-server")
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    subparsers = parser.add_subparsers(dest="command")
 
     init_parser = subparsers.add_parser("init", help="initialize SQLite storage")
     init_parser.add_argument("--admin", help="create the initial administrator")
@@ -112,7 +112,12 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
-    args.func(args)
+    
+    # 如果没有提供子命令，默认执行 run
+    if args.command is None:
+        run_command(args)
+    else:
+        args.func(args)
 
 
 if __name__ == "__main__":
