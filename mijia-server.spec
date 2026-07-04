@@ -109,5 +109,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=None,
+    icon=str(ROOT_DIR / 'assets' / 'icon.ico'),
 )
