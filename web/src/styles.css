@@ -377,3 +377,57 @@ body {
     justify-content: flex-start;
   }
 }
+
+/* Sync progress styles */
+.sync-progress-card {
+  margin-top: 16px;
+}
+
+.progress-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.step-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 16px 0;
+}
+
+.home-info {
+  color: #6b7280;
+  font-size: 14px;
+}
+
+.progress-details {
+  margin-top: 16px;
+}
+
+.warnings {
+  margin-top: 16px;
+}
+
+.warnings .el-alert {
+  margin-bottom: 8px;
+}
+
+/* Make progress bar more prominent */
+.sync-progress-card .el-progress {
+  margin: 16px 0;
+}
+
+/* Add animation to striped progress */
+.sync-progress-card .el-progress-bar__stripes {
+  animation: progress-stripes 1s linear infinite;
+}
+
+@keyframes progress-stripes {
+  0% {
+    background-position: 1rem 0;
+  }
+  100% {
+    background-position: 0 0;
+  }
+}

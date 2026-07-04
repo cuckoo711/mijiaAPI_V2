@@ -581,6 +581,16 @@ def create_app(  # noqa: C901
         current_store.add_audit("mijia.sync", "success", actor_type="admin", metadata=result)
         return result
 
+    @app.get("/api/admin/sync/progress")
+    def admin_sync_progress(
+        _admin: dict[str, Any] = Depends(require_admin),
+        runtime: MijiaRuntime = Depends(get_runtime),
+    ) -> dict[str, Any]:
+        progress = runtime.get_sync_progress()
+        if progress is None:
+            return {"status": "idle"}
+        return progress
+
     @app.get("/api/admin/homes")
     def admin_homes(
         _admin: dict[str, Any] = Depends(require_admin),

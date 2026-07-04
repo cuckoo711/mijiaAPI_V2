@@ -111,6 +111,24 @@ const tokenExpiresAt = ref(localStorage.getItem("mijia_admin_expires_at") || "")
 const activeMenu = ref("dashboard");
 const loading = ref(false);
 const syncing = ref(false);
+const syncProgress = ref<{
+  task_id: string;
+  status: string;
+  step: string;
+  progress: number;
+  current_home: string;
+  homes_total: number;
+  homes_processed: number;
+  devices_found: number;
+  scenes_found: number;
+  warnings: Array<{ kind: string; home_name: string; message: string }>;
+  started_at: string;
+  updated_at: string;
+  completed_at: string | null;
+  error: string | null;
+} | null>(null);
+const syncPollTimer = ref<number | null>(null);
+const isSyncPolling = ref(false);
 const health = ref<{ status: string; version: string } | null>(null);
 const initialized = ref(false);
 const account = ref<Record<string, unknown>>({});
@@ -813,31 +831,77 @@ async function pollQrLogin(): Promise<void> {
   }
 }
 
+function startSyncPolling(): void {
+  if (isSyncPolling.value) return;
+  isSyncPolling.value = true;
+  syncPollTimer.value = window.setInterval(pollSyncProgress, 500);
+}
+
+function stopSyncPolling(): void {
+  if (syncPollTimer.value) {
+    window.clearInterval(syncPollTimer.value);
+    syncPollTimer.value = null;
+  }
+  isSyncPolling.value = false;
+}
+
+async function pollSyncProgress(): Promise<void> {
+  try {
+    const progress = await request<{
+      task_id: string;
+      status: string;
+      step: string;
+      progress: number;
+      current_home: string;
+      homes_total: number;
+      homes_processed: number;
+      devices_found: number;
+      scenes_found: number;
+      warnings: Array<{ kind: string; home_name: string; message: string }>;
+      started_at: string;
+      updated_at: string;
+      completed_at: string | null;
+      error: string | null;
+    }>("/api/admin/sync/progress");
+    syncProgress.value = progress;
+    if (progress.status === "completed" || progress.status === "failed") {
+      stopSyncPolling();
+      syncing.value = false;
+      if (progress.status === "completed") {
+        const warningText = progress.warnings?.length ? `，${progress.warnings.length} 个警告` : "";
+        ElMessage.success(
+          `同步完成：${progress.homes_total} 个家庭，${progress.devices_found} 个设备，${progress.scenes_found} 个场景${warningText}`
+        );
+        await refreshAll();
+      } else {
+        ElMessage.error(`同步失败：${progress.error}`);
+      }
+      setTimeout(() => {
+        syncProgress.value = null;
+      }, 3000);
+    }
+  } catch (error) {
+    console.error("获取同步进度失败:", error);
+  }
+}
+
 async function syncMijia(): Promise<void> {
   if (syncing.value) {
     ElMessage.warning("同步正在进行中，请稍候");
     return;
   }
   syncing.value = true;
+  syncProgress.value = null;
   try {
-    const result = await request<{
-      homes: number;
-      devices: number;
-      scenes: number;
-      warnings?: Array<{ kind: string; home_name: string; message: string }>;
-    }>("/api/admin/sync", {
+    await request("/api/admin/sync", {
       method: "POST",
       body: "{}",
     });
-    const warningText = result.warnings?.length ? `，${result.warnings.length} 个警告` : "";
-    ElMessage.success(
-      `同步完成：${result.homes} 个家庭，${result.devices} 个设备，${result.scenes} 个场景${warningText}`
-    );
-    await refreshAll();
+    startSyncPolling();
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : "同步失败");
-  } finally {
     syncing.value = false;
+    stopSyncPolling();
   }
 }
 
@@ -963,6 +1027,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.clearInterval(qrTimer);
   window.clearTimeout(adminRefreshTimer);
+  stopSyncPolling();
 });
 </script>
 
@@ -1105,18 +1170,80 @@ onBeforeUnmount(() => {
             <template #header>二维码登录</template>
             <el-button type="primary" @click="startQrLogin">开始扫码登录</el-button>
             <el-button :loading="syncing" :disabled="syncing" @click="syncMijia">
-              同步家庭/设备/场景
+              {{ syncing ? '同步中...' : '同步家庭/设备/场景' }}
             </el-button>
             <div v-if="qrJob" class="qr-box">
               <img :src="qrJob.qr_url" alt="米家登录二维码" />
               <div>{{ qrJob.status }} · {{ qrJob.message }}</div>
             </div>
           </el-card>
+
+          <!-- 同步进度显示 -->
+          <el-card v-if="syncProgress" shadow="never" class="sync-progress-card">
+            <template #header>
+              <div class="progress-header">
+                <span>同步进度</span>
+                <el-tag :type="syncProgress.status === 'completed' ? 'success' :
+                             syncProgress.status === 'failed' ? 'danger' : 'primary'">
+                  {{ syncProgress.status === 'running' ? '同步中' :
+                     syncProgress.status === 'completed' ? '已完成' : '失败' }}
+                </el-tag>
+              </div>
+            </template>
+
+            <!-- 进度条 -->
+            <el-progress
+              :percentage="syncProgress.progress"
+              :status="syncProgress.status === 'completed' ? 'success' :
+                      syncProgress.status === 'failed' ? 'exception' : undefined"
+              :striped="syncProgress.status === 'running'"
+              :striped-flow="syncProgress.status === 'running'"
+            />
+
+            <!-- 当前步骤 -->
+            <div class="step-info">
+              <el-tag type="info">{{ syncProgress.step }}</el-tag>
+              <span v-if="syncProgress.current_home" class="home-info">
+                家庭：{{ syncProgress.current_home }}
+              </span>
+            </div>
+
+            <!-- 详细信息 -->
+            <el-descriptions :column="2" border size="small" class="progress-details">
+              <el-descriptions-item label="家庭">
+                {{ syncProgress.homes_processed }} / {{ syncProgress.homes_total }}
+              </el-descriptions-item>
+              <el-descriptions-item label="设备">
+                {{ syncProgress.devices_found }}
+              </el-descriptions-item>
+              <el-descriptions-item label="场景">
+                {{ syncProgress.scenes_found }}
+              </el-descriptions-item>
+              <el-descriptions-item label="警告">
+                {{ syncProgress.warnings.length }}
+              </el-descriptions-item>
+            </el-descriptions>
+
+            <!-- 警告信息 -->
+            <div v-if="syncProgress.warnings.length > 0" class="warnings">
+              <el-alert
+                v-for="(warning, index) in syncProgress.warnings"
+                :key="index"
+                :title="`${warning.kind} - ${warning.home_name}`"
+                :description="warning.message"
+                type="warning"
+                show-icon
+                :closable="false"
+              />
+            </div>
+          </el-card>
         </section>
 
         <section v-else-if="activeMenu === 'devices'" class="devices-page">
           <div class="device-filter-bar">
-            <el-button :loading="syncing" :disabled="syncing" @click="syncMijia">重新同步</el-button>
+            <el-button :loading="syncing" :disabled="syncing" @click="syncMijia">
+              {{ syncing ? '同步中...' : '重新同步' }}
+            </el-button>
             <el-select v-model="deviceFilters.home" clearable placeholder="家庭" class="filter-control">
               <el-option v-for="home in homes" :key="home.id" :label="home.name" :value="home.id" />
             </el-select>

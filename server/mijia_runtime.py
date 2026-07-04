@@ -57,6 +57,48 @@ class LoginJob:
         }
 
 
+@dataclass
+class SyncProgress:
+    """In-memory state for sync progress tracking."""
+
+    task_id: str
+    status: str = "idle"  # idle, running, completed, failed
+    step: str = ""
+    step_number: int = 0
+    total_steps: int = 8
+    progress: float = 0.0
+    current_home: str = ""
+    homes_total: int = 0
+    homes_processed: int = 0
+    devices_found: int = 0
+    scenes_found: int = 0
+    warnings: list = field(default_factory=list)
+    started_at: str = ""
+    updated_at: str = ""
+    completed_at: Optional[str] = None
+    error: Optional[str] = None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "task_id": self.task_id,
+            "status": self.status,
+            "step": self.step,
+            "step_number": self.step_number,
+            "total_steps": self.total_steps,
+            "progress": self.progress,
+            "current_home": self.current_home,
+            "homes_total": self.homes_total,
+            "homes_processed": self.homes_processed,
+            "devices_found": self.devices_found,
+            "scenes_found": self.scenes_found,
+            "warnings": self.warnings,
+            "started_at": self.started_at,
+            "updated_at": self.updated_at,
+            "completed_at": self.completed_at,
+            "error": self.error,
+        }
+
+
 class LoginJobManager:
     """Create and track QR login sessions for the web UI."""
 
@@ -145,6 +187,7 @@ class MijiaRuntime:
         self._store = store
         self._credential_lock = threading.RLock()
         self._sync_lock = threading.Lock()
+        self._sync_progress: Optional[SyncProgress] = None
 
     def load_credential(self) -> Optional[Credential]:
         return FileCredentialStore(self._settings.credential_path).load()
@@ -185,32 +228,114 @@ class MijiaRuntime:
         finally:
             self._sync_lock.release()
 
-    def _sync_all_unlocked(self) -> dict[str, Any]:
-        api = self._api()
-        homes = api.get_homes()
-        home_dicts = [model_to_dict(home) for home in homes]
-        self._store.replace_home_registry(home_dicts)
+    def get_sync_progress(self) -> Optional[dict[str, Any]]:
+        """Get current sync progress."""
+        if self._sync_progress is None:
+            return None
+        return self._sync_progress.as_dict()
 
-        devices: list[dict[str, Any]] = []
-        scenes: list[dict[str, Any]] = []
-        warnings: list[dict[str, str]] = []
-        for home in homes:
-            try:
-                devices.extend(self._device_dicts(api, home))
-            except Exception as exc:
-                warnings.append(self._sync_warning("devices", home, exc))
-            try:
-                scenes.extend(self._scene_dicts(api, home))
-            except Exception as exc:
-                warnings.append(self._sync_warning("scenes", home, exc))
-        self._store.upsert_devices(devices)
-        self._store.upsert_scenes(scenes)
-        return {
-            "homes": len(home_dicts),
-            "devices": len(devices),
-            "scenes": len(scenes),
-            "warnings": warnings,
-        }
+    def _sync_all_unlocked(self) -> dict[str, Any]:
+        # Initialize progress
+        self._sync_progress = SyncProgress(
+            task_id=str(uuid.uuid4()),
+            status="running",
+            step="初始化",
+            started_at=isoformat(utc_now()),
+        )
+        
+        try:
+            # Step 1: Initialize
+            self._update_progress(step="初始化同步任务", progress=0)
+            
+            # Step 2: Get homes
+            self._update_progress(step="获取家庭列表", progress=5)
+            api = self._api()
+            homes = api.get_homes()
+            
+            # Step 3: Save homes
+            self._update_progress(step="保存家庭数据", progress=10, homes_total=len(homes))
+            home_dicts = [model_to_dict(home) for home in homes]
+            self._store.replace_home_registry(home_dicts)
+
+            devices: list[dict[str, Any]] = []
+            scenes: list[dict[str, Any]] = []
+            warnings: list[dict[str, str]] = []
+            
+            # Step 4-6: Process each home
+            for i, home in enumerate(homes):
+                # Update progress
+                progress = 10 + (i / len(homes)) * 50  # 10% - 60%
+                self._update_progress(
+                    step=f"处理家庭 {i+1}/{len(homes)}",
+                    progress=progress,
+                    current_home=str(home.name),
+                    homes_processed=i,
+                )
+                
+                # Get devices
+                try:
+                    devices.extend(self._device_dicts(api, home))
+                    self._update_progress(devices_found=len(devices))
+                except Exception as exc:
+                    warnings.append(self._sync_warning("devices", home, exc))
+                
+                # Get scenes
+                try:
+                    scenes.extend(self._scene_dicts(api, home))
+                    self._update_progress(scenes_found=len(scenes))
+                except Exception as exc:
+                    warnings.append(self._sync_warning("scenes", home, exc))
+            
+            # Step 7: Save devices
+            self._update_progress(step="保存设备数据", progress=90)
+            self._store.upsert_devices(devices)
+            
+            # Step 8: Save scenes
+            self._update_progress(step="保存场景数据", progress=95)
+            self._store.upsert_scenes(scenes)
+            
+            # Complete
+            self._update_progress(
+                status="completed",
+                step="同步完成",
+                progress=100,
+                completed_at=isoformat(utc_now()),
+                warnings=warnings,
+            )
+            
+            return {
+                "homes": len(home_dicts),
+                "devices": len(devices),
+                "scenes": len(scenes),
+                "warnings": warnings,
+            }
+            
+        except Exception as e:
+            self._update_progress(
+                status="failed",
+                error=str(e),
+                completed_at=isoformat(utc_now()),
+            )
+            raise
+        finally:
+            # Cleanup: delay cleanup to let frontend get final state
+            def cleanup_progress():
+                import time
+                time.sleep(5)  # 5 seconds delay
+                self._sync_progress = None
+            
+            threading.Thread(target=cleanup_progress, daemon=True).start()
+
+    def _update_progress(self, **kwargs) -> None:
+        """Update sync progress."""
+        if self._sync_progress is None:
+            return
+        
+        for key, value in kwargs.items():
+            if hasattr(self._sync_progress, key):
+                setattr(self._sync_progress, key, value)
+        
+        self._sync_progress.updated_at = isoformat(utc_now())
 
     def get_device_state(self, device_slug: str) -> list[dict[str, Any]]:
         device = self._store.get_device(device_slug)
