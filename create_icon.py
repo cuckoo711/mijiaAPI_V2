@@ -54,7 +54,7 @@ def save_as_ico(img, output_path):
 
     # 保存为 ICO
     img.save(output_path, format='ICO', sizes=[(s.width, s.height) for s in images])
-    print(f"图标已保存: {output_path}")
+    print(f"Icon saved: {output_path}")
 
 
 def main():
@@ -63,19 +63,19 @@ def main():
     os.makedirs(assets_dir, exist_ok=True)
 
     # 创建图标
-    print("创建图标...")
+    print("Creating icon...")
     img = create_icon()
 
     # 保存为 PNG（预览用）
     png_path = os.path.join(assets_dir, 'icon.png')
     img.save(png_path, format='PNG')
-    print(f"PNG 图标已保存: {png_path}")
+    print(f"PNG icon saved: {png_path}")
 
     # 保存为 ICO
     ico_path = os.path.join(assets_dir, 'icon.ico')
     save_as_ico(img, ico_path)
 
-    print("图标创建完成!")
+    print("Icon creation completed!")
 
 
 if __name__ == '__main__':
