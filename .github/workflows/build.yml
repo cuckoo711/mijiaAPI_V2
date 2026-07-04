@@ -59,11 +59,24 @@ jobs:
       - name: Build executable
         run: pyinstaller --clean --noconfirm mijia-server.spec
 
+      - name: Rename executable (Linux/macOS)
+        if: matrix.platform != 'windows'
+        run: |
+          cd dist
+          mv mijia-server mijia-server-${{ matrix.platform }}-${{ matrix.arch }}
+          chmod +x mijia-server-${{ matrix.platform }}-${{ matrix.arch }}
+
+      - name: Rename executable (Windows)
+        if: matrix.platform == 'windows'
+        run: |
+          cd dist
+          ren mijia-server.exe mijia-server-${{ matrix.platform }}-${{ matrix.arch }}.exe
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: mijia-server-${{ matrix.platform }}-${{ matrix.arch }}
-          path: dist/mijia-server*
+          path: dist/mijia-server-*
 
   release:
     needs: build
@@ -77,6 +90,9 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
+
+      - name: List artifacts
+        run: find artifacts -type f
 
       - name: Create release
         uses: softprops/action-gh-release@v2
