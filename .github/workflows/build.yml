@@ -71,9 +71,10 @@ jobs:
 
       - name: Rename executable (Windows)
         if: matrix.platform == 'windows'
+        shell: pwsh
         run: |
           cd dist
-          ren mijia-server.exe mijia-server-${{ matrix.platform }}-${{ matrix.arch }}.exe
+          Rename-Item -Path "mijia-server.exe" -NewName "mijia-server-${{ matrix.platform }}-${{ matrix.arch }}.exe"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
