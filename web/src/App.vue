@@ -1143,10 +1143,15 @@ onBeforeUnmount(() => {
           <el-card shadow="never">
             <template #header>米家账号</template>
             <div class="metric-line">
-              <span>凭据</span>
-              <el-tag :type="account.valid ? 'success' : 'warning'">
-                {{ account.valid ? "有效" : "未登录或已过期" }}
+              <span>凭据状态</span>
+              <el-tag :type="account.status === 'valid' ? 'success' :
+                           account.status === 'expiring_soon' ? 'warning' : 'danger'">
+                {{ account.status_text || (account.valid ? "有效" : "未登录或已过期") }}
               </el-tag>
+            </div>
+            <div v-if="account.exists && account.user_id" class="metric-line">
+              <span>用户 ID</span>
+              <span>{{ account.user_id }}</span>
             </div>
           </el-card>
           <el-card shadow="never">
@@ -1188,10 +1193,17 @@ onBeforeUnmount(() => {
           <el-card shadow="never">
             <template #header>账号状态</template>
             <el-descriptions :column="2" border>
-              <el-descriptions-item label="凭据存在">{{ account.exists }}</el-descriptions-item>
-              <el-descriptions-item label="有效">{{ account.valid }}</el-descriptions-item>
+              <el-descriptions-item label="状态">
+                <el-tag :type="account.status === 'valid' ? 'success' :
+                             account.status === 'expiring_soon' ? 'warning' : 'danger'">
+                  {{ account.status_text || (account.valid ? "有效" : "未登录或已过期") }}
+                </el-tag>
+              </el-descriptions-item>
               <el-descriptions-item label="用户 ID">{{ account.user_id || "-" }}</el-descriptions-item>
               <el-descriptions-item label="过期时间">{{ account.expires_at || "-" }}</el-descriptions-item>
+              <el-descriptions-item label="剩余时间">
+                {{ account.expires_in_days ? `${account.expires_in_days} 天 (${account.expires_in_hours} 小时)` : "-" }}
+              </el-descriptions-item>
             </el-descriptions>
           </el-card>
           <el-card shadow="never">

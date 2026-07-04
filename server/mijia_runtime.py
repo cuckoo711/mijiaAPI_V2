@@ -189,7 +189,7 @@ class MijiaRuntime:
         self._sync_lock = threading.Lock()
         self._sync_progress: Optional[SyncProgress] = None
         self._refresh_timer: Optional[threading.Timer] = None
-        self._refresh_interval = 6 * 60 * 60  # 每 6 小时检查一次
+        self._refresh_interval = 24 * 60 * 60  # 每 24 小时检查一次
 
     def load_credential(self) -> Optional[Credential]:
         return FileCredentialStore(self._settings.credential_path).load()
@@ -198,12 +198,32 @@ class MijiaRuntime:
         credential = self.load_credential()
         if credential is None:
             return {"exists": False, "valid": False}
+        
+        expires_in_seconds = credential.expires_in()
+        expires_in_hours = expires_in_seconds / 3600
+        expires_in_days = expires_in_hours / 24
+        
+        # 判断状态
+        if not credential.is_valid():
+            status = "expired"
+            status_text = "已过期，请重新登录"
+        elif expires_in_hours < 48:
+            status = "expiring_soon"
+            status_text = f"即将过期（剩余 {expires_in_days:.1f} 天）"
+        else:
+            status = "valid"
+            status_text = f"有效（剩余 {expires_in_days:.1f} 天）"
+        
         return {
             "exists": True,
             "valid": credential.is_valid(),
             "user_id": credential.user_id,
             "expires_at": credential.expires_at.isoformat(),
-            "expires_in": credential.expires_in(),
+            "expires_in": expires_in_seconds,
+            "expires_in_hours": round(expires_in_hours, 1),
+            "expires_in_days": round(expires_in_days, 1),
+            "status": status,
+            "status_text": status_text,
         }
 
     def refresh_credential(self) -> dict[str, Any]:
@@ -244,8 +264,8 @@ class MijiaRuntime:
             credential = self.load_credential()
             if credential is None:
                 return
-            # 如果凭据即将过期（剩余时间 < 24小时），自动刷新
-            if credential.is_valid() and credential.expires_in() < self._settings.credential_refresh_before_seconds:
+            # 如果凭据即将过期（剩余时间 < 48小时），自动刷新
+            if credential.is_valid() and credential.expires_in() < 48 * 60 * 60:
                 self._refresh_credential(credential)
         except Exception:
             pass  # 静默处理，不影响服务
