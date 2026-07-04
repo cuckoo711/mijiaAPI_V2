@@ -23,17 +23,18 @@ class SceneService:
         """
         self._scene_repo = scene_repo
 
-    def get_scenes(self, home_id: str, credential: Credential) -> List[Scene]:
+    def get_scenes(self, home_id: str, credential: Credential, owner_uid: str = None) -> List[Scene]:
         """获取智能列表
 
         Args:
             home_id: 家庭ID
             credential: 用户凭据
+            owner_uid: 家庭拥有者用户ID（共享家庭时需要传入家庭拥有者的uid）
 
         Returns:
             智能列表
         """
-        return self._scene_repo.get_all(home_id, credential)
+        return self._scene_repo.get_all(home_id, credential, owner_uid)
 
     def execute_scene(self, scene_id: str, home_id: str, credential: Credential) -> bool:
         """执行智能

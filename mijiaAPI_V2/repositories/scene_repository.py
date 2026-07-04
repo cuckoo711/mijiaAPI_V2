@@ -24,12 +24,13 @@ class SceneRepositoryImpl(ISceneRepository):
         """
         self._http = http_client
 
-    def get_all(self, home_id: str, credential: Credential) -> List[Scene]:
+    def get_all(self, home_id: str, credential: Credential, owner_uid: str = None) -> List[Scene]:
         """获取家庭下所有智能
 
         Args:
             home_id: 家庭ID
             credential: 用户凭据
+            owner_uid: 家庭拥有者用户ID（共享家庭时需要传入家庭拥有者的uid）
 
         Returns:
             智能列表
@@ -41,7 +42,7 @@ class SceneRepositoryImpl(ISceneRepository):
                 "app_version": 12,
                 "get_type": 2,
                 "home_id": str(home_id),
-                "owner_uid": credential.user_id
+                "owner_uid": owner_uid or credential.user_id
             },
             credential=credential
         )

@@ -250,10 +250,7 @@ class MijiaRuntime:
             # Step 2: Get homes
             self._update_progress(step="获取家庭列表", progress=5)
             api = self._api()
-            credential = self._require_credential()
-            all_homes = api.get_homes()
-            # 过滤掉非当前用户拥有的家庭（共享家庭等）
-            homes = [h for h in all_homes if str(h.uid) == str(credential.user_id)]
+            homes = api.get_homes()
             
             # Step 3: Save homes
             self._update_progress(step="保存家庭数据", progress=10, homes_total=len(homes))
@@ -440,7 +437,7 @@ class MijiaRuntime:
 
     def _scene_dicts(self, api: Any, home: Home) -> list[dict[str, Any]]:
         scenes = []
-        for scene in api.get_scenes(home.id):
+        for scene in api.get_scenes(home.id, owner_uid=home.uid):
             payload = model_to_dict(scene)
             payload["id"] = str(uuid.uuid4())
             scenes.append(payload)
