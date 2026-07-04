@@ -159,8 +159,60 @@ mijiaAPI_V2/
 │   └── store.py        # SQLite 读写
 ├── web/                # Vue3 管理后台
 ├── examples/           # 11 个示例
-└── docs/               # 详细文档
+├── docs/               # 详细文档
+├── build.py            # 多平台构建脚本
+├── build.sh            # Linux/macOS 构建脚本
+├── build.bat           # Windows 构建脚本
+└── mijia-server.spec   # PyInstaller 配置
 ```
+
+## 打包为可执行文件
+
+项目支持打包为独立可执行文件，无需安装 Python 即可运行。
+
+### 本地构建
+
+```bash
+# 安装构建工具
+uv pip install pyinstaller
+
+# 构建前端
+cd web && npm ci && npm run build && cd ..
+
+# 构建可执行文件
+uv run pyinstaller --clean --noconfirm mijia-server.spec
+
+# 输出目录: dist/mijia-server/
+```
+
+### 多平台构建
+
+项目支持以下平台的自动构建：
+
+| 平台 | 架构 | 输出格式 |
+|------|------|----------|
+| Windows | x64 | ZIP |
+| Linux | x64 | TAR.GZ |
+| Linux | ARM64 | TAR.GZ |
+| macOS | x64 | TAR.GZ |
+| macOS | ARM64 | TAR.GZ |
+
+推送版本标签后会自动触发 GitHub Actions 构建：
+
+```bash
+git tag v2.1.0
+git push origin v2.1.0
+```
+
+### 运行可执行文件
+
+```bash
+# 解压后直接运行
+./mijia-server init
+./mijia-server run
+```
+
+默认监听 `127.0.0.1:8123`。
 
 ## 常见问题
 
