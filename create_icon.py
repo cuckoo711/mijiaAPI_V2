@@ -1,14 +1,39 @@
 #!/usr/bin/env python3
 """
 创建应用图标
+支持使用用户提供的图片作为图标
 """
 
 from PIL import Image, ImageDraw, ImageFont
 import os
+import sys
 
 
-def create_icon():
-    """创建应用图标"""
+def create_icon_from_image(image_path: str):
+    """从用户提供的图片创建图标"""
+    # 打开用户提供的图片
+    img = Image.open(image_path)
+    
+    # 转换为 RGBA 模式
+    img = img.convert('RGBA')
+    
+    # 调整大小到 256x256
+    img = img.resize((256, 256), Image.Resampling.LANCZOS)
+    
+    # 创建圆形蒙版
+    mask = Image.new('L', (256, 256), 0)
+    draw = ImageDraw.Draw(mask)
+    draw.ellipse([10, 10, 246, 246], fill=255)
+    
+    # 应用蒙版
+    output = Image.new('RGBA', (256, 256), (0, 0, 0, 0))
+    output.paste(img, mask=mask)
+    
+    return output
+
+
+def create_default_icon():
+    """创建默认图标（绿色圆形 + M 字母）"""
     # 创建一个 256x256 的图像
     size = 256
     img = Image.new('RGBA', (size, size), (0, 0, 0, 0))
@@ -52,8 +77,8 @@ def save_as_ico(img, output_path):
         resized = img.resize(size, Image.Resampling.LANCZOS)
         images.append(resized)
 
-    # 保存为 ICO
-    img.save(output_path, format='ICO', sizes=[(s.width, s.height) for s in images])
+    # 保存为 ICO - 使用第一个图像保存，传入所有尺寸
+    images[0].save(output_path, format='ICO', sizes=[(s.width, s.height) for s in images])
     print(f"Icon saved: {output_path}")
 
 
@@ -62,9 +87,15 @@ def main():
     assets_dir = os.path.join(os.path.dirname(__file__), 'assets')
     os.makedirs(assets_dir, exist_ok=True)
 
-    # 创建图标
-    print("Creating icon...")
-    img = create_icon()
+    # 检查是否有用户提供的图片
+    user_image = os.path.join(assets_dir, 'icon_input.png')
+    
+    if os.path.exists(user_image):
+        print(f"Using user provided image: {user_image}")
+        img = create_icon_from_image(user_image)
+    else:
+        print("No user image found, using default icon")
+        img = create_default_icon()
 
     # 保存为 PNG（预览用）
     png_path = os.path.join(assets_dir, 'icon.png')
