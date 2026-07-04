@@ -1,6 +1,6 @@
 [project]
 name = "mijia-api"
-version = "2.0.0"
+version = "2.1.0"
 description = "米家智能家居Python SDK - 重构版本"
 authors = [
     {name = "MijiaAPI Contributors"}

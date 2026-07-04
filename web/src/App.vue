@@ -110,7 +110,10 @@ class ApiRequestError extends Error {
 
 const token = ref(localStorage.getItem("mijia_admin_token") || "");
 const tokenExpiresAt = ref(localStorage.getItem("mijia_admin_expires_at") || "");
-const activeMenu = ref("dashboard");
+// 从 URL hash 或 localStorage 初始化当前页面
+const activeMenu = ref(
+  window.location.hash.slice(1) || localStorage.getItem("mijia_active_menu") || "dashboard"
+);
 const loading = ref(false);
 const syncing = ref(false);
 const syncProgress = ref<{
@@ -1048,9 +1051,19 @@ async function saveTrustedProxyCidrs(): Promise<void> {
 
 function selectPage(index: string): void {
   activeMenu.value = index;
+  // 保存到 URL hash 和 localStorage
+  window.location.hash = index;
+  localStorage.setItem("mijia_active_menu", index);
 }
 
+// 监听 URL hash 变化（支持浏览器前进/后退）
 onMounted(() => {
+  window.addEventListener("hashchange", () => {
+    const hash = window.location.hash.slice(1);
+    if (hash && hash !== activeMenu.value) {
+      activeMenu.value = hash;
+    }
+  });
   void refreshAll();
 });
 
