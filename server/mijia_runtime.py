@@ -250,7 +250,10 @@ class MijiaRuntime:
             # Step 2: Get homes
             self._update_progress(step="获取家庭列表", progress=5)
             api = self._api()
-            homes = api.get_homes()
+            credential = self._require_credential()
+            all_homes = api.get_homes()
+            # 过滤掉非当前用户拥有的家庭（共享家庭等）
+            homes = [h for h in all_homes if str(h.uid) == str(credential.user_id)]
             
             # Step 3: Save homes
             self._update_progress(step="保存家庭数据", progress=10, homes_total=len(homes))
