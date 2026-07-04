@@ -1,0 +1,42 @@
+# 服务器配置文件模板
+# 
+# 使用说明：
+# 1. 复制此文件为 configs/server.toml
+# 2. 根据需要修改 configs/server.toml 中的配置项
+# 3. configs/server.toml 已在 .gitignore 中忽略，不会被提交到版本控制
+
+[system]
+# 版本号（用于自动迁移）
+version = "3.0.0"
+
+[server]
+# 服务器监听地址
+host = "127.0.0.1"
+# 服务器监听端口
+port = 8123
+
+[storage]
+# 数据目录（相对于项目根目录）
+data_dir = "configs"
+# 数据库路径
+database_path = "configs/server/server.sqlite3"
+# 凭据文件路径
+credential_path = "configs/credential.json"
+# Web前端目录
+web_dist_dir = "web/dist"
+
+[security]
+# 公共基础URL（用于API文档等）
+public_base_url = ""
+# 审计日志保留天数
+audit_retention_days = 30
+# 管理员会话有效期（小时）
+admin_session_hours = 12
+# 凭据刷新提前时间（秒）
+credential_refresh_before_seconds = 86400  # 24小时
+
+[logging]
+# 日志级别：DEBUG, INFO, WARNING, ERROR, CRITICAL
+level = "INFO"
+# 日志格式：json 或 text
+format = "json"

@@ -852,13 +852,34 @@ def create_app(  # noqa: C901
     async def startup_event() -> None:
         runtime: MijiaRuntime = app.state.runtime
         runtime.start_credential_refresh_timer()
+        
+        # 启动配置文件监控
+        from server.config_watcher import ConfigWatcher
+        config_file = resolved_settings.config_file_path
+        if config_file.exists():
+            watcher = ConfigWatcher(
+                config_file,
+                callback=lambda path: _on_config_changed(path, app),
+                interval=10
+            )
+            watcher.start()
+            app.state.config_watcher = watcher
 
     @app.on_event("shutdown")
     async def shutdown_event() -> None:
         runtime: MijiaRuntime = app.state.runtime
         runtime.stop_credential_refresh_timer()
+        
+        # 停止配置文件监控
+        if hasattr(app.state, 'config_watcher'):
+            app.state.config_watcher.stop()
 
     return app
+
+
+def _on_config_changed(path: Path, app: FastAPI) -> None:
+    """配置文件变化回调"""
+    print(f"配置文件已更新: {path}")
 
 
 def _mount_frontend(app: FastAPI, web_dist_dir: Path) -> None:
