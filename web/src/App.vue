@@ -813,6 +813,16 @@ async function startQrLogin(): Promise<void> {
   qrTimer = window.setInterval(pollQrLogin, 2500);
 }
 
+async function deleteCredential(): Promise<void> {
+  try {
+    await request("/api/admin/mijia/credential", { method: "DELETE" });
+    ElMessage.success("账号已移除");
+    await refreshAll();
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : "移除失败");
+  }
+}
+
 async function pollQrLogin(): Promise<void> {
   if (!qrJob.value?.id) {
     return;
@@ -863,6 +873,10 @@ async function pollSyncProgress(): Promise<void> {
       completed_at: string | null;
       error: string | null;
     }>("/api/admin/sync/progress");
+    // 如果后端返回 idle 但前端正在同步，保留前端的初始状态
+    if (progress.status === "idle" && syncing.value) {
+      return;
+    }
     syncProgress.value = progress;
     if (progress.status === "completed" || progress.status === "failed") {
       stopSyncPolling();
@@ -876,9 +890,6 @@ async function pollSyncProgress(): Promise<void> {
       } else {
         ElMessage.error(`同步失败：${progress.error}`);
       }
-      setTimeout(() => {
-        syncProgress.value = null;
-      }, 3000);
     }
   } catch (error) {
     console.error("获取同步进度失败:", error);
@@ -891,13 +902,30 @@ async function syncMijia(): Promise<void> {
     return;
   }
   syncing.value = true;
-  syncProgress.value = null;
+  // 立即显示进度卡片，让用户知道同步已开始
+  syncProgress.value = {
+    task_id: "",
+    status: "running",
+    step: "准备同步...",
+    progress: 0,
+    current_home: "",
+    homes_total: 0,
+    homes_processed: 0,
+    devices_found: 0,
+    scenes_found: 0,
+    warnings: [],
+    started_at: "",
+    updated_at: "",
+    completed_at: null,
+    error: null,
+  };
+  // 先开始轮询，再发起同步请求（同步请求是阻塞的）
+  startSyncPolling();
   try {
     await request("/api/admin/sync", {
       method: "POST",
       body: "{}",
     });
-    startSyncPolling();
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : "同步失败");
     syncing.value = false;
@@ -1168,10 +1196,15 @@ onBeforeUnmount(() => {
           </el-card>
           <el-card shadow="never">
             <template #header>二维码登录</template>
-            <el-button type="primary" @click="startQrLogin">开始扫码登录</el-button>
-            <el-button :loading="syncing" :disabled="syncing" @click="syncMijia">
-              {{ syncing ? '同步中...' : '同步家庭/设备/场景' }}
-            </el-button>
+            <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+              <el-button type="primary" @click="startQrLogin">开始扫码登录</el-button>
+              <el-button :loading="syncing" :disabled="syncing" @click="syncMijia">
+                {{ syncing ? '同步中...' : '同步家庭/设备/场景' }}
+              </el-button>
+              <el-button v-if="account.exists" type="danger" plain @click="deleteCredential">
+                移除账号
+              </el-button>
+            </div>
             <div v-if="qrJob" class="qr-box">
               <img :src="qrJob.qr_url" alt="米家登录二维码" />
               <div>{{ qrJob.status }} · {{ qrJob.message }}</div>
@@ -1183,11 +1216,21 @@ onBeforeUnmount(() => {
             <template #header>
               <div class="progress-header">
                 <span>同步进度</span>
-                <el-tag :type="syncProgress.status === 'completed' ? 'success' :
-                             syncProgress.status === 'failed' ? 'danger' : 'primary'">
-                  {{ syncProgress.status === 'running' ? '同步中' :
-                     syncProgress.status === 'completed' ? '已完成' : '失败' }}
-                </el-tag>
+                <div style="display: flex; align-items: center; gap: 8px;">
+                  <el-tag :type="syncProgress.status === 'completed' ? 'success' :
+                               syncProgress.status === 'failed' ? 'danger' : 'primary'">
+                    {{ syncProgress.status === 'running' ? '同步中' :
+                       syncProgress.status === 'completed' ? '已完成' : '失败' }}
+                  </el-tag>
+                  <el-button
+                    v-if="syncProgress.status !== 'running'"
+                    type="default"
+                    size="small"
+                    @click="syncProgress = null"
+                  >
+                    关闭
+                  </el-button>
+                </div>
               </div>
             </template>
 
