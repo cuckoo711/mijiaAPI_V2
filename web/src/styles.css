@@ -1,8 +1,8 @@
 :root {
-  /* Mijia Color System */
-  --mi-green: #00C853;
-  --mi-green-light: #69F0AE;
-  --mi-green-dark: #00A844;
+  /* Mijia Color System - Softer Green */
+  --mi-green: #43A047;
+  --mi-green-light: #66BB6A;
+  --mi-green-dark: #2E7D32;
   --mi-orange: #FF6700;
   --mi-red: #F44336;
   --mi-red-light: #E57373;
