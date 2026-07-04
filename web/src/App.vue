@@ -1197,7 +1197,9 @@ onBeforeUnmount(() => {
           <el-card shadow="never">
             <template #header>二维码登录</template>
             <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-              <el-button type="primary" @click="startQrLogin">开始扫码登录</el-button>
+              <el-button type="primary" @click="startQrLogin">
+                {{ account.exists ? '重新扫码登录' : '开始扫码登录' }}
+              </el-button>
               <el-button :loading="syncing" :disabled="syncing" @click="syncMijia">
                 {{ syncing ? '同步中...' : '同步家庭/设备/场景' }}
               </el-button>
