@@ -32,12 +32,17 @@ SCHEMA_STATEMENTS = [
     """
     CREATE TABLE IF NOT EXISTS admin_sessions (
         token_hash TEXT PRIMARY KEY,
+        token_prefix TEXT,
         admin_id TEXT NOT NULL,
         expires_at TEXT NOT NULL,
         created_at TEXT NOT NULL,
         revoked_at TEXT,
         FOREIGN KEY(admin_id) REFERENCES admin_users(id)
     )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_admin_sessions_token_prefix
+    ON admin_sessions(token_prefix)
     """,
     """
     CREATE TABLE IF NOT EXISTS runtime_config (
@@ -182,6 +187,9 @@ class ServerDatabase:
         """Add columns introduced during early development to existing DBs."""
 
         additions = {
+            "admin_sessions": {
+                "token_prefix": "TEXT",
+            },
             "device_registry": {
                 "status": "TEXT NOT NULL DEFAULT 'unknown'",
                 "raw_json": "TEXT NOT NULL DEFAULT '{}'",

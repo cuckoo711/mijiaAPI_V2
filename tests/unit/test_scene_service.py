@@ -81,7 +81,7 @@ def test_get_scenes_delegates_to_repo(
     result = scene_service.get_scenes("home_123", sample_credential)
 
     # 验证
-    mock_scene_repo.get_all.assert_called_once_with("home_123", sample_credential)
+    mock_scene_repo.get_all.assert_called_once_with("home_123", sample_credential, None)
     assert result == sample_scenes
     assert len(result) == 3
     assert result[0].name == "回家模式"
@@ -100,7 +100,7 @@ def test_get_scenes_returns_empty_list_when_no_scenes(
     result = scene_service.get_scenes("home_123", sample_credential)
 
     # 验证
-    mock_scene_repo.get_all.assert_called_once_with("home_123", sample_credential)
+    mock_scene_repo.get_all.assert_called_once_with("home_123", sample_credential, None)
     assert result == []
     assert len(result) == 0
 
@@ -165,8 +165,8 @@ def test_get_scenes_with_different_home_ids(
 
     # 验证调用次数和参数
     assert mock_scene_repo.get_all.call_count == 2
-    mock_scene_repo.get_all.assert_any_call("home_001", sample_credential)
-    mock_scene_repo.get_all.assert_any_call("home_002", sample_credential)
+    mock_scene_repo.get_all.assert_any_call("home_001", sample_credential, None)
+    mock_scene_repo.get_all.assert_any_call("home_002", sample_credential, None)
 
 
 def test_execute_scene_with_different_scene_ids(

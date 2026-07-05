@@ -12,7 +12,7 @@ from mijiaAPI_V2.domain.exceptions import (
 )
 from mijiaAPI_V2.domain.models import Credential, Device, DeviceProperty
 from mijiaAPI_V2.infrastructure.cache_manager import CacheManager
-from mijiaAPI_V2.repositories.interfaces import IDeviceRepository, IDeviceSpecRepository
+from mijiaAPI_V2.repositories.interfaces import DeviceSpec, IDeviceRepository, IDeviceSpecRepository
 
 
 class DeviceService:
@@ -175,3 +175,31 @@ class DeviceService:
             results.extend(batch_results)
 
         return results
+
+    def get_device_spec(self, model: str) -> Optional[DeviceSpec]:
+        """获取设备规格，底层异常时返回 None。
+
+        Args:
+            model: 设备型号
+
+        Returns:
+            设备规格对象，获取失败或不存在返回 None
+        """
+        try:
+            return self._spec_repo.get_spec(model)
+        except Exception:
+            return None
+
+    def batch_get_properties(
+        self, requests: List[Dict[str, Any]], credential: Credential
+    ) -> List[Dict[str, Any]]:
+        """批量读取设备属性值。
+
+        Args:
+            requests: 请求列表，每个请求包含 did、siid、piid
+            credential: 用户凭据
+
+        Returns:
+            结果列表，每个结果包含 code、siid、piid、value
+        """
+        return self._device_repo.batch_get_properties(requests, credential)

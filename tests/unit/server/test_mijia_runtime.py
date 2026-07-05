@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -14,6 +15,17 @@ from mijiaAPI_V2.infrastructure.credential_store import FileCredentialStore
 from server.config import ServerSettings
 from server.mijia_runtime import MijiaRuntime, SyncInProgressError
 from server.store import ServerStore
+
+
+def _wait_for_sync_completion(runtime: MijiaRuntime, timeout: float = 5.0) -> dict[str, Any]:
+    """轮询 sync progress 直到进入终态或超时。"""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        progress = runtime.get_sync_progress()
+        if progress is not None and progress["status"] in {"completed", "failed"}:
+            return progress
+        time.sleep(0.02)
+    raise AssertionError("sync did not finish within timeout")
 
 
 def make_settings(tmp_path: Path) -> ServerSettings:
@@ -94,7 +106,7 @@ def test_sync_continues_when_one_home_scene_sync_fails(tmp_path: Path, monkeypat
         def get_devices(self, home_id: str) -> list[Any]:
             return []
 
-        def get_scenes(self, home_id: str) -> list[Any]:
+        def get_scenes(self, home_id: str, owner_uid: str | None = None) -> list[Any]:
             if home_id == "home-bad":
                 raise RuntimeError("homeId is not home")
             return []
@@ -104,12 +116,16 @@ def test_sync_continues_when_one_home_scene_sync_fails(tmp_path: Path, monkeypat
         lambda credential, **_: FakeApi(),
     )
 
-    result = MijiaRuntime(settings, store).sync_all()
+    runtime = MijiaRuntime(settings, store)
+    started = runtime.sync_all()
+    assert started["status"] == "started"
 
-    assert result["homes"] == 2
-    assert result["devices"] == 0
-    assert result["scenes"] == 0
-    assert result["warnings"] == [
+    progress = _wait_for_sync_completion(runtime)
+    assert progress["status"] == "completed"
+    assert progress["homes_total"] == 2
+    assert progress["devices_found"] == 0
+    assert progress["scenes_found"] == 0
+    assert progress["warnings"] == [
         {
             "kind": "scenes",
             "home_id": "home-bad",
@@ -147,7 +163,7 @@ def test_sync_all_rejects_second_request_while_running(
         def get_devices(self, home_id: str) -> list[Any]:
             return []
 
-        def get_scenes(self, home_id: str) -> list[Any]:
+        def get_scenes(self, home_id: str, owner_uid: str | None = None) -> list[Any]:
             return []
 
     monkeypatch.setattr(
@@ -156,17 +172,8 @@ def test_sync_all_rejects_second_request_while_running(
     )
 
     runtime = MijiaRuntime(settings, store)
-    errors: list[Exception] = []
-    results: list[dict[str, Any]] = []
-
-    def run_first_sync() -> None:
-        try:
-            results.append(runtime.sync_all())
-        except Exception as exc:
-            errors.append(exc)
-
-    thread = threading.Thread(target=run_first_sync)
-    thread.start()
+    first = runtime.sync_all()
+    assert first["status"] == "started"
     assert started.wait(timeout=2)
 
     try:
@@ -174,9 +181,58 @@ def test_sync_all_rejects_second_request_while_running(
             runtime.sync_all()
     finally:
         release.set()
-        thread.join(timeout=2)
 
-    assert not thread.is_alive()
-    assert errors == []
-    assert results[0]["homes"] == 0
+    progress = _wait_for_sync_completion(runtime)
+    assert progress["status"] == "completed"
+    assert progress["homes_total"] == 0
     assert call_count == 1
+
+
+def test_sync_progress_cleanup_does_not_clear_new_run(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """旧一次 sync 的延迟清理线程不应把后续新一轮 sync 的 progress 清空。"""
+    settings = make_settings(tmp_path)
+    store = ServerStore(settings)
+    store.initialize()
+    FileCredentialStore(settings.credential_path).save(
+        make_credential("token", datetime.now() + timedelta(days=30))
+    )
+
+    class FakeApi:
+        def get_homes(self) -> list[Home]:
+            return []
+
+        def get_devices(self, home_id: str) -> list[Any]:
+            return []
+
+        def get_scenes(self, home_id: str, owner_uid: str | None = None) -> list[Any]:
+            return []
+
+    monkeypatch.setattr(
+        "server.mijia_runtime.create_api_client",
+        lambda credential, **_: FakeApi(),
+    )
+
+    runtime = MijiaRuntime(settings, store)
+
+    # 第一次 sync 完成
+    runtime.sync_all()
+    first_progress = _wait_for_sync_completion(runtime)
+    first_task_id = first_progress["task_id"]
+
+    # 第二次 sync 完成，覆盖了 _sync_progress
+    runtime.sync_all()
+    second_progress = _wait_for_sync_completion(runtime)
+    second_task_id = second_progress["task_id"]
+    assert second_task_id != first_task_id
+
+    # 模拟"第一次任务的 cleanup 线程到点"——按新逻辑，task_id 不匹配则不清空
+    runtime._clear_progress_if_task(first_task_id)
+    remaining = runtime.get_sync_progress()
+    assert remaining is not None
+    assert remaining["task_id"] == second_task_id
+
+    # 模拟"第二次任务的 cleanup 线程到点"——task_id 匹配，清空
+    runtime._clear_progress_if_task(second_task_id)
+    assert runtime.get_sync_progress() is None

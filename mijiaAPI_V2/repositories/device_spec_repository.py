@@ -3,15 +3,13 @@
 从网络或缓存获取设备规格信息，并解析为标准化的设备规格模型。
 """
 
-import json
-import re
 from typing import Optional
 
 import httpx
 
 from ..core.logging import get_logger
 from ..domain.exceptions import MijiaAPIException
-from ..domain.models import DeviceAction, DeviceProperty, PropertyAccess, PropertyType, ActionParameter
+from ..domain.models import ActionParameter, DeviceAction, DeviceProperty, PropertyAccess, PropertyType
 from ..infrastructure.cache_manager import CacheManager
 from ..infrastructure.http_client import HttpClient
 from .interfaces import DeviceSpec, IDeviceSpecRepository
@@ -186,150 +184,6 @@ class DeviceSpecRepositoryImpl(IDeviceSpecRepository):
         except Exception as e:
             logger.error(f"解析设备规格数据失败: {e}", extra={"model": model})
             raise MijiaAPIException(f"解析设备规格数据失败: {str(e)}") from e
-
-    def _parse_spec(self, model: str, spec_data: dict) -> DeviceSpec:
-        """解析设备规格数据
-
-        Args:
-            model: 设备型号
-            spec_data: 从API获取的原始规格数据（home.miot-spec.com格式）
-
-        Returns:
-            设备规格对象
-
-        Raises:
-            MijiaAPIException: 解析失败
-        """
-        try:
-            # 提取设备名称
-            props = spec_data.get("props", {})
-            if props.get("product"):
-                device_name = props["product"].get("name", model)
-            else:
-                device_name = props.get("spec", {}).get("name", model)
-
-            # 解析属性列表
-            properties = []
-            actions = []
-
-            # 遍历服务列表（格式：{"1": {...}, "2": {...}}）
-            services = props.get("spec", {}).get("services", {})
-            for siid_str, service in services.items():
-                siid = int(siid_str)
-
-                # 解析属性
-                service_props = service.get("properties", {})
-                for piid_str, prop in service_props.items():
-                    device_property = self._parse_property_v2(siid, int(piid_str), prop)
-                    if device_property:
-                        properties.append(device_property)
-
-                # 解析操作
-                service_actions = service.get("actions", {})
-                for aiid_str, action in service_actions.items():
-                    device_action = self._parse_action_v2(siid, int(aiid_str), action)
-                    if device_action:
-                        actions.append(device_action)
-
-            return DeviceSpec(model=model, name=device_name, properties=properties, actions=actions)
-
-        except Exception as e:
-            logger.error(f"解析设备规格数据失败: {e}", extra={"model": model})
-            raise MijiaAPIException(f"解析设备规格数据失败: {str(e)}") from e
-    
-    def _parse_property_v2(self, siid: int, piid: int, prop_data: dict) -> Optional[DeviceProperty]:
-        """解析设备属性（home.miot-spec.com格式）
-
-        Args:
-            siid: 服务ID
-            piid: 属性ID
-            prop_data: 属性数据
-
-        Returns:
-            设备属性对象，解析失败返回None
-        """
-        try:
-            # 属性名称
-            name = prop_data.get("description", prop_data.get("name", f"property_{piid}"))
-
-            # 属性类型
-            format_str = prop_data.get("format", "string")
-            if format_str.startswith("int"):
-                prop_type = PropertyType.INT
-            elif format_str.startswith("uint"):
-                prop_type = PropertyType.UINT
-            elif format_str == "bool":
-                prop_type = PropertyType.BOOL
-            elif format_str == "float":
-                prop_type = PropertyType.FLOAT
-            else:
-                prop_type = PropertyType.STRING
-
-            # 访问权限
-            access_list = prop_data.get("access", [])
-            readable = "read" in access_list
-            writable = "write" in access_list
-
-            # 值范围
-            value_range = prop_data.get("value-range")
-            if value_range:
-                value_range = [value_range.get("min"), value_range.get("max")]
-
-            # 可选值列表
-            value_list = prop_data.get("value-list")
-
-            return DeviceProperty(
-                siid=siid,
-                piid=piid,
-                name=name,
-                type=prop_type,
-                access=PropertyAccess.READ_WRITE if (readable and writable) else (
-                    PropertyAccess.READ_ONLY if readable else PropertyAccess.WRITE_ONLY
-                ),
-                value_range=value_range,
-                value_list=value_list,
-            )
-
-        except Exception as e:
-            logger.warning(f"解析属性失败: {e}", extra={"siid": siid, "piid": piid})
-            return None
-    
-    def _parse_action_v2(self, siid: int, aiid: int, action_data: dict) -> Optional[DeviceAction]:
-        """解析设备操作（home.miot-spec.com格式）
-
-        Args:
-            siid: 服务ID
-            aiid: 操作ID
-            action_data: 操作数据
-
-        Returns:
-            设备操作对象，解析失败返回None
-        """
-        try:
-            # 操作名称
-            name = action_data.get("description", action_data.get("name", f"action_{aiid}"))
-
-            # 输入参数
-            parameters = []
-            for param in action_data.get("in", []):
-                param_name = param.get("description", f"param_{param.get('piid', 0)}")
-                param_type = self._parse_property_type(param.get("type", "string"))
-                parameters.append(ActionParameter(
-                    name=param_name,
-                    type=param_type,
-                    required=True,
-                ))
-
-            return DeviceAction(
-                siid=siid,
-                aiid=aiid,
-                name=name,
-                parameters=parameters,
-            )
-
-        except Exception as e:
-            logger.warning(f"解析操作失败: {e}", extra={"siid": siid, "aiid": aiid})
-            return None
 
     def _parse_property(self, siid: int, prop_data: dict) -> Optional[DeviceProperty]:
         """解析设备属性（标准miot-spec格式）

@@ -1,6 +1,7 @@
 """凭据存储测试"""
 
 import json
+import sys
 import tempfile
 from pathlib import Path
 
@@ -115,7 +116,10 @@ def test_delete_nonexistent_file(temp_dir: Path) -> None:
 
 
 def test_file_permissions(temp_dir: Path, credential: Credential) -> None:
-    """测试文件权限设置"""
+    """测试文件权限设置（Windows 下跳过：chmod 对访问控制无效）"""
+    if sys.platform == "win32":
+        pytest.skip("chmod 在 Windows 上不生效，跳过权限校验")
+
     store = FileCredentialStore(default_path=temp_dir / "credential.json")
 
     # 保存凭据

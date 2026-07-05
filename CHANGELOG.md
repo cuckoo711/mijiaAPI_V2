@@ -2,6 +2,36 @@
 
 本项目遵循“面向部署和使用者可读”的更新记录。最新变化放在最前面。
 
+## v3.1.0 - 2026-07-05
+
+### 变更（Breaking）
+
+- `POST /api/admin/sync` 改为非阻塞：立即返回 `{"status": "started", "message": "..."}`，后台线程执行实际同步；前端继续通过 `/api/admin/sync/progress` 轮询进度。旧调用方若依赖同步返回体中的 `homes` / `devices` / `scenes` / `warnings` 字段，需改为读取进度接口的最终状态。
+- 审计事件 `mijia.sync` 拆分为 `mijia.sync.start`（同步任务发起时记录），完成结果保留在进度接口。
+
+### 新增
+
+- `AsyncMijiaAPI.get_scenes` 补齐 `owner_uid` 参数，支持共享家庭场景的异步获取。
+- `DeviceService` 暴露公开方法 `get_device_spec` / `batch_get_properties`，避免调用方穿透到仓储私有成员。
+- `ServerStore.purge_expired_sessions`：清理已过期的管理员 session；在初始化和每次登录后自动调用。
+- `admin_sessions` 表新增 `token_prefix` 列和 `idx_admin_sessions_token_prefix` 索引，用于按前缀快速定位 session，避免逐条 PBKDF2 校验的全表扫描。
+
+### 修复
+
+- 管理员会话校验从"全表扫描 + 逐条 PBKDF2"改为"按 `token_prefix` 索引命中后再 PBKDF2"，session 数量增长时性能不再线性劣化。
+- `ServerStore.update_api_key_status` 从"UPDATE 后 SELECT 全部再 Python 过滤"改为"UPDATE 后按 id SELECT"，避免全表查询。
+- `ServerStore.system_checks` 内 `list_homes()` / `list_api_keys()` 从各调用两次改为各调用一次。
+- `MijiaRuntime._sync_all_unlocked` 的延迟清理线程只清空 `task_id` 匹配的进度，避免在 5 秒窗口期内被新一轮同步覆盖后误清进度。
+- `MijiaAPI.get_scenes` 的 `owner_uid` 类型注解修正为 `Optional[str]`。
+- `FileCredentialStore.save` 在 Windows 下不再调用无实际效果的 `chmod`；Linux/macOS 行为不变。
+- `CacheManager` 文件层缓存写入时记录 `expires_at`，读取时若已过期则删除文件并返回 `None`；兼容旧格式缓存文件。
+
+### 内部改动
+
+- FastAPI 生命周期从已弃用的 `@app.on_event("startup"/"shutdown")` 迁移到 `lifespan` 上下文管理器，启动日志不再出现 `DeprecationWarning`。
+- 删除 `DeviceSpecRepositoryImpl` 中未使用的旧格式解析代码 `_parse_spec` / `_parse_property_v2` / `_parse_action_v2`（约 150 行），清理未使用的 `import json` / `import re`。
+- `api_client.py` 不再直接访问 `DeviceService` 的私有成员 `_spec_repo` / `_device_repo`。
+
 ## 2026-05-23
 
 ### 变更

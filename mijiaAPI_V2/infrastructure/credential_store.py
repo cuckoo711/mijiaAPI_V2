@@ -95,8 +95,9 @@ class FileCredentialStore(ICredentialStore):
             with open(file_path, "w", encoding="utf-8") as f:
                 json.dump(credential.to_dict(), f, ensure_ascii=False, indent=2, default=str)
 
-            # 设置文件权限为仅所有者可读写
-            file_path.chmod(0o600)
+            # 设置文件权限为仅所有者可读写（Windows 上 chmod 对访问控制无实际效果，跳过以避免误导）
+            if sys.platform != "win32":
+                file_path.chmod(0o600)
 
             logger.info(f"凭据已保存到: {file_path}")
         except Exception as e:

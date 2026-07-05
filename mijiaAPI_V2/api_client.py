@@ -237,7 +237,7 @@ class MijiaAPI:
 
         return results
 
-    def get_scenes(self, home_id: str, owner_uid: str = None) -> List[Scene]:
+    def get_scenes(self, home_id: str, owner_uid: Optional[str] = None) -> List[Scene]:
         """获取智能列表
 
         Args:
@@ -296,12 +296,8 @@ class MijiaAPI:
         Returns:
             设备规格对象，不存在返回None
         """
-        # 直接使用设备服务中的规格仓储
-        try:
-            return self._device_service._spec_repo.get_spec(model)
-        except Exception:
-            return None
-    
+        return self._device_service.get_device_spec(model)
+
     def get_device_properties(self, requests: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """批量获取设备属性
 
@@ -318,8 +314,7 @@ class MijiaAPI:
             >>> ]
             >>> results = api.get_device_properties(requests)
         """
-        # 直接使用设备服务中的设备仓储
-        return self._device_service._device_repo.batch_get_properties(requests, self._credential)
+        return self._device_service.batch_get_properties(requests, self._credential)
 
     def update_credential(self, credential: Credential) -> None:
         """更新凭据
@@ -627,18 +622,19 @@ class AsyncMijiaAPI:
 
         return results
 
-    async def get_scenes(self, home_id: str) -> List[Scene]:
+    async def get_scenes(self, home_id: str, owner_uid: Optional[str] = None) -> List[Scene]:
         """异步获取智能列表
 
         Args:
             home_id: 家庭ID
+            owner_uid: 家庭拥有者用户ID（共享家庭时需要传入家庭拥有者的uid）
 
         Returns:
             智能列表
         """
         import asyncio
         return await asyncio.to_thread(
-            self._scene_service.get_scenes, home_id, self._credential
+            self._scene_service.get_scenes, home_id, self._credential, owner_uid
         )
 
     async def execute_scene(self, scene_id: str, home_id: str) -> bool:

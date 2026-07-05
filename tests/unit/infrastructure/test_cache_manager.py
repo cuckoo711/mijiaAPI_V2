@@ -259,3 +259,39 @@ class TestCacheManager:
 
         # 应该调用Redis批量删除
         redis_client.delete_pattern.assert_called_with("device:*")
+
+    def test_file_cache_expires_and_is_removed(
+        self, cache_manager: CacheManager, temp_cache_dir: Path
+    ) -> None:
+        """TTL 过期后文件缓存返回 None 且文件被清理"""
+        manager = cache_manager
+        # 直接调用底层方法写入一个 TTL=1s 的文件缓存
+        manager._save_to_file("default:expiring", "payload", ttl=1)
+        cache_file = temp_cache_dir / manager._hash_key("default:expiring")
+        assert cache_file.exists()
+
+        # 手动把 expires_at 改到过去，模拟过期
+        import json
+        import time as _time
+
+        with open(cache_file, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+        payload["expires_at"] = _time.time() - 10
+        with open(cache_file, "w", encoding="utf-8") as f:
+            json.dump(payload, f)
+
+        assert manager._load_from_file("default:expiring") is None
+        assert not cache_file.exists()
+
+    def test_file_cache_reads_legacy_format(
+        self, cache_manager: CacheManager, temp_cache_dir: Path
+    ) -> None:
+        """旧格式（顶层即数据）的缓存文件仍能被正确读取"""
+        import json
+
+        manager = cache_manager
+        legacy_path = temp_cache_dir / manager._hash_key("default:legacy")
+        with open(legacy_path, "w", encoding="utf-8") as f:
+            json.dump({"foo": "bar"}, f)
+
+        assert manager._load_from_file("default:legacy") == {"foo": "bar"}

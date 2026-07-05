@@ -124,6 +124,17 @@ class ServerStore:
         """Initialize persistent storage."""
 
         self._database.initialize()
+        self.purge_expired_sessions()
+
+    def purge_expired_sessions(self) -> int:
+        """Delete admin sessions whose ``expires_at`` has already passed."""
+
+        with self._database.connect() as conn:
+            cursor = conn.execute(
+                "DELETE FROM admin_sessions WHERE expires_at < ?",
+                (isoformat(utc_now()),),
+            )
+            return int(cursor.rowcount)
 
     def has_admin(self) -> bool:
         """Return whether the bootstrap administrator already exists."""
@@ -198,13 +209,26 @@ class ServerStore:
 
         token = generate_session_token()
         expires_at = now + timedelta(hours=self._settings.admin_session_hours)
+        # Best-effort cleanup so expired sessions do not accumulate indefinitely.
+        try:
+            self.purge_expired_sessions()
+        except Exception:
+            pass
         with self._database.connect() as conn:
             conn.execute(
                 """
-                INSERT INTO admin_sessions(token_hash, admin_id, expires_at, created_at)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO admin_sessions(
+                    token_hash, token_prefix, admin_id, expires_at, created_at
+                )
+                VALUES (?, ?, ?, ?, ?)
                 """,
-                (hash_secret(token), row["id"], isoformat(expires_at), isoformat(now)),
+                (
+                    hash_secret(token),
+                    secret_prefix(token),
+                    row["id"],
+                    isoformat(expires_at),
+                    isoformat(now),
+                ),
             )
         return {
             "token": token,
@@ -216,13 +240,17 @@ class ServerStore:
         """Validate an administrator session token."""
 
         now = utc_now()
+        prefix = secret_prefix(token)
         with self._database.connect() as conn:
-            rows = conn.execute("""
+            rows = conn.execute(
+                """
                 SELECT s.token_hash, s.expires_at, s.revoked_at, u.id, u.username
                 FROM admin_sessions s
                 JOIN admin_users u ON u.id = s.admin_id
-                WHERE s.revoked_at IS NULL
-                """).fetchall()
+                WHERE s.token_prefix = ? AND s.revoked_at IS NULL
+                """,
+                (prefix,),
+            ).fetchall()
 
             for row in rows:
                 if not verify_secret(token, row["token_hash"]):
@@ -239,13 +267,17 @@ class ServerStore:
 
         now = utc_now()
         expires_at = now + timedelta(hours=self._settings.admin_session_hours)
+        prefix = secret_prefix(token)
         with self._database.connect() as conn:
-            rows = conn.execute("""
+            rows = conn.execute(
+                """
                 SELECT s.token_hash, s.expires_at, s.revoked_at, u.id, u.username
                 FROM admin_sessions s
                 JOIN admin_users u ON u.id = s.admin_id
-                WHERE s.revoked_at IS NULL
-                """).fetchall()
+                WHERE s.token_prefix = ? AND s.revoked_at IS NULL
+                """,
+                (prefix,),
+            ).fetchall()
 
             for row in rows:
                 if not verify_secret(token, row["token_hash"]):
@@ -385,10 +417,30 @@ class ServerStore:
                 "UPDATE api_keys SET is_active = ? WHERE id = ?",
                 (1 if is_active else 0, key_id),
             )
-        keys = [item for item in self.list_api_keys() if item["id"] == key_id]
-        if not keys:
+            row = conn.execute(
+                """
+                SELECT id, name, key_prefix, scopes_json, resource_policy_json,
+                       is_active, expires_at, created_at, last_used_at,
+                       last_used_ip, use_count
+                FROM api_keys WHERE id = ?
+                """,
+                (key_id,),
+            ).fetchone()
+        if row is None:
             raise KeyError(f"API key not found: {key_id}")
-        return keys[0]
+        return {
+            "id": row["id"],
+            "name": row["name"],
+            "key_prefix": row["key_prefix"],
+            "scopes": json.loads(row["scopes_json"]),
+            "resource_policy": json.loads(row["resource_policy_json"]),
+            "is_active": bool(row["is_active"]),
+            "expires_at": row["expires_at"],
+            "created_at": row["created_at"],
+            "last_used_at": row["last_used_at"],
+            "last_used_ip": row["last_used_ip"],
+            "use_count": row["use_count"],
+        }
 
     def delete_api_key(self, key_id: str) -> None:
         """Delete an API key."""
@@ -773,6 +825,9 @@ class ServerStore:
         docs_enabled = runtime_config_bool(config_map, "DOCS_ENABLED")
         openapi_enabled = docs_enabled or runtime_config_bool(config_map, "OPENAPI_ENABLED")
         public_base_url = str(config_map.get("PUBLIC_BASE_URL") or self._settings.public_base_url)
+        has_admin = self.has_admin()
+        homes = self.list_homes()
+        api_keys = self.list_api_keys()
         checks.append(
             {
                 "key": "server",
@@ -785,10 +840,10 @@ class ServerStore:
         checks.append(
             {
                 "key": "admin_configured",
-                "status": "pass" if self.has_admin() else "warn",
+                "status": "pass" if has_admin else "warn",
                 "message": (
                     "Administrator is configured"
-                    if self.has_admin()
+                    if has_admin
                     else "Initial administrator is not configured"
                 ),
             }
@@ -810,10 +865,10 @@ class ServerStore:
         checks.append(
             {
                 "key": "api_key_exists",
-                "status": "pass" if self.list_api_keys() else "warn",
+                "status": "pass" if api_keys else "warn",
                 "message": (
                     "At least one API key exists"
-                    if self.list_api_keys()
+                    if api_keys
                     else "No API key has been created"
                 ),
             }
@@ -821,8 +876,8 @@ class ServerStore:
         checks.append(
             {
                 "key": "homes_synced",
-                "status": "pass" if self.list_homes() else "warn",
-                "message": ("Homes have been synced" if self.list_homes() else "No synced homes"),
+                "status": "pass" if homes else "warn",
+                "message": ("Homes have been synced" if homes else "No synced homes"),
             }
         )
         checks.append(

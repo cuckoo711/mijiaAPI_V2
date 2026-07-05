@@ -5,6 +5,7 @@ from typing import Any
 
 from fastapi.testclient import TestClient
 
+import mijiaAPI_V2
 from server.app import create_app
 from server.config import ServerSettings
 from server.mijia_runtime import SyncInProgressError
@@ -78,7 +79,7 @@ def test_bootstrap_state_includes_status_metadata(tmp_path: Path) -> None:
     assert response.json() == {
         "initialized": False,
         "status": "ok",
-        "version": "2.0.0",
+        "version": mijiaAPI_V2.__version__,
     }
 
 
@@ -176,7 +177,7 @@ def test_network_access_policy_allows_admin_bootstrap_from_public_proxy(tmp_path
     assert state_response.json() == {
         "initialized": False,
         "status": "ok",
-        "version": "2.0.0",
+        "version": mijiaAPI_V2.__version__,
     }
 
     created_admin = client.post(
@@ -330,7 +331,7 @@ def test_bootstrap_login_create_key_and_status_flow(tmp_path: Path) -> None:
     assert state.json() == {
         "initialized": False,
         "status": "ok",
-        "version": "2.0.0",
+        "version": mijiaAPI_V2.__version__,
     }
 
     created_admin = client.post(

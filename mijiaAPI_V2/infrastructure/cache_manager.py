@@ -10,6 +10,7 @@
 
 import hashlib
 import json
+import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -183,7 +184,7 @@ class CacheManager:
 
         # L3: 长期缓存写入文件
         if ttl > 300:
-            self._save_to_file(full_key, value)
+            self._save_to_file(full_key, value, ttl)
 
     def _set_memory_cache(self, full_key: str, value: Any, ttl: int) -> None:
         """写入内存缓存
@@ -323,29 +324,47 @@ class CacheManager:
             key: 缓存键
 
         Returns:
-            缓存值，不存在或加载失败返回None
+            缓存值，不存在、加载失败或已过期返回 None
         """
         file_path = self._cache_dir / self._hash_key(key)
-        if file_path.exists():
-            try:
-                with open(file_path, "r", encoding="utf-8") as f:
-                    return json.load(f)
-            except Exception as e:
-                logger.warning(f"文件缓存加载失败: {e}", extra={"key": key})
-                return None
-        return None
+        if not file_path.exists():
+            return None
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+        except Exception as e:
+            logger.warning(f"文件缓存加载失败: {e}", extra={"key": key})
+            return None
 
-    def _save_to_file(self, key: str, value: Any) -> None:
+        # 兼容旧格式：如果不是带 "data" 键的字典，则整个内容即为数据
+        if not isinstance(payload, dict) or "data" not in payload:
+            return payload
+
+        expires_at = payload.get("expires_at")
+        if expires_at is not None and time.time() > expires_at:
+            try:
+                file_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return None
+        return payload["data"]
+
+    def _save_to_file(self, key: str, value: Any, ttl: int = 0) -> None:
         """保存缓存到文件
 
         Args:
             key: 缓存键
             value: 缓存值
+            ttl: 生存时间（秒），<=0 表示不设过期
         """
         file_path = self._cache_dir / self._hash_key(key)
+        payload = {
+            "expires_at": time.time() + ttl if ttl > 0 else None,
+            "data": value,
+        }
         try:
             with open(file_path, "w", encoding="utf-8") as f:
-                json.dump(value, f, ensure_ascii=False, indent=2)
+                json.dump(payload, f, ensure_ascii=False, indent=2)
         except Exception as e:
             logger.warning(f"文件缓存保存失败: {e}", extra={"key": key})
 

@@ -18,7 +18,9 @@ from mijiaAPI_V2.repositories.property_translations import (
 @pytest.fixture
 def temp_translation_file() -> Path:
     """创建临时翻译文件"""
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".json", delete=False, encoding="utf-8"
+    ) as f:
         translations = {
             "properties": {
                 "Temperature": "温度",
@@ -90,7 +92,9 @@ def test_translation_manager_with_custom_file(temp_translation_file: Path) -> No
 def test_translation_manager_merge_priority() -> None:
     """测试翻译合并优先级"""
     # 创建临时文件
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".json", delete=False, encoding="utf-8"
+    ) as f:
         translations = {
             "properties": {
                 "TestProp": "文件翻译",
