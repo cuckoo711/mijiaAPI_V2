@@ -2,6 +2,22 @@
 
 本项目遵循“面向部署和使用者可读”的更新记录。最新变化放在最前面。
 
+## v3.2.2 - 2026-07-05
+
+### 改进
+
+- GitHub Release 页面现在会自动展示 CHANGELOG 中对应版本的详细更新内容。
+  之前只有 `generate_release_notes: true` 生成的 issue/PR 列表，用户看不到本次
+  版本的实际改动。现在会把 CHANGELOG 里对应段落作为 release body 主要内容，
+  自动生成的 commit / PR 列表附在后面。
+- 新增 `scripts/extract_release_notes.py`：从 `CHANGELOG.md` 提取指定版本段落，
+  供 CI release 步骤使用；命令行也可以直接调用（例如本地校验）。
+
+### 内部改动
+
+- `.github/workflows/build.yml` 的 release 任务补充 checkout + Python 环境，
+  新增 "Extract release notes from CHANGELOG" 步骤生成 body 文件。
+
 ## v3.2.1 - 2026-07-05
 
 ### 修复

@@ -90,6 +90,14 @@ jobs:
       contents: write
 
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
@@ -98,9 +106,25 @@ jobs:
       - name: List artifacts
         run: find artifacts -type f
 
+      - name: Extract release notes from CHANGELOG
+        id: notes
+        run: |
+          set -e
+          # tag 形如 refs/tags/v3.2.2，剥掉前缀
+          TAG_NAME="${GITHUB_REF#refs/tags/}"
+          echo "Extracting release notes for $TAG_NAME"
+          BODY_FILE="$RUNNER_TEMP/release_notes.md"
+          python scripts/extract_release_notes.py "$TAG_NAME" --allow-missing > "$BODY_FILE"
+          echo "body_file=$BODY_FILE" >> "$GITHUB_OUTPUT"
+          echo "----- release notes preview -----"
+          cat "$BODY_FILE"
+          echo "----- end -----"
+
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
           files: |
             artifacts/**/*
+          # body_path 提供的 CHANGELOG 摘要会被放到自动生成的 issue/PR 列表前面
+          body_path: ${{ steps.notes.outputs.body_file }}
           generate_release_notes: true
