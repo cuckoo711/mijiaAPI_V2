@@ -621,8 +621,13 @@ def create_app(  # noqa: C901
         runtime: MijiaRuntime = Depends(get_runtime),
         current_store: ServerStore = Depends(get_store),
     ) -> None:
-        runtime.delete_credential()
-        current_store.add_audit("mijia.credential.delete", "success", actor_type="admin")
+        result = runtime.delete_credential()
+        current_store.add_audit(
+            "mijia.credential.delete",
+            "success",
+            actor_type="admin",
+            metadata=result,
+        )
 
     @app.post("/api/admin/sync")
     def admin_sync(

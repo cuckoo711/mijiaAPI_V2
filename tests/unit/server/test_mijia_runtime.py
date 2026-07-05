@@ -286,3 +286,68 @@ def test_api_client_is_reused_across_calls(tmp_path: Path, monkeypatch: Any) -> 
     api4 = runtime._api()
     assert api4 is not api1
     assert len(FakeApi.instances) == 2
+
+
+def test_delete_credential_clears_synced_data_and_sdk_cache(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """删除米家凭据时应同时清理已同步的家庭/设备/场景以及 SDK 缓存。"""
+    settings = make_settings(tmp_path)
+    store = ServerStore(settings)
+    store.initialize()
+    FileCredentialStore(settings.credential_path).save(
+        make_credential("token", datetime.now() + timedelta(days=30))
+    )
+
+    # 塞一些"已同步"的数据
+    store.replace_home_registry(
+        [{"id": "home-1", "name": "主家庭", "uid": "u", "rooms": []}]
+    )
+    store.upsert_devices(
+        [
+            {
+                "id": "dev-1",
+                "did": "did-1",
+                "name": "灯",
+                "model": "xiaomi.light",
+                "home_id": "home-1",
+                "status": "online",
+            }
+        ]
+    )
+    store.upsert_scenes(
+        [{"id": "scene-1", "scene_id": "scene-1", "name": "回家", "home_id": "home-1"}]
+    )
+
+    class FakeApi:
+        def __init__(self) -> None:
+            self.cache_cleared = False
+
+        def update_credential(self, credential: Credential) -> None:
+            pass
+
+        def clear_all_cache(self) -> None:
+            self.cache_cleared = True
+
+    fake_api = FakeApi()
+    monkeypatch.setattr(
+        "server.mijia_runtime.create_api_client",
+        lambda credential, **_: fake_api,
+    )
+
+    runtime = MijiaRuntime(settings, store)
+    # 先触发一次 _api() 让 runtime 缓存 fake_api
+    runtime._api()
+
+    result = runtime.delete_credential()
+
+    # 返回的清理摘要
+    assert result["cleared"] == {"homes": 1, "devices": 1, "scenes": 1}
+    # 本地已同步数据全部清空
+    assert store.list_homes() == []
+    assert store.list_devices(include_hidden=True) == []
+    assert store.list_scenes(include_hidden=True) == []
+    # SDK 缓存被清
+    assert fake_api.cache_cleared is True
+    # 凭据文件被删
+    assert not settings.credential_path.exists()

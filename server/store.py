@@ -563,6 +563,23 @@ class ServerStore:
             self._config_map_cache = None
             self._config_map_cache_at = 0.0
 
+    def clear_synced_registries(self) -> dict[str, int]:
+        """删除所有从米家同步来的家庭 / 设备 / 场景。
+
+        用于凭据被删除或切换到另一个米家账号时，避免遗留孤儿数据。
+        审计日志、API Key、runtime_config 等本地状态保持不变。
+        返回受影响的行数（便于审计）。
+        """
+        with self._database.connect() as conn:
+            devices = conn.execute("DELETE FROM device_registry").rowcount
+            scenes = conn.execute("DELETE FROM scene_registry").rowcount
+            homes = conn.execute("DELETE FROM home_registry").rowcount
+        return {
+            "homes": int(homes or 0),
+            "devices": int(devices or 0),
+            "scenes": int(scenes or 0),
+        }
+
     def replace_home_registry(self, homes: list[dict[str, Any]]) -> None:
         """Persist synced homes."""
 

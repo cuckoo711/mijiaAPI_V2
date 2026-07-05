@@ -227,3 +227,49 @@ def test_initialize_migrates_legacy_admin_sessions_table(tmp_path: Path) -> None
     session = store.authenticate_admin("admin", "strong-password")
     admin = store.validate_admin_session(session["token"])
     assert admin["username"] == "admin"
+
+
+def test_clear_synced_registries_removes_homes_devices_scenes(tmp_path: Path) -> None:
+    """清理同步数据后应彻底删除家庭/设备/场景，保留其他本地状态。"""
+    store = ServerStore(make_settings(tmp_path))
+    store.initialize()
+
+    store.replace_home_registry(
+        [
+            {"id": "home-1", "name": "主家庭", "uid": "user", "rooms": []},
+        ]
+    )
+    store.upsert_devices(
+        [
+            {
+                "id": "dev-1",
+                "did": "did-1",
+                "name": "灯",
+                "model": "xiaomi.light",
+                "home_id": "home-1",
+                "status": "online",
+            }
+        ]
+    )
+    store.upsert_scenes(
+        [
+            {
+                "id": "scene-1",
+                "scene_id": "scene-1",
+                "name": "回家",
+                "home_id": "home-1",
+            }
+        ]
+    )
+
+    # 顺便建一个 API Key，验证清理不会误删
+    store.create_api_key("test", ["read:status"])
+
+    result = store.clear_synced_registries()
+
+    assert result == {"homes": 1, "devices": 1, "scenes": 1}
+    assert store.list_homes() == []
+    assert store.list_devices(include_hidden=True) == []
+    assert store.list_scenes(include_hidden=True) == []
+    # 其他本地状态保留
+    assert len(store.list_api_keys()) == 1

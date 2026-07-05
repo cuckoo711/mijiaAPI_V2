@@ -243,9 +243,23 @@ class MijiaRuntime:
         auth.save_credential(refreshed)
         return refreshed
 
-    def delete_credential(self) -> None:
+    def delete_credential(self) -> dict[str, Any]:
+        """删除米家凭据，同时清理该账号同步下来的数据与 SDK 缓存。
+
+        返回受影响的行数摘要，便于上层审计。
+        """
+        # 先尝试清 SDK 缓存（依赖当前 api client）；失败不阻塞后续操作
+        try:
+            if self._api_client is not None:
+                self._api_client.clear_all_cache()
+        except Exception:
+            pass
+
         FileCredentialStore(self._settings.credential_path).delete()
         self._invalidate_api_client()
+        cleared = self._store.clear_synced_registries()
+
+        return {"cleared": cleared}
 
     def start_credential_refresh_timer(self) -> None:
         """启动定时刷新凭据的后台任务"""
