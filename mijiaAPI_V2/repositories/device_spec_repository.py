@@ -3,7 +3,8 @@
 从网络或缓存获取设备规格信息，并解析为标准化的设备规格模型。
 """
 
-from typing import Optional
+import threading
+from typing import Dict, Optional
 
 import httpx
 
@@ -16,6 +17,12 @@ from .interfaces import DeviceSpec, IDeviceSpecRepository
 
 logger = get_logger(__name__)
 
+# miot-spec.org 全量设备清单接口。该响应体约 1.8MB / 上万条记录，
+# 每次同步都对每台设备重新拉一遍会造成明显的 CPU/网络占用。
+_INSTANCES_URL = "https://miot-spec.org/miot-spec-v2/instances?status=released"
+_SPEC_INSTANCE_URL = "https://miot-spec.org/miot-spec-v2/instance"
+_INSTANCES_CACHE_TTL = 24 * 3600  # 全量清单变化不频繁，缓存 24 小时
+
 
 class DeviceSpecRepositoryImpl(IDeviceSpecRepository):
     """设备规格仓储实现
@@ -27,9 +34,14 @@ class DeviceSpecRepositoryImpl(IDeviceSpecRepository):
     - 操作列表（SIID、AIID、名称、参数列表）
 
     缓存策略：
-    - 设备规格信息永久缓存到文件（L3缓存）
+    - 全量 instances 清单缓存 24 小时（L3 文件缓存 + 进程内 model->type 映射）
+    - 单个设备规格永久缓存到文件（L3 缓存）
     - 首次获取从网络加载，后续从缓存加载
     """
+
+    # 进程内共享：不同实例可以复用同一份 model→type 映射，避免每次同步都反序列化。
+    _model_type_map_lock = threading.Lock()
+    _model_type_map: Optional[Dict[str, str]] = None
 
     def __init__(self, http_client: HttpClient, cache_manager: CacheManager):
         """初始化设备规格仓储
@@ -105,26 +117,12 @@ class DeviceSpecRepositoryImpl(IDeviceSpecRepository):
             MijiaAPIException: 网络请求失败或解析失败
         """
         try:
-            # 步骤1: 从instances列表中查找设备的type
-            instances_url = "https://miot-spec.org/miot-spec-v2/instances?status=released"
-            headers = {"User-Agent": "mijiaAPI_V2/2.0.0"}
-            
-            response = httpx.get(instances_url, headers=headers, timeout=30)
-            response.raise_for_status()
-            instances_data = response.json()
-            
-            # 查找匹配的设备
-            device_type = None
-            for instance in instances_data.get("instances", []):
-                if instance.get("model") == model:
-                    device_type = instance.get("type")
-                    break
-            
+            device_type = self._resolve_device_type(model)
             if not device_type:
                 raise MijiaAPIException(f"未找到设备型号 {model} 的规格定义")
-            
-            # 步骤2: 使用type获取完整规格
-            spec_url = f"https://miot-spec.org/miot-spec-v2/instance?type={device_type}"
+
+            headers = {"User-Agent": "mijiaAPI_V2/2.0.0"}
+            spec_url = f"{_SPEC_INSTANCE_URL}?type={device_type}"
             response = httpx.get(spec_url, headers=headers, timeout=30)
             response.raise_for_status()
             spec_data = response.json()
@@ -132,12 +130,80 @@ class DeviceSpecRepositoryImpl(IDeviceSpecRepository):
             # 解析规格数据（使用标准miot-spec格式）
             return self._parse_spec_standard(model, spec_data)
 
+        except MijiaAPIException:
+            raise
         except httpx.HTTPError as e:
             logger.error(f"获取设备规格网络错误: {e}", extra={"model": model})
             raise MijiaAPIException(f"获取设备规格网络错误: {str(e)}") from e
         except Exception as e:
             logger.error(f"解析设备规格失败: {e}", extra={"model": model})
             raise MijiaAPIException(f"解析设备规格失败: {str(e)}") from e
+
+    def _resolve_device_type(self, model: str) -> Optional[str]:
+        """通过 miot-spec.org 的 instances 清单把设备 model 解析为 type。
+
+        清单响应约 1.8MB / 上万条，进程内共享一份 model→type 映射，避免每台设备
+        同步时都重复反序列化并线性扫描全表。
+        """
+        mapping = self._get_model_type_mapping()
+        return mapping.get(model)
+
+    def _get_model_type_mapping(self) -> Dict[str, str]:
+        """获取（或懒加载）model→type 映射。
+
+        优先级：进程内内存 → CacheManager 缓存（文件层，24h TTL）→ 网络获取。
+        """
+        cached_map = DeviceSpecRepositoryImpl._model_type_map
+        if cached_map is not None:
+            return cached_map
+
+        with DeviceSpecRepositoryImpl._model_type_map_lock:
+            # 双检锁，避免并发同步时重复下载。
+            cached_map = DeviceSpecRepositoryImpl._model_type_map
+            if cached_map is not None:
+                return cached_map
+
+            cache_key = "miot_spec:instances_model_map"
+            cached = self._cache.get(cache_key, namespace="specs")
+            if isinstance(cached, dict) and cached and all(
+                isinstance(k, str) and isinstance(v, str) for k, v in cached.items()
+            ):
+                logger.info(f"从缓存加载设备型号映射（{len(cached)} 条）")
+                DeviceSpecRepositoryImpl._model_type_map = cached
+                return cached
+            if cached is not None:
+                # 缓存内容格式不对（例如被单个 spec 的 mock 数据污染），忽略并重新拉取
+                logger.warning("缓存的设备型号映射格式异常，忽略并重新获取")
+
+            mapping = self._fetch_model_type_mapping_from_network()
+            self._cache.set(
+                cache_key, mapping, ttl=_INSTANCES_CACHE_TTL, namespace="specs"
+            )
+            DeviceSpecRepositoryImpl._model_type_map = mapping
+            return mapping
+
+    def _fetch_model_type_mapping_from_network(self) -> Dict[str, str]:
+        """一次性从网络下载 instances 清单并建立 model→type 映射。"""
+        headers = {"User-Agent": "mijiaAPI_V2/2.0.0"}
+        logger.info(f"从网络获取设备型号映射: {_INSTANCES_URL}")
+        response = httpx.get(_INSTANCES_URL, headers=headers, timeout=30)
+        response.raise_for_status()
+        instances_data = response.json()
+        mapping: Dict[str, str] = {}
+        for instance in instances_data.get("instances", []):
+            model = instance.get("model")
+            device_type = instance.get("type")
+            if isinstance(model, str) and isinstance(device_type, str):
+                # 同一 model 出现多条时保留首个；官方数据未见冲突，保持稳定。
+                mapping.setdefault(model, device_type)
+        logger.info(f"设备型号映射构建完成，共 {len(mapping)} 条")
+        return mapping
+
+    @classmethod
+    def clear_model_type_mapping_cache(cls) -> None:
+        """清空进程内的 model→type 映射缓存（供测试或运维强制刷新使用）。"""
+        with cls._model_type_map_lock:
+            cls._model_type_map = None
     
     def _parse_spec_standard(self, model: str, spec_data: dict) -> DeviceSpec:
         """解析设备规格数据（标准miot-spec格式）

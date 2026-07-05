@@ -2,6 +2,13 @@
 
 本项目遵循“面向部署和使用者可读”的更新记录。最新变化放在最前面。
 
+## v3.1.1 - 2026-07-05
+
+### 修复
+
+- **性能**：同步家庭设备时 CPU 占用异常偏高（可达 60%+）。根因是 `DeviceSpecRepositoryImpl` 在获取每台设备规格时都会重新拉取 miot-spec.org 的 `instances?status=released` 全量清单（约 1.8MB / 14k+ 条记录），并在 Python 里做线性扫描找匹配的 `type`。修复后：清单在进程内缓存 model→type 映射，同时写入文件层 24 小时缓存；100 台设备的同步从 200 次 HTTP + 100 次全量反序列化降为 1 次 HTTP + 100 次哈希查找。
+- 修复 v3.1.0 在存量数据库上启动时报错 `sqlite3.OperationalError: no such column: token_prefix`：`idx_admin_sessions_token_prefix` 索引与 `_ensure_columns` 补列的执行顺序颠倒。索引改为在补列完成后再创建，存量库能够正常迁移。
+
 ## v3.1.0 - 2026-07-05
 
 ### 变更（Breaking）

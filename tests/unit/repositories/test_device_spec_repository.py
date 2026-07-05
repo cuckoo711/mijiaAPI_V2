@@ -11,6 +11,22 @@ from mijiaAPI_V2.repositories.device_spec_repository import DeviceSpecRepository
 from mijiaAPI_V2.repositories.interfaces import DeviceSpec
 
 
+@pytest.fixture(autouse=True)
+def _prime_model_type_cache():
+    """预置 model→type 映射，避免每个用例都要 mock instances 网络请求。
+
+    生产代码首次访问 miot-spec.org 时会拉全量 instances 清单（约 1.8MB）建立映射；
+    单元测试直接给一个已包含测试用 model 的字典，绕开这个 IO。测试结束后再清理，
+    避免影响其他测试模块。
+    """
+    DeviceSpecRepositoryImpl._model_type_map = {
+        "xiaomi.light.ceiling1": "urn:miot-spec-v2:device:light:0000A001:xiaomi-ceiling1:1",
+        "test.device.v1": "urn:miot-spec-v2:device:test:0000A001:test-v1:1",
+    }
+    yield
+    DeviceSpecRepositoryImpl.clear_model_type_mapping_cache()
+
+
 @pytest.fixture
 def mock_http_client():
     """创建Mock HTTP客户端"""
@@ -99,18 +115,10 @@ class TestDeviceSpecRepositoryImpl:
         self, mock_httpx_get, device_spec_repo, mock_cache_manager, sample_spec_data
     ):
         """测试从网络获取设备规格"""
-        # Mock两次网络响应：第一次获取instances，第二次获取spec
-        instances_response = Mock()
-        instances_response.json.return_value = {
-            "instances": [
-                {"model": "xiaomi.light.ceiling1", "type": "urn:miot-spec-v2:device:light:0000A001:xiaomi-ceiling1:1"}
-            ]
-        }
-        
+        # model→type 映射由 autouse fixture 预置，此处只 mock 具体设备规格请求
         spec_response = Mock()
         spec_response.json.return_value = sample_spec_data
-        
-        mock_httpx_get.side_effect = [instances_response, spec_response]
+        mock_httpx_get.return_value = spec_response
 
         # 获取规格
         spec = device_spec_repo.get_spec("xiaomi.light.ceiling1")
@@ -122,26 +130,22 @@ class TestDeviceSpecRepositoryImpl:
         assert len(spec.properties) == 3
         assert len(spec.actions) == 1
 
-        # 验证缓存被调用
-        mock_cache_manager.set.assert_called_once()
+        # 验证设备规格被缓存
+        mock_cache_manager.set.assert_any_call(
+            "device_spec:xiaomi.light.ceiling1",
+            spec.model_dump(),
+            ttl=365 * 24 * 3600,
+            namespace="specs",
+        )
 
     @patch("httpx.get")
     def test_parse_property_bool(
         self, mock_httpx_get, device_spec_repo, mock_cache_manager, sample_spec_data
     ):
         """测试解析布尔类型属性"""
-        # Mock两次网络响应：第一次获取instances，第二次获取spec
-        instances_response = Mock()
-        instances_response.json.return_value = {
-            "instances": [
-                {"model": "xiaomi.light.ceiling1", "type": "urn:miot-spec-v2:device:light:0000A001:xiaomi-ceiling1:1"}
-            ]
-        }
-        
         spec_response = Mock()
         spec_response.json.return_value = sample_spec_data
-        
-        mock_httpx_get.side_effect = [instances_response, spec_response]
+        mock_httpx_get.return_value = spec_response
 
         spec = device_spec_repo.get_spec("xiaomi.light.ceiling1")
 
@@ -158,18 +162,9 @@ class TestDeviceSpecRepositoryImpl:
         self, mock_httpx_get, device_spec_repo, mock_cache_manager, sample_spec_data
     ):
         """测试解析带值范围的属性"""
-        # Mock两次网络响应：第一次获取instances，第二次获取spec
-        instances_response = Mock()
-        instances_response.json.return_value = {
-            "instances": [
-                {"model": "xiaomi.light.ceiling1", "type": "urn:miot-spec-v2:device:light:0000A001:xiaomi-ceiling1:1"}
-            ]
-        }
-        
         spec_response = Mock()
         spec_response.json.return_value = sample_spec_data
-        
-        mock_httpx_get.side_effect = [instances_response, spec_response]
+        mock_httpx_get.return_value = spec_response
 
         spec = device_spec_repo.get_spec("xiaomi.light.ceiling1")
 
@@ -184,18 +179,9 @@ class TestDeviceSpecRepositoryImpl:
         self, mock_httpx_get, device_spec_repo, mock_cache_manager, sample_spec_data
     ):
         """测试解析设备操作"""
-        # Mock两次网络响应：第一次获取instances，第二次获取spec
-        instances_response = Mock()
-        instances_response.json.return_value = {
-            "instances": [
-                {"model": "xiaomi.light.ceiling1", "type": "urn:miot-spec-v2:device:light:0000A001:xiaomi-ceiling1:1"}
-            ]
-        }
-        
         spec_response = Mock()
         spec_response.json.return_value = sample_spec_data
-        
-        mock_httpx_get.side_effect = [instances_response, spec_response]
+        mock_httpx_get.return_value = spec_response
 
         spec = device_spec_repo.get_spec("xiaomi.light.ceiling1")
 
@@ -283,18 +269,9 @@ class TestDeviceSpecRepositoryImpl:
             ],
         }
 
-        # Mock两次网络响应：第一次获取instances，第二次获取spec
-        instances_response = Mock()
-        instances_response.json.return_value = {
-            "instances": [
-                {"model": "test.device.v1", "type": "urn:miot-spec-v2:device:test:0000A001:test-v1:1"}
-            ]
-        }
-        
         spec_response = Mock()
         spec_response.json.return_value = spec_data
-        
-        mock_httpx_get.side_effect = [instances_response, spec_response]
+        mock_httpx_get.return_value = spec_response
 
         spec = device_spec_repo.get_spec("test.device.v1")
 
@@ -308,28 +285,19 @@ class TestDeviceSpecRepositoryImpl:
         # 返回无效的缓存数据
         mock_cache_manager.get.return_value = {"invalid": "data"}
 
-        # Mock网络请求
+        # Mock网络请求（model→type 映射由 autouse fixture 预置）
         with patch("httpx.get") as mock_httpx_get:
-            # Mock两次网络响应：第一次获取instances，第二次获取spec
-            instances_response = Mock()
-            instances_response.json.return_value = {
-                "instances": [
-                    {"model": "test.device.v1", "type": "urn:miot-spec-v2:device:test:0000A001:test-v1:1"}
-                ]
-            }
-            
             spec_response = Mock()
             spec_response.json.return_value = {
                 "description": "测试设备",
                 "services": [],
             }
-            
-            mock_httpx_get.side_effect = [instances_response, spec_response]
+            mock_httpx_get.return_value = spec_response
 
             spec = device_spec_repo.get_spec("test.device.v1")
 
             # 验证缓存被清除
-            mock_cache_manager.invalidate.assert_called_once_with(
+            mock_cache_manager.invalidate.assert_any_call(
                 "device_spec:test.device.v1", namespace="specs"
             )
 
@@ -342,14 +310,6 @@ class TestDeviceSpecRepositoryImpl:
         self, mock_httpx_get, device_spec_repo, mock_cache_manager
     ):
         """测试解析列表格式的值范围"""
-        # Mock两次网络响应：第一次获取instances，第二次获取spec
-        instances_response = Mock()
-        instances_response.json.return_value = {
-            "instances": [
-                {"model": "test.device.v1", "type": "urn:miot-spec-v2:device:test:0000A001:test-v1:1"}
-            ]
-        }
-        
         # 使用列表格式的 value-range
         spec_response = Mock()
         spec_response.json.return_value = {
@@ -374,17 +334,55 @@ class TestDeviceSpecRepositoryImpl:
                 }
             ]
         }
-        
-        mock_httpx_get.side_effect = [instances_response, spec_response]
+        mock_httpx_get.return_value = spec_response
 
         spec = device_spec_repo.get_spec("test.device.v1")
 
         # 验证属性解析正确
         assert spec is not None
         assert len(spec.properties) == 1
-        
+
         temp_prop = spec.properties[0]
         assert temp_prop.name == "温度"
         assert temp_prop.type == PropertyType.UINT
         assert temp_prop.value_range == [30, 100, 1]  # 应该保持列表格式
+
+    @patch("httpx.get")
+    def test_instances_endpoint_fetched_only_once_across_multiple_specs(
+        self, mock_httpx_get, mock_http_client, mock_cache_manager, sample_spec_data
+    ):
+        """model→type 映射应在进程内复用，避免每台设备都重新拉全量 instances 清单。"""
+        # 清掉 autouse fixture 预置的映射，模拟真实首次调用
+        DeviceSpecRepositoryImpl.clear_model_type_mapping_cache()
+
+        instances_response = Mock()
+        instances_response.json.return_value = {
+            "instances": [
+                {"model": "xiaomi.light.ceiling1",
+                 "type": "urn:miot-spec-v2:device:light:0000A001:xiaomi-ceiling1:1"},
+                {"model": "xiaomi.light.ceiling2",
+                 "type": "urn:miot-spec-v2:device:light:0000A001:xiaomi-ceiling2:1"},
+                {"model": "xiaomi.light.ceiling3",
+                 "type": "urn:miot-spec-v2:device:light:0000A001:xiaomi-ceiling3:1"},
+            ]
+        }
+        spec_response = Mock()
+        spec_response.json.return_value = sample_spec_data
+
+        # 首次 get_spec 会依次触发：instances 请求（1 次） → spec 请求（1 次）
+        # 后续每台设备只应再触发 spec 请求，而不重新拉 instances。
+        mock_httpx_get.side_effect = [
+            instances_response,
+            spec_response,  # ceiling1
+            spec_response,  # ceiling2
+            spec_response,  # ceiling3
+        ]
+
+        repo = DeviceSpecRepositoryImpl(mock_http_client, mock_cache_manager)
+        repo.get_spec("xiaomi.light.ceiling1")
+        repo.get_spec("xiaomi.light.ceiling2")
+        repo.get_spec("xiaomi.light.ceiling3")
+
+        # 3 台设备 + 1 次映射拉取 = 4 次 HTTP GET，而不是 3 * 2 = 6 次
+        assert mock_httpx_get.call_count == 4
 
