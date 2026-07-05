@@ -74,3 +74,5 @@ configs/*.json
 
 # ==================== 其他 ====================
 __pypackages__/
+.narrafork/
+.worktrees/
