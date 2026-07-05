@@ -10,6 +10,14 @@ from server.config import ServerSettings
 
 SCHEMA_VERSION = 1
 
+# 依赖存量表结构的索引，必须在 ``_ensure_columns`` 之后再创建。
+INDEX_STATEMENTS_AFTER_ENSURE = [
+    """
+    CREATE INDEX IF NOT EXISTS idx_admin_sessions_token_prefix
+    ON admin_sessions(token_prefix)
+    """,
+]
+
 SCHEMA_STATEMENTS = [
     """
     CREATE TABLE IF NOT EXISTS schema_version (
@@ -39,10 +47,6 @@ SCHEMA_STATEMENTS = [
         revoked_at TEXT,
         FOREIGN KEY(admin_id) REFERENCES admin_users(id)
     )
-    """,
-    """
-    CREATE INDEX IF NOT EXISTS idx_admin_sessions_token_prefix
-    ON admin_sessions(token_prefix)
     """,
     """
     CREATE TABLE IF NOT EXISTS runtime_config (
@@ -175,6 +179,10 @@ class ServerDatabase:
             for statement in SCHEMA_STATEMENTS:
                 conn.execute(statement)
             self._ensure_columns(conn)
+            # 索引依赖新增列，必须在 _ensure_columns 完成后再创建，
+            # 否则存量数据库上会因缺列失败。
+            for statement in INDEX_STATEMENTS_AFTER_ENSURE:
+                conn.execute(statement)
             conn.execute(
                 """
                 INSERT OR IGNORE INTO schema_version(version, applied_at)
