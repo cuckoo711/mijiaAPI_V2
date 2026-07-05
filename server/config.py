@@ -4,9 +4,24 @@ from __future__ import annotations
 
 import os
 import shutil
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
+
+
+def _bundled_base_dir() -> Path:
+    """Return the base directory for bundled assets when running as a PyInstaller exe.
+
+    When frozen (packaged with PyInstaller), ``sys._MEIPASS`` points to the
+    temporary directory where all datas are extracted.  When running from
+    source, we fall back to the project root (the directory that contains the
+    ``server/`` package).
+    """
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        return Path(sys._MEIPASS)  # type: ignore[attr-defined]
+    # Running from source: __file__ is server/config.py, so go up one level.
+    return Path(__file__).resolve().parent.parent
 
 
 def _env_int(name: str, default: int) -> int:
@@ -39,7 +54,7 @@ class ServerSettings:
     audit_retention_days: int = 30
     admin_session_hours: int = 12
     credential_refresh_before_seconds: int = 24 * 60 * 60
-    web_dist_dir: Path = Path("web/dist")
+    web_dist_dir: Path = _bundled_base_dir() / "web" / "dist"
     config_file_path: Path = Path("configs/server.toml")
     config_template_path: Path = Path("configs/server.toml.template")
 
@@ -72,7 +87,7 @@ class ServerSettings:
             credential_refresh_before_seconds=_env_int(
                 "MIJIA_CREDENTIAL_REFRESH_BEFORE_SECONDS", 24 * 60 * 60
             ),
-            web_dist_dir=_env_path("MIJIA_WEB_DIST_DIR", Path("web/dist")),
+            web_dist_dir=_env_path("MIJIA_WEB_DIST_DIR", _bundled_base_dir() / "web" / "dist"),
             config_file_path=config_file,
             config_template_path=Path("configs/server.toml.template"),
         )

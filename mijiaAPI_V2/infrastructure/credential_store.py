@@ -4,12 +4,39 @@
 """
 
 import json
+import sys
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Optional
 
 from mijiaAPI_V2.core.logging import get_logger
 from mijiaAPI_V2.domain.models import Credential
+
+
+def _sdk_default_credential_path() -> Path:
+    """Return a stable default credential path regardless of the runtime environment.
+
+    - PyInstaller single-file exe: uses the directory that contains the exe
+      (``sys.executable``), so the credential sits next to the binary.
+    - Normal source / installed package: walks up from this file to find the
+      project root (directory that contains ``pyproject.toml``), then falls
+      back to ``cwd()`` if not found.
+    """
+    if getattr(sys, "frozen", False):
+        # Running as a PyInstaller bundle – place credentials next to the exe.
+        return Path(sys.executable).parent / ".mijia" / "credential.json"
+
+    # Source / installed: locate the project root via pyproject.toml.
+    current = Path(__file__).resolve()
+    for _ in range(10):
+        current = current.parent
+        if (current / "pyproject.toml").exists():
+            return current / ".mijia" / "credential.json"
+        if current.parent == current:
+            break
+
+    return Path.cwd() / ".mijia" / "credential.json"
+
 
 logger = get_logger(__name__)
 
@@ -45,41 +72,12 @@ class FileCredentialStore(ICredentialStore):
         """初始化文件凭据存储
 
         Args:
-            default_path: 默认存储路径，如果未指定则使用 .mijia/credential.json
+            default_path: 默认存储路径，如果未指定则自动推断
         """
-        if default_path:
-            self._default_path = default_path
-        else:
-            # 默认使用项目根目录下的 .mijia/credential.json
-            # 项目根目录定义为包含 pyproject.toml 的目录
-            project_root = self._find_project_root()
-            self._default_path = project_root / ".mijia" / "credential.json"
-        
+        self._default_path = default_path if default_path else _sdk_default_credential_path()
+
         # 确保目录存在
         self._default_path.parent.mkdir(parents=True, exist_ok=True)
-    
-    def _find_project_root(self) -> Path:
-        """查找项目根目录
-        
-        从当前文件向上查找，直到找到包含 pyproject.toml 的目录。
-        如果找不到，则使用当前工作目录。
-        
-        Returns:
-            项目根目录路径
-        """
-        current = Path(__file__).resolve()
-        
-        # 向上查找，最多查找10层
-        for _ in range(10):
-            current = current.parent
-            if (current / "pyproject.toml").exists():
-                return current
-            # 到达文件系统根目录
-            if current.parent == current:
-                break
-        
-        # 如果找不到，使用当前工作目录
-        return Path.cwd()
 
     def save(self, credential: Credential, path: Optional[str] = None) -> None:
         """保存凭据到文件

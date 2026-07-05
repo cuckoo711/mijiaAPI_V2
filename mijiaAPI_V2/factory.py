@@ -3,6 +3,7 @@
 提供便捷的工厂函数，自动创建和组装所有依赖组件。
 """
 
+import sys
 from pathlib import Path
 from typing import Any, Optional
 
@@ -28,26 +29,23 @@ logger = get_logger(__name__)
 
 
 def _find_project_root() -> Path:
-    """查找项目根目录
-    
-    从当前文件向上查找，直到找到包含 pyproject.toml 的目录。
-    如果找不到，则使用当前工作目录。
-    
-    Returns:
-        项目根目录路径
+    """Return a stable project root regardless of runtime environment.
+
+    - PyInstaller single-file exe: returns the directory containing the exe.
+    - Source / installed package: walks up from this file to find the directory
+      that contains ``pyproject.toml``; falls back to ``cwd()`` if not found.
     """
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).parent
+
     current = Path(__file__).resolve()
-    
-    # 向上查找，最多查找10层
     for _ in range(10):
         current = current.parent
         if (current / "pyproject.toml").exists():
             return current
-        # 到达文件系统根目录
         if current.parent == current:
             break
-    
-    # 如果找不到，使用当前工作目录
+
     return Path.cwd()
 
 
