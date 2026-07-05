@@ -76,3 +76,11 @@ configs/*.json
 __pypackages__/
 .narrafork/
 .worktrees/
+
+# ==================== 本地开发笔记 ====================
+# 内部的规划稿、任务清单、优化 spec 等不进版本库
+plan.md
+OPTIMIZATION_SPEC.md
+NOTES.md
+TODO.md
+*.scratch.md
