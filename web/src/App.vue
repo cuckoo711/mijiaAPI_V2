@@ -95,6 +95,30 @@ type AdminSessionPayload = {
 type RequestBehavior = {
   skipAuthRedirect?: boolean;
 };
+type AppInfo = {
+  name: string;
+  version: string;
+  description: string;
+  license: string;
+  authors: string;
+  repository_url: string;
+  issues_url: string;
+  releases_url: string;
+};
+type UpdateInfo = {
+  current_version: string;
+  latest: {
+    latest_version: string;
+    latest_tag: string;
+    published_at: string | null;
+    release_url: string;
+    release_notes: string;
+  } | null;
+  update_available: boolean;
+  error: string | null;
+  checked_at: number;
+  repository_url: string;
+};
 
 class ApiRequestError extends Error {
   status: number;
@@ -149,6 +173,10 @@ const qrJob = ref<Record<string, string> | null>(null);
 const proxyCidrs = ref("");
 const devicePage = ref(1);
 const devicePageSize = ref(20);
+const appInfo = ref<AppInfo | null>(null);
+const updateInfo = ref<UpdateInfo | null>(null);
+const aboutDialogVisible = ref(false);
+const checkingUpdate = ref(false);
 let qrTimer: number | undefined;
 let adminRefreshTimer: number | undefined;
 
@@ -770,9 +798,66 @@ async function refreshAll(): Promise<void> {
     await loadPublic();
     await refreshAdminSession();
     await loadAdmin();
+    // 登录后异步加载 About 与更新检查；失败静默，不阻塞主流程
+    void loadAppInfo();
+    void checkForUpdates({ background: true });
   } finally {
     loading.value = false;
   }
+}
+
+async function loadAppInfo(): Promise<void> {
+  if (!token.value) return;
+  try {
+    appInfo.value = await request<AppInfo>("/api/admin/app-info");
+  } catch (error) {
+    console.warn("加载应用信息失败", error);
+  }
+}
+
+async function checkForUpdates(options: { background?: boolean; force?: boolean } = {}): Promise<void> {
+  if (!token.value) return;
+  const { background = false, force = false } = options;
+  if (!background) checkingUpdate.value = true;
+  try {
+    const payload = await request<UpdateInfo>(
+      `/api/admin/updates/check${force ? "?force=true" : ""}`
+    );
+    updateInfo.value = payload;
+    if (!background && payload.error) {
+      ElMessage.warning(`检查更新失败：${payload.error}`);
+    } else if (!background && payload.update_available && payload.latest) {
+      ElMessage.success(`发现新版本 ${payload.latest.latest_tag}`);
+    } else if (!background && !payload.update_available) {
+      ElMessage.success("已经是最新版本");
+    }
+  } catch (error) {
+    if (!background) {
+      ElMessage.warning(error instanceof Error ? error.message : "检查更新失败");
+    } else {
+      console.warn("后台检查更新失败", error);
+    }
+  } finally {
+    if (!background) checkingUpdate.value = false;
+  }
+}
+
+function openAboutDialog(): void {
+  aboutDialogVisible.value = true;
+  if (!appInfo.value) void loadAppInfo();
+  if (!updateInfo.value) void checkForUpdates({ background: true });
+}
+
+function openReleasePage(): void {
+  const url = updateInfo.value?.latest?.release_url;
+  if (url) window.open(url, "_blank", "noopener,noreferrer");
+}
+
+function formatCheckedAt(epochSeconds: number): string {
+  if (!epochSeconds) return "";
+  const date = new Date(epochSeconds * 1000);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString();
 }
 
 async function createAdmin(): Promise<void> {
@@ -1100,13 +1185,40 @@ onBeforeUnmount(() => {
           </el-menu-item>
         </el-sub-menu>
       </el-menu>
+      <div class="sidebar-footer">
+        <button
+          type="button"
+          class="sidebar-about"
+          :title="updateInfo?.update_available ? '发现新版本，点击查看' : '关于'"
+          @click="openAboutDialog"
+        >
+          <span class="sidebar-about-version">v{{ health?.version || "..." }}</span>
+          <span
+            v-if="updateInfo?.update_available"
+            class="sidebar-about-dot"
+            aria-label="有可用更新"
+          ></span>
+          <span class="sidebar-about-label">关于</span>
+        </button>
+      </div>
     </el-aside>
 
     <el-container>
       <el-header class="topbar">
         <div>
           <h1>{{ activePage.label }}</h1>
-          <p>版本 {{ health?.version || "..." }} · {{ initializedLabel }}</p>
+          <p>
+            版本 {{ health?.version || "..." }}
+            <button
+              v-if="updateInfo?.update_available && updateInfo.latest"
+              type="button"
+              class="update-hint"
+              @click="openAboutDialog"
+            >
+              有新版本 {{ updateInfo.latest.latest_tag }} 可用
+            </button>
+            · {{ initializedLabel }}
+          </p>
         </div>
         <div class="toolbar">
           <el-button v-if="isAuthed" @click="logout">退出</el-button>
@@ -1817,5 +1929,101 @@ onBeforeUnmount(() => {
         </section>
       </el-main>
     </el-container>
+
+    <el-dialog v-model="aboutDialogVisible" title="关于" width="480px" append-to-body>
+      <div class="about-dialog">
+        <div class="about-header">
+          <div class="brand-mark about-mark">米</div>
+          <div>
+            <div class="about-name">{{ appInfo?.name || "米家 API Server" }}</div>
+            <div class="about-version">
+              <span>v{{ appInfo?.version || health?.version || "..." }}</span>
+              <el-tag
+                v-if="updateInfo?.update_available && updateInfo.latest"
+                type="warning"
+                size="small"
+                effect="light"
+              >
+                可升级到 {{ updateInfo.latest.latest_tag }}
+              </el-tag>
+              <el-tag v-else-if="updateInfo && !updateInfo.error" type="success" size="small" effect="light">
+                已是最新
+              </el-tag>
+            </div>
+          </div>
+        </div>
+
+        <p v-if="appInfo?.description" class="about-desc">{{ appInfo.description }}</p>
+
+        <dl class="about-meta">
+          <div>
+            <dt>许可证</dt>
+            <dd>{{ appInfo?.license || "MIT" }}</dd>
+          </div>
+          <div v-if="appInfo?.authors">
+            <dt>贡献者</dt>
+            <dd>{{ appInfo.authors }}</dd>
+          </div>
+          <div v-if="appInfo?.repository_url">
+            <dt>项目仓库</dt>
+            <dd>
+              <a :href="appInfo.repository_url" target="_blank" rel="noopener noreferrer">
+                {{ appInfo.repository_url }}
+              </a>
+            </dd>
+          </div>
+          <div v-if="appInfo?.releases_url">
+            <dt>发行版</dt>
+            <dd>
+              <a :href="appInfo.releases_url" target="_blank" rel="noopener noreferrer">
+                查看所有版本
+              </a>
+            </dd>
+          </div>
+          <div v-if="appInfo?.issues_url">
+            <dt>反馈问题</dt>
+            <dd>
+              <a :href="appInfo.issues_url" target="_blank" rel="noopener noreferrer">
+                提交 Issue
+              </a>
+            </dd>
+          </div>
+        </dl>
+
+        <div v-if="updateInfo?.update_available && updateInfo.latest" class="about-update-block">
+          <div class="about-update-title">发现新版本 {{ updateInfo.latest.latest_tag }}</div>
+          <div v-if="updateInfo.latest.published_at" class="about-update-meta">
+            发布于 {{ new Date(updateInfo.latest.published_at).toLocaleString() }}
+          </div>
+          <div v-if="updateInfo.latest.release_notes" class="about-update-notes">
+            <pre>{{ updateInfo.latest.release_notes }}</pre>
+          </div>
+          <el-button type="primary" size="small" @click="openReleasePage">
+            前往下载
+          </el-button>
+        </div>
+
+        <div v-else-if="updateInfo?.error" class="about-update-error">
+          检查更新失败：{{ updateInfo.error }}
+        </div>
+
+        <div class="about-footer">
+          <span v-if="updateInfo?.checked_at" class="about-checked-at">
+            最近检查：{{ formatCheckedAt(updateInfo.checked_at) }}
+          </span>
+          <el-button
+            size="small"
+            :loading="checkingUpdate"
+            @click="() => checkForUpdates({ force: true })"
+          >
+            立即检查
+          </el-button>
+        </div>
+
+        <div class="about-copyright">
+          © {{ new Date().getFullYear() }} {{ appInfo?.authors || "MijiaAPI Contributors" }}
+        </div>
+      </div>
+    </el-dialog>
   </el-container>
 </template>

@@ -416,3 +416,70 @@ def test_status_requires_api_key_scope(tmp_path: Path) -> None:
 
     assert response.status_code == 401
     assert response.json()["error"]["code"] == "HTTP_ERROR"
+
+
+def test_admin_app_info_returns_repository_metadata(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    token = admin_token(client)
+
+    response = client.get(
+        "/api/admin/app-info",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["version"] == mijiaAPI_V2.__version__
+    assert payload["license"] == "MIT"
+    assert payload["repository_url"].startswith("https://github.com/")
+    assert payload["issues_url"].endswith("/issues")
+    assert payload["releases_url"].endswith("/releases")
+
+
+def test_admin_app_info_requires_auth(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+
+    response = client.get("/api/admin/app-info")
+
+    assert response.status_code == 401
+
+
+def test_admin_updates_check_delegates_to_checker(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    client = make_client(tmp_path)
+    token = admin_token(client)
+
+    from server.updater import UpdateChecker
+
+    # 用 stub 覆盖真实网络请求
+    stub = UpdateChecker(current_version="0.0.0")
+
+    def fake_check(force: bool = False) -> dict[str, Any]:
+        return {
+            "current_version": "0.0.0",
+            "latest": {
+                "latest_version": "9.9.9",
+                "latest_tag": "v9.9.9",
+                "published_at": "2026-07-05T07:00:00Z",
+                "release_url": "https://example.com/r",
+                "release_notes": "notes",
+            },
+            "update_available": True,
+            "error": None,
+            "checked_at": 0.0,
+            "repository_url": stub.repository_url,
+        }
+
+    monkeypatch.setattr(stub, "check", fake_check)
+    client.app.state.update_checker = stub
+
+    response = client.get(
+        "/api/admin/updates/check",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["update_available"] is True
+    assert payload["latest"]["latest_tag"] == "v9.9.9"

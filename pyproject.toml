@@ -1,6 +1,6 @@
 [project]
 name = "mijia-api"
-version = "3.1.2"
+version = "3.2.0"
 description = "米家智能家居Python SDK - 重构版本"
 authors = [
     {name = "MijiaAPI Contributors"}
@@ -9,6 +9,7 @@ readme = "README.md"
 requires-python = ">=3.9"
 license = {text = "MIT"}
 keywords = ["mijia", "xiaomi", "smart-home", "iot"]
+
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -33,6 +34,12 @@ dependencies = [
     "pillow>=10.0.0",
     "tomli>=2.0.0; python_version < '3.11'",
 ]
+
+[project.urls]
+Homepage = "https://github.com/cuckoo711/mijiaAPI_V2"
+Repository = "https://github.com/cuckoo711/mijiaAPI_V2"
+Issues = "https://github.com/cuckoo711/mijiaAPI_V2/issues"
+Releases = "https://github.com/cuckoo711/mijiaAPI_V2/releases"
 
 [project.optional-dependencies]
 dev = [

@@ -21,6 +21,7 @@ from server.store import (
     BootstrapAlreadyCompletedError,
     ServerStore,
 )
+from server.updater import UpdateChecker
 
 DEFAULT_TRUSTED_PROXY_CIDRS = ("127.0.0.1/32", "::1/128")
 DOCS_ROUTES = {"/docs", "/redoc", "/docs/oauth2-redirect"}
@@ -310,6 +311,7 @@ def create_app(  # noqa: C901
     app.state.runtime = MijiaRuntime(resolved_settings, resolved_store)
     app.state.login_jobs = LoginJobManager(resolved_settings)
     app.state.started_at = datetime.now(timezone.utc)
+    app.state.update_checker = UpdateChecker(current_version=mijiaAPI_V2.__version__)
 
     @app.exception_handler(HTTPException)
     async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
@@ -500,6 +502,30 @@ def create_app(  # noqa: C901
     ) -> dict[str, Any]:
         checks = current_store.system_checks()
         return {"checks": checks}
+
+    @app.get("/api/admin/app-info")
+    def admin_app_info(
+        _admin: dict[str, Any] = Depends(require_admin),
+    ) -> dict[str, Any]:
+        checker: UpdateChecker = app.state.update_checker
+        return {
+            "name": "米家 API Server",
+            "version": mijiaAPI_V2.__version__,
+            "description": "米家智能家居 Python SDK 与管理台",
+            "license": "MIT",
+            "authors": "MijiaAPI Contributors",
+            "repository_url": checker.repository_url,
+            "issues_url": f"{checker.repository_url}/issues",
+            "releases_url": f"{checker.repository_url}/releases",
+        }
+
+    @app.get("/api/admin/updates/check")
+    def admin_updates_check(
+        force: bool = False,
+        _admin: dict[str, Any] = Depends(require_admin),
+    ) -> dict[str, Any]:
+        checker: UpdateChecker = app.state.update_checker
+        return checker.check(force=force)
 
     @app.get("/api/admin/config")
     def admin_list_config(
