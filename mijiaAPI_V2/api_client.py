@@ -91,7 +91,13 @@ class MijiaAPI:
         return self._device_service.get_device_by_id(device_id, self._credential)
 
     def control_device(
-        self, device_id: str, siid: int, piid: int, value: Any, refresh_cache: bool = True
+        self,
+        device_id: str,
+        siid: int,
+        piid: int,
+        value: Any,
+        refresh_cache: bool = True,
+        home_id: Optional[str] = None,
     ) -> bool:
         """控制设备属性
 
@@ -103,6 +109,8 @@ class MijiaAPI:
             piid: 属性ID
             value: 属性值
             refresh_cache: 是否在控制后刷新缓存，默认为True
+            home_id: 设备所属家庭 ID（可选）。传入后可跳过按 device_id 反查家庭
+                的开销；调用方已知家庭时强烈建议提供。
 
         Returns:
             是否成功
@@ -120,6 +128,9 @@ class MijiaAPI:
             >>>
             >>> # 控制设备但不刷新缓存（高频操作时使用）
             >>> api.control_device("device_123", 2, 1, True, refresh_cache=False)
+            >>>
+            >>> # 已知家庭时，避免二次查找
+            >>> api.control_device("device_123", 2, 1, True, home_id="12345")
         """
         result = self._device_service.set_device_property(
             device_id, siid, piid, value, self._credential
@@ -127,15 +138,32 @@ class MijiaAPI:
 
         # 控制成功后刷新缓存
         if result and refresh_cache and self._cache_manager:
-            # 获取设备信息以确定所属家庭
-            device = self._device_service.get_device_by_id(device_id, self._credential)
-            if device:
-                # 刷新该家庭的设备缓存
-                self._cache_manager.invalidate_pattern(
-                    f"{self._credential.user_id}:devices:{device.home_id}"
-                )
+            self._invalidate_device_cache(device_id, home_id)
 
         return result
+
+    def _invalidate_device_cache(
+        self, device_id: str, home_id: Optional[str] = None
+    ) -> None:
+        """失效指定设备（可选按家庭）的相关缓存。
+
+        当 home_id 已知时直接按 home_id 精确失效；未知时才回退到 get_by_id 反查，
+        并额外失效该设备的属性缓存。
+        """
+        if not self._cache_manager:
+            return
+
+        if home_id:
+            self._cache_manager.invalidate_pattern(
+                f"{self._credential.user_id}:devices:{home_id}"
+            )
+            return
+
+        device = self._device_service.get_device_by_id(device_id, self._credential)
+        if device:
+            self._cache_manager.invalidate_pattern(
+                f"{self._credential.user_id}:devices:{device.home_id}"
+            )
 
     def call_device_action(
         self,
@@ -144,6 +172,7 @@ class MijiaAPI:
         aiid: int,
         params: Optional[Dict[str, Any]] = None,
         refresh_cache: bool = True,
+        home_id: Optional[str] = None,
     ) -> Any:
         """调用设备操作
 
@@ -155,6 +184,7 @@ class MijiaAPI:
             aiid: 操作ID
             params: 操作参数（可选）
             refresh_cache: 是否在操作后刷新缓存，默认为True
+            home_id: 设备所属家庭 ID（可选）。已知时可跳过按 device_id 反查家庭。
 
         Returns:
             操作结果
@@ -177,13 +207,7 @@ class MijiaAPI:
 
         # 操作成功后刷新缓存
         if refresh_cache and self._cache_manager:
-            # 获取设备信息以确定所属家庭
-            device = self._device_service.get_device_by_id(device_id, self._credential)
-            if device:
-                # 刷新该家庭的设备缓存
-                self._cache_manager.invalidate_pattern(
-                    f"{self._credential.user_id}:devices:{device.home_id}"
-                )
+            self._invalidate_device_cache(device_id, home_id)
 
         return result
 
@@ -216,26 +240,42 @@ class MijiaAPI:
             >>> # 批量控制但不刷新缓存（高频操作时使用）
             >>> results = api.batch_control_devices(requests, refresh_cache=False)
         """
-        results = self._device_service.batch_control_devices(requests, self._credential)
+        # 剥离仅用于本地失效缓存的辅助字段，避免透传到米家 API
+        forwarded = [
+            {k: v for k, v in request.items() if k != "home_id"} for request in requests
+        ]
+        results = self._device_service.batch_control_devices(forwarded, self._credential)
 
         # 批量控制成功后刷新缓存
         if refresh_cache and self._cache_manager:
-            # 收集所有涉及的家庭ID
-            home_ids = set()
-            for request in requests:
-                device_id = request.get("device_id")
-                if device_id:
-                    device = self._device_service.get_device_by_id(device_id, self._credential)
-                    if device:
-                        home_ids.add(device.home_id)
-
-            # 刷新所有涉及家庭的缓存
-            for home_id in home_ids:
-                self._cache_manager.invalidate_pattern(
-                    f"{self._credential.user_id}:devices:{home_id}"
-                )
+            self._invalidate_batch_device_cache(requests)
 
         return results
+
+    def _invalidate_batch_device_cache(self, requests: List[Dict[str, Any]]) -> None:
+        """按 request 中携带的 ``home_id`` 精确失效缓存；缺失时才回退到 get_by_id 反查。"""
+        if not self._cache_manager:
+            return
+
+        known_home_ids: set[str] = set()
+        unknown_device_ids: set[str] = set()
+        for request in requests:
+            device_id = request.get("device_id")
+            home_id = request.get("home_id")
+            if home_id:
+                known_home_ids.add(str(home_id))
+            elif device_id:
+                unknown_device_ids.add(str(device_id))
+
+        for device_id in unknown_device_ids:
+            device = self._device_service.get_device_by_id(device_id, self._credential)
+            if device:
+                known_home_ids.add(device.home_id)
+
+        for home_id in known_home_ids:
+            self._cache_manager.invalidate_pattern(
+                f"{self._credential.user_id}:devices:{home_id}"
+            )
 
     def get_scenes(self, home_id: str, owner_uid: Optional[str] = None) -> List[Scene]:
         """获取智能列表
@@ -465,7 +505,13 @@ class AsyncMijiaAPI:
         )
 
     async def control_device(
-        self, device_id: str, siid: int, piid: int, value: Any, refresh_cache: bool = True
+        self,
+        device_id: str,
+        siid: int,
+        piid: int,
+        value: Any,
+        refresh_cache: bool = True,
+        home_id: Optional[str] = None,
     ) -> bool:
         """异步控制设备属性
 
@@ -477,6 +523,7 @@ class AsyncMijiaAPI:
             piid: 属性ID
             value: 属性值
             refresh_cache: 是否在控制后刷新缓存，默认为True
+            home_id: 设备所属家庭 ID（可选）。已知时可跳过按 device_id 反查家庭。
 
         Returns:
             是否成功
@@ -501,16 +548,33 @@ class AsyncMijiaAPI:
 
         # 控制成功后刷新缓存
         if result and refresh_cache and self._cache_manager:
-            device = await asyncio.to_thread(
-                self._device_service.get_device_by_id, device_id, self._credential
-            )
-            if device:
-                await asyncio.to_thread(
-                    self._cache_manager.invalidate_pattern,
-                    f"{self._credential.user_id}:devices:{device.home_id}",
-                )
+            await self._async_invalidate_device_cache(device_id, home_id)
 
         return result
+
+    async def _async_invalidate_device_cache(
+        self, device_id: str, home_id: Optional[str] = None
+    ) -> None:
+        """异步版本的按 device 失效缓存。"""
+        if not self._cache_manager:
+            return
+        import asyncio
+
+        if home_id:
+            await asyncio.to_thread(
+                self._cache_manager.invalidate_pattern,
+                f"{self._credential.user_id}:devices:{home_id}",
+            )
+            return
+
+        device = await asyncio.to_thread(
+            self._device_service.get_device_by_id, device_id, self._credential
+        )
+        if device:
+            await asyncio.to_thread(
+                self._cache_manager.invalidate_pattern,
+                f"{self._credential.user_id}:devices:{device.home_id}",
+            )
 
     async def call_device_action(
         self,
@@ -519,6 +583,7 @@ class AsyncMijiaAPI:
         aiid: int,
         params: Optional[Dict[str, Any]] = None,
         refresh_cache: bool = True,
+        home_id: Optional[str] = None,
     ) -> Any:
         """异步调用设备操作
 
@@ -530,6 +595,7 @@ class AsyncMijiaAPI:
             aiid: 操作ID
             params: 操作参数（可选）
             refresh_cache: 是否在操作后刷新缓存，默认为True
+            home_id: 设备所属家庭 ID（可选）。已知时可跳过按 device_id 反查家庭。
 
         Returns:
             操作结果
@@ -554,14 +620,7 @@ class AsyncMijiaAPI:
 
         # 操作成功后刷新缓存
         if refresh_cache and self._cache_manager:
-            device = await asyncio.to_thread(
-                self._device_service.get_device_by_id, device_id, self._credential
-            )
-            if device:
-                await asyncio.to_thread(
-                    self._cache_manager.invalidate_pattern,
-                    f"{self._credential.user_id}:devices:{device.home_id}",
-                )
+            await self._async_invalidate_device_cache(device_id, home_id)
 
         return result
 
@@ -573,7 +632,8 @@ class AsyncMijiaAPI:
         批量控制设备后默认会刷新缓存，确保下次获取的是最新状态。
 
         Args:
-            requests: 批量请求列表，每个请求包含device_id、siid、piid、value
+            requests: 批量请求列表，每个请求包含device_id、siid、piid、value；
+                可选携带 home_id 以避免二次反查
             refresh_cache: 是否在控制后刷新缓存，默认为True
 
         Returns:
@@ -596,25 +656,34 @@ class AsyncMijiaAPI:
         """
         import asyncio
 
+        # 剥离仅用于本地失效缓存的辅助字段，避免透传到米家 API
+        forwarded = [
+            {k: v for k, v in request.items() if k != "home_id"} for request in requests
+        ]
         results = await asyncio.to_thread(
-            self._device_service.batch_control_devices, requests, self._credential
+            self._device_service.batch_control_devices, forwarded, self._credential
         )
 
         # 批量控制成功后刷新缓存
         if refresh_cache and self._cache_manager:
-            # 收集所有涉及的家庭ID
-            home_ids = set()
+            known_home_ids: set[str] = set()
+            unknown_device_ids: set[str] = set()
             for request in requests:
                 device_id = request.get("device_id")
-                if device_id:
-                    device = await asyncio.to_thread(
-                        self._device_service.get_device_by_id, device_id, self._credential
-                    )
-                    if device:
-                        home_ids.add(device.home_id)
+                home_id = request.get("home_id")
+                if home_id:
+                    known_home_ids.add(str(home_id))
+                elif device_id:
+                    unknown_device_ids.add(str(device_id))
 
-            # 刷新所有涉及家庭的缓存
-            for home_id in home_ids:
+            for device_id in unknown_device_ids:
+                device = await asyncio.to_thread(
+                    self._device_service.get_device_by_id, device_id, self._credential
+                )
+                if device:
+                    known_home_ids.add(device.home_id)
+
+            for home_id in known_home_ids:
                 await asyncio.to_thread(
                     self._cache_manager.invalidate_pattern,
                     f"{self._credential.user_id}:devices:{home_id}",

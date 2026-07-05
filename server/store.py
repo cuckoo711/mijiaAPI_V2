@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -107,12 +109,25 @@ class BootstrapAlreadyCompletedError(Exception):
     """Raised when trying to create the initial admin twice."""
 
 
+CONFIG_MAP_CACHE_TTL = 5.0  # runtime_config 每请求都查一次很浪费；给一个 5 秒的进程内缓存
+# admin session 校验里的 PBKDF2(260k) 单次约 30ms，前端高频轮询会重复消耗；
+# 给一个短 TTL 内的正例缓存，敏感度低于常规密码验证：token 本身已通过熵源保护，
+# 且我们仍会验证 expires_at 是否有效。
+ADMIN_SESSION_CACHE_TTL = 30.0
+
+
 class ServerStore:
     """High-level data operations for the server application."""
 
     def __init__(self, settings: ServerSettings):
         self._settings = settings
         self._database = ServerDatabase(settings)
+        self._config_map_cache: Optional[dict[str, Any]] = None
+        self._config_map_cache_at: float = 0.0
+        self._config_map_lock = threading.Lock()
+        # token → (admin_dict, expires_at_epoch, cached_until_monotonic)
+        self._admin_session_cache: dict[str, tuple[dict[str, Any], float, float]] = {}
+        self._admin_session_cache_lock = threading.Lock()
 
     @property
     def settings(self) -> ServerSettings:
@@ -237,10 +252,27 @@ class ServerStore:
         }
 
     def validate_admin_session(self, token: str) -> dict[str, Any]:
-        """Validate an administrator session token."""
+        """Validate an administrator session token.
 
-        now = utc_now()
+        为避免每个请求都跑一次 PBKDF2，正例结果会在短 TTL 内被缓存；
+        缓存条目仍会检查 session 的 ``expires_at``，过期立即淘汰。
+        """
+
+        now_epoch = utc_now().timestamp()
+        now_mono = time.monotonic()
+
+        cached = self._admin_session_cache.get(token)
+        if cached is not None:
+            admin, session_expires_at, cache_until = cached
+            if now_epoch <= session_expires_at and now_mono <= cache_until:
+                return admin
+            # 缓存过期或 session 到期：主动清理
+            with self._admin_session_cache_lock:
+                if self._admin_session_cache.get(token) is cached:
+                    self._admin_session_cache.pop(token, None)
+
         prefix = secret_prefix(token)
+        now = utc_now()
         with self._database.connect() as conn:
             rows = conn.execute(
                 """
@@ -258,12 +290,31 @@ class ServerStore:
                 expires_at = parse_datetime(row["expires_at"])
                 if expires_at is None or expires_at <= now:
                     raise AuthenticationFailedError("Administrator session expired")
-                return {"id": row["id"], "username": row["username"]}
+                admin = {"id": row["id"], "username": row["username"]}
+                cache_until = time.monotonic() + ADMIN_SESSION_CACHE_TTL
+                with self._admin_session_cache_lock:
+                    self._admin_session_cache[token] = (
+                        admin,
+                        expires_at.timestamp(),
+                        cache_until,
+                    )
+                return admin
 
         raise AuthenticationFailedError("Invalid administrator session")
 
+    def _invalidate_admin_session_cache(self, token: Optional[str] = None) -> None:
+        """使 admin session 缓存条目失效。``token=None`` 清空全部。"""
+        with self._admin_session_cache_lock:
+            if token is None:
+                self._admin_session_cache.clear()
+            else:
+                self._admin_session_cache.pop(token, None)
+
     def refresh_admin_session(self, token: str) -> dict[str, Any]:
         """Extend a valid administrator session and return its new expiry."""
+
+        # session 的 expires_at 会变，先清掉缓存中该 token 的旧条目
+        self._invalidate_admin_session_cache(token)
 
         now = utc_now()
         expires_at = now + timedelta(hours=self._settings.admin_session_hours)
@@ -481,12 +532,36 @@ class ServerStore:
                 """,
                 (key, json.dumps(value, ensure_ascii=False), source, now),
             )
+        # 主动失效缓存，让下一次读取拿到最新值
+        self._invalidate_config_map_cache()
         return {"key": key, "value": value, "source": source, "updated_at": now}
 
     def get_config_map(self) -> dict[str, Any]:
-        """Return runtime configuration as a dictionary."""
+        """Return runtime configuration as a dictionary.
 
-        return {item["key"]: item["value"] for item in self.list_config()}
+        每个 HTTP 请求 middleware 都会调用一次，因此在进程内做一个短 TTL
+        缓存，避免每次都打开 SQLite。``set_config`` 会主动失效缓存。
+        """
+        now = time.monotonic()
+        cached = self._config_map_cache
+        if cached is not None and now - self._config_map_cache_at < CONFIG_MAP_CACHE_TTL:
+            return cached
+
+        with self._config_map_lock:
+            cached = self._config_map_cache
+            if cached is not None and (
+                time.monotonic() - self._config_map_cache_at < CONFIG_MAP_CACHE_TTL
+            ):
+                return cached
+            fresh = {item["key"]: item["value"] for item in self.list_config()}
+            self._config_map_cache = fresh
+            self._config_map_cache_at = time.monotonic()
+            return fresh
+
+    def _invalidate_config_map_cache(self) -> None:
+        with self._config_map_lock:
+            self._config_map_cache = None
+            self._config_map_cache_at = 0.0
 
     def replace_home_registry(self, homes: list[dict[str, Any]]) -> None:
         """Persist synced homes."""
@@ -611,8 +686,15 @@ class ServerStore:
             for row in rows
         ]
 
-    def list_devices(self, include_hidden: bool = False) -> list[dict[str, Any]]:
-        """List locally synced devices."""
+    def list_devices(
+        self, include_hidden: bool = False, include_spec: bool = False
+    ) -> list[dict[str, Any]]:
+        """List locally synced devices.
+
+        默认不返回 ``spec`` 字段（每台设备的 JSON 可能达几十 KB，全量返回
+        时反序列化开销累积可观）。需要 spec 时显式传 ``include_spec=True``
+        或改用 :meth:`get_device` 单点查询。
+        """
 
         where = "" if include_hidden else "WHERE hidden = 0"
         with self._database.connect() as conn:
@@ -621,7 +703,7 @@ class ServerStore:
                 {where}
                 ORDER BY home_id, group_name, COALESCE(alias, name), name
                 """).fetchall()
-        return [self._device_from_row(row) for row in rows]
+        return [self._device_from_row(row, include_spec=include_spec) for row in rows]
 
     def get_device(self, device_slug_or_id: str) -> dict[str, Any]:
         """Get a device by slug, internal id, or original did."""
@@ -636,7 +718,7 @@ class ServerStore:
             ).fetchone()
         if row is None:
             raise KeyError(f"Device not found: {device_slug_or_id}")
-        return self._device_from_row(row)
+        return self._device_from_row(row, include_spec=True)
 
     def update_device(self, device_id: str, updates: dict[str, Any]) -> dict[str, Any]:
         """Update local device presentation and authorization metadata."""
@@ -925,8 +1007,8 @@ class ServerStore:
         except Exception as exc:
             return {"key": "sqlite", "status": "fail", "message": str(exc)}
 
-    def _device_from_row(self, row: Any) -> dict[str, Any]:
-        return {
+    def _device_from_row(self, row: Any, include_spec: bool = True) -> dict[str, Any]:
+        payload = {
             "id": row["id"],
             "did": row["miot_did"],
             "did_masked": self._mask_secret(row["miot_did"]),
@@ -943,9 +1025,13 @@ class ServerStore:
             "access_mode": row["access_mode"],
             "status": row["status"],
             "raw": json.loads(row["raw_json"]),
-            "spec": json.loads(row["spec_json"]) if row["spec_json"] else None,
             "last_synced_at": row["last_synced_at"],
         }
+        if include_spec:
+            payload["spec"] = (
+                json.loads(row["spec_json"]) if row["spec_json"] else None
+            )
+        return payload
 
     def _unique_slug(self, conn: Any, base: str, current_did: str) -> str:
         slug = self._slugify(base)

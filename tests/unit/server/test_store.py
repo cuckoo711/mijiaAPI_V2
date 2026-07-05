@@ -99,6 +99,83 @@ def test_system_checks_include_sqlite_and_admin_state(tmp_path: Path) -> None:
     assert updated_checks["public_base_url"]["message"] == "https://miapi.example.com"
 
 
+def test_validate_admin_session_uses_cache_on_hot_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """连续 validate 同一个 token 时应命中缓存，只在首次做 PBKDF2。"""
+    store = ServerStore(make_settings(tmp_path))
+    store.initialize()
+    store.create_initial_admin("admin", "strong-password")
+    session = store.authenticate_admin("admin", "strong-password")
+
+    # 用 monkeypatch 计数 verify_secret 调用
+    from server import store as store_module
+
+    original_verify = store_module.verify_secret
+    call_count = 0
+
+    def counting_verify(secret: str, stored_hash: str) -> bool:
+        nonlocal call_count
+        call_count += 1
+        return original_verify(secret, stored_hash)
+
+    monkeypatch.setattr(store_module, "verify_secret", counting_verify)
+
+    # 首次：走完整 PBKDF2 校验
+    admin_1 = store.validate_admin_session(session["token"])
+    assert admin_1["username"] == "admin"
+    assert call_count == 1
+
+    # 后续多次：应命中缓存，不再触发 verify
+    for _ in range(5):
+        store.validate_admin_session(session["token"])
+    assert call_count == 1
+
+
+def test_refresh_admin_session_invalidates_session_cache(tmp_path: Path) -> None:
+    """session 续期时旧的缓存条目必须失效，避免拿到过期的 admin dict。"""
+    store = ServerStore(make_settings(tmp_path))
+    store.initialize()
+    store.create_initial_admin("admin", "strong-password")
+    session = store.authenticate_admin("admin", "strong-password")
+
+    # 触发缓存
+    store.validate_admin_session(session["token"])
+    assert session["token"] in store._admin_session_cache  # type: ignore[attr-defined]
+
+    # 续期后该 token 的缓存条目应被清掉
+    store.refresh_admin_session(session["token"])
+    assert session["token"] not in store._admin_session_cache  # type: ignore[attr-defined]
+
+
+def test_get_config_map_caches_within_ttl_and_invalidates_on_set(tmp_path: Path) -> None:
+    """get_config_map 在 TTL 内应复用缓存，set_config 后立即失效。"""
+    store = ServerStore(make_settings(tmp_path))
+    store.initialize()
+
+    # 首次读取（此时空表）
+    first = store.get_config_map()
+    assert first == {}
+
+    # 直接改数据库绕过 set_config，模拟"外部写入"
+    with store._database.connect() as conn:  # type: ignore[attr-defined]
+        conn.execute(
+            "INSERT INTO runtime_config(key, value, source, updated_at) "
+            "VALUES (?, ?, ?, ?)",
+            ("EXTERNAL_KEY", '"v"', "manual", "2026-07-05T00:00:00"),
+        )
+
+    # TTL 内应仍拿到旧的缓存
+    cached = store.get_config_map()
+    assert cached == first
+
+    # 通过 store.set_config 主动写入应触发失效
+    store.set_config("NEW_KEY", "value")
+    updated = store.get_config_map()
+    assert "NEW_KEY" in updated
+    assert "EXTERNAL_KEY" in updated  # 失效后也顺便读到了外部写入
+
+
 def test_initialize_migrates_legacy_admin_sessions_table(tmp_path: Path) -> None:
     """存量数据库缺少 token_prefix 列时，initialize 应先补列再建索引，不应报错。"""
     database_path = tmp_path / "server.sqlite3"

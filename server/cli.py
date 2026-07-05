@@ -76,12 +76,30 @@ def reset_admin_command(args: argparse.Namespace) -> None:
     )
 
 
-def run_command(_args: argparse.Namespace) -> None:
+def run_command(args: argparse.Namespace) -> None:
+    import os
+
     import uvicorn
 
     settings = _settings()
     app = create_app(settings)
-    uvicorn.run(app, host=settings.host, port=settings.port)
+
+    # 默认关闭 uvicorn access log：前端每 500ms 轮询同步进度会淹没控制台，
+    # 且这类日志在 stdio 上是同步阻塞的，Windows 下会明显吃 CPU。
+    # 通过环境变量 MIJIA_SERVER_ACCESS_LOG=1 或 --access-log 显式开启。
+    env_access_log = os.environ.get("MIJIA_SERVER_ACCESS_LOG", "").lower()
+    access_log = getattr(args, "access_log", False) or env_access_log in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    uvicorn.run(
+        app,
+        host=settings.host,
+        port=settings.port,
+        access_log=access_log,
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -94,6 +112,11 @@ def build_parser() -> argparse.ArgumentParser:
     init_parser.set_defaults(func=init_command)
 
     run_parser = subparsers.add_parser("run", help="run the API server")
+    run_parser.add_argument(
+        "--access-log",
+        action="store_true",
+        help="启用 uvicorn access log（默认关闭以避免高频轮询淹没控制台）",
+    )
     run_parser.set_defaults(func=run_command)
 
     check_parser = subparsers.add_parser("check", help="run system checks")

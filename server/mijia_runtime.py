@@ -190,6 +190,10 @@ class MijiaRuntime:
         self._sync_progress: Optional[SyncProgress] = None
         self._refresh_timer: Optional[threading.Timer] = None
         self._refresh_interval = 24 * 60 * 60  # 每 24 小时检查一次
+        # 复用同一个 MijiaAPI，避免每次请求重建 HttpClient / CacheManager 导致 L1 缓存永远失效。
+        self._api_client: Optional[Any] = None
+        self._api_client_credential_id: Optional[str] = None
+        self._api_lock = threading.Lock()
 
     def load_credential(self) -> Optional[Credential]:
         return FileCredentialStore(self._settings.credential_path).load()
@@ -241,6 +245,7 @@ class MijiaRuntime:
 
     def delete_credential(self) -> None:
         FileCredentialStore(self._settings.credential_path).delete()
+        self._invalidate_api_client()
 
     def start_credential_refresh_timer(self) -> None:
         """启动定时刷新凭据的后台任务"""
@@ -434,7 +439,9 @@ class MijiaRuntime:
         device = self._store.get_device(device_slug)
         if device["access_mode"] != "write":
             raise PermissionError("设备未授权控制")
-        success = self._api().control_device(device["did"], siid, piid, value)
+        success = self._api().control_device(
+            device["did"], siid, piid, value, home_id=device.get("home_id")
+        )
         return {"success": bool(success)}
 
     def call_device_action(
@@ -443,7 +450,9 @@ class MijiaRuntime:
         device = self._store.get_device(device_slug)
         if device["access_mode"] != "write":
             raise PermissionError("设备未授权控制")
-        result = self._api().call_device_action(device["did"], siid, aiid, params or {})
+        result = self._api().call_device_action(
+            device["did"], siid, aiid, params or {}, home_id=device.get("home_id")
+        )
         return {"result": result}
 
     def batch_set_properties(self, requests: list[dict[str, Any]]) -> dict[str, Any]:
@@ -455,6 +464,7 @@ class MijiaRuntime:
             api_requests.append(
                 {
                     "device_id": device["did"],
+                    "home_id": device.get("home_id"),
                     "siid": request["siid"],
                     "piid": request["piid"],
                     "value": request["value"],
@@ -504,8 +514,32 @@ class MijiaRuntime:
         return credential
 
     def _api(self) -> Any:
+        """返回共享的 MijiaAPI 实例。
+
+        只在以下情况重建：
+        - 首次调用；
+        - 凭据文件被替换到另一个 ``user_id``。
+        凭据 token 因刷新更新时，直接调用 ``update_credential`` 避免全量重建。
+        """
         credential = self._require_credential()
-        return create_api_client(credential, cache_dir=self._settings.data_dir / "cache")
+
+        with self._api_lock:
+            api = self._api_client
+            if api is not None and self._api_client_credential_id == credential.user_id:
+                # 同一用户：直接更新最新的凭据 token，复用连接池与缓存。
+                api.update_credential(credential)
+                return api
+
+            api = create_api_client(credential, cache_dir=self._settings.data_dir / "cache")
+            self._api_client = api
+            self._api_client_credential_id = credential.user_id
+            return api
+
+    def _invalidate_api_client(self) -> None:
+        """凭据被删除或替换用户时，丢弃当前 MijiaAPI 实例。"""
+        with self._api_lock:
+            self._api_client = None
+            self._api_client_credential_id = None
 
     def _device_dicts(self, api: Any, home: Home) -> list[dict[str, Any]]:
         devices = []

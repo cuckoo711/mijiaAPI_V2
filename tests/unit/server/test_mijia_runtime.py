@@ -236,3 +236,53 @@ def test_sync_progress_cleanup_does_not_clear_new_run(
     # 模拟"第二次任务的 cleanup 线程到点"——task_id 匹配，清空
     runtime._clear_progress_if_task(second_task_id)
     assert runtime.get_sync_progress() is None
+
+
+def test_api_client_is_reused_across_calls(tmp_path: Path, monkeypatch: Any) -> None:
+    """同一用户凭据下，多次调用 _api() 应复用同一个 MijiaAPI，避免重建 HttpClient/L1 缓存。"""
+    settings = make_settings(tmp_path)
+    store = ServerStore(settings)
+    store.initialize()
+    FileCredentialStore(settings.credential_path).save(
+        make_credential("token-a", datetime.now() + timedelta(days=30))
+    )
+
+    class FakeApi:
+        instances: list["FakeApi"] = []
+
+        def __init__(self) -> None:
+            self.updated_with: list[Credential] = []
+            FakeApi.instances.append(self)
+
+        def update_credential(self, credential: Credential) -> None:
+            self.updated_with.append(credential)
+
+    FakeApi.instances = []
+    monkeypatch.setattr(
+        "server.mijia_runtime.create_api_client",
+        lambda credential, **_: FakeApi(),
+    )
+
+    runtime = MijiaRuntime(settings, store)
+    api1 = runtime._api()
+    api2 = runtime._api()
+    assert api1 is api2
+    assert len(FakeApi.instances) == 1
+
+    # 凭据 token 刷新（同一 user_id）应通过 update_credential 复用实例
+    FileCredentialStore(settings.credential_path).save(
+        make_credential("token-b", datetime.now() + timedelta(days=30))
+    )
+    api3 = runtime._api()
+    assert api3 is api1
+    assert len(FakeApi.instances) == 1
+    assert api1.updated_with[-1].service_token == "token-b"
+
+    # 凭据被删除后再次调用应触发重建
+    runtime.delete_credential()
+    FileCredentialStore(settings.credential_path).save(
+        make_credential("token-c", datetime.now() + timedelta(days=30))
+    )
+    api4 = runtime._api()
+    assert api4 is not api1
+    assert len(FakeApi.instances) == 2

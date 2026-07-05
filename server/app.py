@@ -628,10 +628,15 @@ def create_app(  # noqa: C901
     @app.get("/api/admin/devices")
     def admin_devices(
         include_hidden: bool = False,
+        include_spec: bool = False,
         _admin: dict[str, Any] = Depends(require_admin),
         current_store: ServerStore = Depends(get_store),
     ) -> dict[str, Any]:
-        return {"items": current_store.list_devices(include_hidden=include_hidden)}
+        return {
+            "items": current_store.list_devices(
+                include_hidden=include_hidden, include_spec=include_spec
+            )
+        }
 
     @app.patch("/api/admin/devices/{device_id}")
     def admin_update_device(
@@ -712,10 +717,11 @@ def create_app(  # noqa: C901
 
     @app.get("/api/v1/devices")
     def api_devices(
+        include_spec: bool = False,
         api_key: dict[str, Any] = Depends(require_api_key_scope("read:devices")),
         current_store: ServerStore = Depends(get_store),
     ) -> dict[str, Any]:
-        devices = current_store.list_devices()
+        devices = current_store.list_devices(include_spec=include_spec)
         return {
             "items": [device for device in devices if _resource_allowed(api_key, "devices", device)]
         }

@@ -2,6 +2,24 @@
 
 本项目遵循“面向部署和使用者可读”的更新记录。最新变化放在最前面。
 
+## v3.1.2 - 2026-07-05
+
+### 修复（性能）
+
+- **重大**：`MijiaRuntime._api()` 之前每个 HTTP 请求都会重建 `MijiaAPI` 实例（新连接池 + 空 L1 缓存 + 全部仓储 + 服务）。改为进程内缓存，只在凭据被替换到新 `user_id` 时重建；同一用户的凭据刷新走 `update_credential` 复用连接池。控制设备、查询状态等高频路径下 CPU 与网络开销显著下降。
+- 控制设备 / 调用操作时新增可选参数 `home_id`：调用方（如本项目 server 层）已知家庭时直接精确失效缓存，跳过原有"遍历所有家庭 × 全量拉设备列表"的 `get_device_by_id` 反查。批量控制的 `requests` 每项同样支持 `home_id`。
+- `ServerStore.get_config_map` 每个 HTTP 请求都被 middleware 调用一次，之前每次都打开 SQLite + JSON 解析。加进程内 5 秒 TTL 缓存；`set_config` 会主动失效。
+- `ServerStore.validate_admin_session` 之前每次都走 PBKDF2 260k 轮（约 30ms）。加进程内 30 秒 TTL 的正例缓存；session 续期时同步失效对应条目。
+- SQLite 每次 `connect()` 都执行的 `PRAGMA journal_mode = WAL` 是持久化设置，改为只在 `initialize()` 时执行一次。
+- `ServerStore.list_devices` 默认不再反序列化 `spec_json`（单个 spec 可能几十 KB × 上百台设备，`/api/admin/devices`、`/api/v1/devices` 每次刷新都产生几 MB JSON 反序列化）。需要时调用方显式传 `include_spec=True`，或改用 `get_device` 单点查询。API 路由暴露 `?include_spec=1` 查询参数。
+- `uvicorn` `access_log` 默认关闭：前端同步期间每 500ms 轮询会淹没控制台，Windows 下 stdio 是同步阻塞的。可通过 `--access-log` 或环境变量 `MIJIA_SERVER_ACCESS_LOG=1` 显式启用。
+
+### 内部改动
+
+- `MijiaRuntime` 新增 `_invalidate_api_client()`：凭据被删除时同步丢弃缓存的 API 实例。
+- `AsyncMijiaAPI.control_device` / `call_device_action` / `batch_control_devices` 补齐 `home_id` 支持，行为对齐同步版本。
+- `MijiaAPI._invalidate_device_cache` / `_invalidate_batch_device_cache` 抽出，同步与异步版本共享失效策略。
+
 ## v3.1.1 - 2026-07-05
 
 ### 修复

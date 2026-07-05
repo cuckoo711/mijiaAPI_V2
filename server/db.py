@@ -156,13 +156,17 @@ class ServerDatabase:
 
     @contextmanager
     def connect(self) -> Iterator[sqlite3.Connection]:
-        """Open a configured SQLite connection."""
+        """Open a configured SQLite connection.
+
+        ``foreign_keys`` 是 per-connection 设置，需要每次打开都设。
+        ``journal_mode = WAL`` 是持久化的库级设置，只在 :meth:`initialize`
+        里设置一次即可，避免每次连接都产生一次 header 写入。
+        """
 
         self._settings.ensure_directories()
         conn = sqlite3.connect(self._settings.database_path)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
-        conn.execute("PRAGMA journal_mode = WAL")
         try:
             yield conn
             conn.commit()
@@ -176,6 +180,8 @@ class ServerDatabase:
         """Create all first-version tables if they do not exist."""
 
         with self.connect() as conn:
+            # journal_mode 是持久化设置，一次即可
+            conn.execute("PRAGMA journal_mode = WAL")
             for statement in SCHEMA_STATEMENTS:
                 conn.execute(statement)
             self._ensure_columns(conn)
