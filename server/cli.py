@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import getpass
 import json
+from pathlib import Path
 from typing import Any
 
 from server.app import create_app
@@ -120,18 +121,81 @@ def purge_audit_command(args: argparse.Namespace) -> None:
 
 
 def write_config_command(args: argparse.Namespace) -> None:
-    """Create configs/server.toml from the template if missing (or force overwrite)."""
-
     settings = _settings()
-    target = args.output or settings.config_file_path
+    output = args.output or settings.config_file_path
+    if output.exists() and not args.force:
+        raise SystemExit(f"config already exists: {output} (pass --force to overwrite)")
     template = settings.config_template_path
     if not template.exists():
-        raise SystemExit(f"Template not found: {template}")
-    if target.exists() and not args.force:
-        raise SystemExit(f"Config already exists: {target} (use --force to overwrite)")
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(template.read_text(encoding="utf-8"), encoding="utf-8")
-    _print_json({"written": str(target), "from": str(template)})
+        # Fall back to bundled template next to default path
+        template = Path("configs/server.toml.template")
+    if not template.exists():
+        raise SystemExit(f"template not found: {template}")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(template.read_text(encoding="utf-8"), encoding="utf-8")
+    _print_json({"written": str(output), "from": str(template)})
+
+
+def _dir_size_bytes(path: Path) -> int:
+    if not path.exists():
+        return 0
+    if path.is_file():
+        return path.stat().st_size
+    total = 0
+    for child in path.rglob("*"):
+        if child.is_file():
+            try:
+                total += child.stat().st_size
+            except OSError:
+                pass
+    return total
+
+
+def status_command(_args: argparse.Namespace) -> None:
+    """Print a compact footprint / readiness snapshot for operators."""
+
+    import mijiaAPI_V2
+
+    settings = _settings()
+    cache_dir = settings.data_dir / "cache"
+    payload = {
+        "version": mijiaAPI_V2.__version__,
+        "host": settings.host,
+        "port": settings.port,
+        "data_dir": str(settings.data_dir),
+        "database_path": str(settings.database_path),
+        "database_bytes": _dir_size_bytes(settings.database_path),
+        "cache_dir": str(cache_dir),
+        "cache_bytes": _dir_size_bytes(cache_dir),
+        "cache_files": (
+            sum(1 for p in cache_dir.iterdir() if p.is_file()) if cache_dir.is_dir() else 0
+        ),
+        "credential_exists": settings.credential_path.exists(),
+        "web_dist_exists": (settings.web_dist_dir / "index.html").exists(),
+        "legacy_mijia_dir_exists": Path(".mijia").exists(),
+    }
+    _print_json(payload)
+
+
+def purge_cache_command(args: argparse.Namespace) -> None:
+    """Purge expired (or all) on-disk SDK cache files under data_dir/cache."""
+
+    from mijiaAPI_V2.infrastructure.cache_manager import CacheManager
+
+    settings = _settings()
+    cache_dir = settings.data_dir / "cache"
+    manager = CacheManager(cache_dir=cache_dir)
+    if args.all:
+        removed = 0
+        if cache_dir.is_dir():
+            for path in cache_dir.iterdir():
+                if path.is_file():
+                    path.unlink(missing_ok=True)
+                    removed += 1
+        _print_json({"cache_dir": str(cache_dir), "removed": removed, "mode": "all"})
+        return
+    removed = manager.purge_expired_files()
+    _print_json({"cache_dir": str(cache_dir), "removed": removed, "mode": "expired"})
 
 
 def run_command(args: argparse.Namespace) -> None:
@@ -212,6 +276,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="overwrite existing config file",
     )
     config_parser.set_defaults(func=write_config_command)
+
+    status_parser = subparsers.add_parser(
+        "status", help="show version, paths, and on-disk footprint"
+    )
+    status_parser.set_defaults(func=status_command)
+
+    cache_parser = subparsers.add_parser(
+        "purge-cache", help="purge expired (or all) SDK disk cache files"
+    )
+    cache_parser.add_argument(
+        "--all",
+        action="store_true",
+        help="delete every file under data_dir/cache (not only expired)",
+    )
+    cache_parser.set_defaults(func=purge_cache_command)
 
     return parser
 
