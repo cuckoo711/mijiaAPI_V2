@@ -93,7 +93,12 @@ class AdminAuthMixin:
         try:
             self.purge_expired_sessions()
         except Exception:
-            pass
+            from server.logging_utils import get_server_logger
+
+            get_server_logger(__name__).warning(
+                "purge_expired_sessions during login failed",
+                exc_info=True,
+            )
         with self._database.connect() as conn:
             conn.execute(
                 """

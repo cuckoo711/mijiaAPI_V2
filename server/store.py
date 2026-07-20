@@ -163,7 +163,12 @@ class ServerStore(AdminAuthMixin, ApiKeyMixin, RegistryMixin):
         try:
             self.purge_expired_audit()
         except Exception:
-            pass
+            from server.logging_utils import get_server_logger
+
+            get_server_logger(__name__).warning(
+                "purge_expired_audit during initialize failed",
+                exc_info=True,
+            )
 
     def purge_expired_sessions(self) -> int:
         """Delete admin sessions whose ``expires_at`` has already passed."""
