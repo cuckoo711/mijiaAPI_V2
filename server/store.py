@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 import uuid
@@ -67,6 +68,14 @@ SYSTEM_CHECK_METADATA: dict[str, dict[str, str]] = {
         "label": "交互式 API 文档",
         "description": "显示 Swagger UI 与 ReDoc 文档页面当前是否启用。",
     },
+    "allow_public_access": {
+        "label": "公网请求许可",
+        "description": "确认是否已开启允许公网来源访问 API，避免无意暴露服务。",
+    },
+    "credential_file_permissions": {
+        "label": "凭据文件权限",
+        "description": "确认米家凭据文件权限未对同组/其他用户开放读取。",
+    },
 }
 
 
@@ -122,6 +131,7 @@ CONFIG_MAP_CACHE_TTL = 5.0  # runtime_config 每请求都查一次很浪费；�
 # 给一个短 TTL 内的正例缓存，敏感度低于常规密码验证：token 本身已通过熵源保护，
 # 且我们仍会验证 expires_at 是否有效。
 ADMIN_SESSION_CACHE_TTL = 30.0
+API_KEY_CACHE_TTL = 30.0
 
 
 class ServerStore:
@@ -136,6 +146,9 @@ class ServerStore:
         # token → (admin_dict, expires_at_epoch, cached_until_monotonic)
         self._admin_session_cache: dict[str, tuple[dict[str, Any], float, float]] = {}
         self._admin_session_cache_lock = threading.Lock()
+        # raw_api_key → (record_dict, cached_until_monotonic, last_usage_write_monotonic)
+        self._api_key_cache: dict[str, tuple[dict[str, Any], float, float]] = {}
+        self._api_key_cache_lock = threading.Lock()
 
     @property
     def settings(self) -> ServerSettings:
@@ -148,6 +161,10 @@ class ServerStore:
 
         self._database.initialize()
         self.purge_expired_sessions()
+        try:
+            self.purge_expired_audit()
+        except Exception:
+            pass
 
     def purge_expired_sessions(self) -> int:
         """Delete admin sessions whose ``expires_at`` has already passed."""
@@ -156,6 +173,22 @@ class ServerStore:
             cursor = conn.execute(
                 "DELETE FROM admin_sessions WHERE expires_at < ?",
                 (isoformat(utc_now()),),
+            )
+            return int(cursor.rowcount)
+
+    def purge_expired_audit(self, retention_days: Optional[int] = None) -> int:
+        """Delete audit rows older than the retention window."""
+
+        days = (
+            self._settings.audit_retention_days
+            if retention_days is None
+            else max(0, int(retention_days))
+        )
+        cutoff = utc_now() - timedelta(days=days)
+        with self._database.connect() as conn:
+            cursor = conn.execute(
+                "DELETE FROM audit_log WHERE occurred_at < ?",
+                (isoformat(cutoff),),
             )
             return int(cursor.rowcount)
 
@@ -582,6 +615,34 @@ class ServerStore:
         """Validate an API key and optionally require a scope."""
 
         now = utc_now()
+        now_mono = time.monotonic()
+        cached = self._api_key_cache.get(key)
+        if cached is not None:
+            record, cache_until, last_write = cached
+            if now_mono <= cache_until:
+                expires_at = record.get("expires_at_dt")
+                if expires_at and expires_at <= now:
+                    self._invalidate_api_key_cache(key=key)
+                    raise AuthenticationFailedError("API key expired")
+                if required_scope and required_scope not in record["scopes"]:
+                    raise AuthenticationFailedError("API key does not have required scope")
+                if now_mono - last_write >= API_KEY_CACHE_TTL:
+                    self._touch_api_key_usage(record["id"], source_ip, now)
+                    with self._api_key_cache_lock:
+                        current = self._api_key_cache.get(key)
+                        if current is not None:
+                            self._api_key_cache[key] = (current[0], current[1], now_mono)
+                return {
+                    "id": record["id"],
+                    "name": record["name"],
+                    "key_prefix": record["key_prefix"],
+                    "scopes": record["scopes"],
+                    "resource_policy": record["resource_policy"],
+                }
+            with self._api_key_cache_lock:
+                if self._api_key_cache.get(key) is cached:
+                    self._api_key_cache.pop(key, None)
+
         prefix = secret_prefix(key)
         with self._database.connect() as conn:
             row = conn.execute(
@@ -607,14 +668,55 @@ class ServerStore:
                 """,
                 (isoformat(now), source_ip, row["id"]),
             )
+            record = {
+                "id": row["id"],
+                "name": row["name"],
+                "key_prefix": row["key_prefix"],
+                "scopes": scopes,
+                "resource_policy": json.loads(row["resource_policy_json"]),
+                "expires_at_dt": expires_at,
+            }
 
+        with self._api_key_cache_lock:
+            self._api_key_cache[key] = (record, now_mono + API_KEY_CACHE_TTL, now_mono)
         return {
-            "id": row["id"],
-            "name": row["name"],
-            "key_prefix": row["key_prefix"],
-            "scopes": scopes,
-            "resource_policy": json.loads(row["resource_policy_json"]),
+            "id": record["id"],
+            "name": record["name"],
+            "key_prefix": record["key_prefix"],
+            "scopes": record["scopes"],
+            "resource_policy": record["resource_policy"],
         }
+
+    def _touch_api_key_usage(
+        self, key_id: str, source_ip: Optional[str], now: datetime
+    ) -> None:
+        with self._database.connect() as conn:
+            conn.execute(
+                """
+                UPDATE api_keys
+                SET last_used_at = ?, last_used_ip = ?, use_count = use_count + 1
+                WHERE id = ?
+                """,
+                (isoformat(now), source_ip, key_id),
+            )
+
+    def _invalidate_api_key_cache(
+        self, *, key: Optional[str] = None, key_id: Optional[str] = None
+    ) -> None:
+        with self._api_key_cache_lock:
+            if key is not None:
+                self._api_key_cache.pop(key, None)
+                return
+            if key_id is None:
+                self._api_key_cache.clear()
+                return
+            stale = [
+                cached_key
+                for cached_key, (record, _, _) in self._api_key_cache.items()
+                if record.get("id") == key_id
+            ]
+            for cached_key in stale:
+                self._api_key_cache.pop(cached_key, None)
 
     def update_api_key_status(self, key_id: str, is_active: bool) -> dict[str, Any]:
         """Enable or disable an API key."""
@@ -635,6 +737,7 @@ class ServerStore:
             ).fetchone()
         if row is None:
             raise KeyError(f"API key not found: {key_id}")
+        self._invalidate_api_key_cache(key_id=key_id)
         return {
             "id": row["id"],
             "name": row["name"],
@@ -654,6 +757,7 @@ class ServerStore:
 
         with self._database.connect() as conn:
             conn.execute("DELETE FROM api_keys WHERE id = ?", (key_id,))
+        self._invalidate_api_key_cache(key_id=key_id)
 
     def list_config(self) -> list[dict[str, Any]]:
         """List runtime configuration values."""
@@ -1149,7 +1253,50 @@ class ServerStore:
                 "message": "enabled" if openapi_enabled else "disabled",
             }
         )
+        checks.append(self._check_allow_public_access(config_map))
+        credential_permissions_check = self._check_credential_file_permissions(
+            self._settings.credential_path
+        )
+        if credential_permissions_check is not None:
+            checks.append(credential_permissions_check)
         return [self._with_check_metadata(check) for check in checks]
+
+    def _check_allow_public_access(self, config_map: dict[str, Any]) -> dict[str, Any]:
+        enabled = runtime_config_bool(config_map, "ALLOW_PUBLIC_ACCESS")
+        return {
+            "key": "allow_public_access",
+            "status": "warn" if enabled else "pass",
+            "message": (
+                "Public access is enabled; ensure this is intentional"
+                if enabled
+                else "Public access is disabled"
+            ),
+        }
+
+    def _check_credential_file_permissions(self, path: Path) -> Optional[dict[str, Any]]:
+        """检查凭据文件权限是否对同组/其他用户过度开放（仅 POSIX 系统）。"""
+
+        if os.name != "posix" or not path.exists():
+            return None
+        try:
+            mode = path.stat().st_mode
+        except OSError as exc:
+            return {
+                "key": "credential_file_permissions",
+                "status": "fail",
+                "message": str(exc),
+            }
+        if mode & 0o077:
+            return {
+                "key": "credential_file_permissions",
+                "status": "warn",
+                "message": f"Credential file permissions are too open ({oct(mode & 0o777)})",
+            }
+        return {
+            "key": "credential_file_permissions",
+            "status": "pass",
+            "message": f"Credential file permissions are restrictive ({oct(mode & 0o777)})",
+        }
 
     def _with_check_metadata(self, check: dict[str, Any]) -> dict[str, Any]:
         metadata = SYSTEM_CHECK_METADATA.get(

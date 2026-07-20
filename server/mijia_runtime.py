@@ -283,11 +283,12 @@ class MijiaRuntime:
             credential = self.load_credential()
             if credential is None:
                 return
-            # 如果凭据即将过期（剩余时间 < 48小时），自动刷新
-            if credential.is_valid() and credential.expires_in() < 48 * 60 * 60:
+            threshold = self._settings.credential_refresh_before_seconds
+            if credential.is_valid() and credential.expires_in() < threshold:
                 self._refresh_credential(credential)
         except Exception:
-            pass  # 静默处理，不影响服务
+            # 定时任务失败不应拖垮主进程，但要留下可观测线索
+            print("credential refresh job failed", flush=True)
         finally:
             # 重新启动定时器
             self.start_credential_refresh_timer()

@@ -1869,7 +1869,7 @@ onBeforeUnmount(() => {
                   </div>
                 </div>
                 <el-switch
-                  :model-value="configBool('TRUST_PROXY_HEADERS', true)"
+                  :model-value="configBool('TRUST_PROXY_HEADERS')"
                   active-text="开启"
                   inactive-text="关闭"
                   inline-prompt

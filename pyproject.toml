@@ -1,6 +1,6 @@
 [project]
 name = "mijia-api"
-version = "3.3.0"
+version = "3.4.0"
 description = "米家智能家居Python SDK - 重构版本"
 authors = [
     {name = "MijiaAPI Contributors"}
@@ -68,7 +68,6 @@ docs = [
 ]
 
 [project.scripts]
-mijia = "mijiaAPI_V2.cli:main"
 mijia-server = "server.cli:main"
 
 [build-system]
@@ -165,6 +164,7 @@ addopts = [
     "--strict-markers",
     "--tb=short",
     "--cov=mijiaAPI_V2",
+    "--cov=server",
     "--cov-report=term-missing",
     "--cov-report=html",
 ]
@@ -178,7 +178,7 @@ markers = [
 asyncio_mode = "auto"
 
 [tool.coverage.run]
-source = ["mijiaAPI_V2"]
+source = ["mijiaAPI_V2", "server"]
 omit = [
     "*/tests/*",
     "*/__pycache__/*",

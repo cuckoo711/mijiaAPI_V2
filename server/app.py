@@ -229,7 +229,7 @@ def _forwarded_client_host(request: Request) -> str:
 
 def _request_source_host(request: Request, config: dict[str, Any]) -> str:
     direct_host = request.client.host if request.client else ""
-    if not _config_bool(config, "TRUST_PROXY_HEADERS", default=True):
+    if not _config_bool(config, "TRUST_PROXY_HEADERS", default=False):
         return direct_host
     trusted_cidrs = _config_string_list(
         config,
@@ -254,10 +254,15 @@ def _request_network_allowed(host: str, config: dict[str, Any]) -> bool:
     return _config_bool(config, "ALLOW_PUBLIC_ACCESS")
 
 
+def _is_loopback_host(host: str) -> bool:
+    address = _parse_ip(host)
+    return bool(address and address.is_loopback)
+
+
 def _network_policy_required(path: str) -> bool:
-    if path == OPENAPI_JSON_ROUTE:
-        return False
-    return path == "/healthz" or path == "/api/v1" or path.startswith("/api/v1/")
+    """Apply source-IP policy to the whole surface (admin, docs, SPA, API)."""
+
+    return True
 
 
 def _docs_route_disabled(path: str, config: dict[str, Any]) -> bool:
@@ -271,6 +276,31 @@ def _docs_route_disabled(path: str, config: dict[str, Any]) -> bool:
     return False
 
 
+def _is_docs_or_openapi_path(path: str) -> bool:
+    normalized_path = path.rstrip("/") or "/"
+    return normalized_path in DOCS_ROUTES or normalized_path == OPENAPI_JSON_ROUTE
+
+
+def _authorization_has_docs_access(authorization: Optional[str], store: ServerStore) -> bool:
+    """Allow docs/OpenAPI only with a valid admin session or API key."""
+
+    if not authorization or not authorization.startswith("Bearer "):
+        return False
+    token = authorization.removeprefix("Bearer ").strip()
+    if not token:
+        return False
+    try:
+        store.validate_admin_session(token)
+        return True
+    except AuthenticationFailedError:
+        pass
+    try:
+        store.validate_api_key(token)
+        return True
+    except AuthenticationFailedError:
+        return False
+
+
 def create_app(  # noqa: C901
     settings: Optional[ServerSettings] = None,
     store: Optional[ServerStore] = None,
@@ -279,6 +309,7 @@ def create_app(  # noqa: C901
 
     resolved_settings = settings or ServerSettings.from_env()
     resolved_settings.ensure_directories()
+    resolved_settings.apply_log_level()
     resolved_store = store or ServerStore(resolved_settings)
     resolved_store.initialize()
 
@@ -287,7 +318,8 @@ def create_app(  # noqa: C901
         runtime: MijiaRuntime = app.state.runtime
         runtime.start_credential_refresh_timer()
 
-        # 启动配置文件监控
+        # 监控 configs/server.toml：仅日志级别可以安全热更新，host/port/存储路径
+        # 等字段已经用于监听端口和已打开的数据库连接，修改后必须重启进程。
         from server.config_watcher import ConfigWatcher
 
         config_file = resolved_settings.config_file_path
@@ -384,8 +416,24 @@ def create_app(  # noqa: C901
                 "当前访问来源未被允许，请在系统安全中开启局域网或公网访问",
                 request_id,
             )
+        if _is_docs_or_openapi_path(request.url.path):
+            authorization = request.headers.get("Authorization")
+            if not _authorization_has_docs_access(authorization, resolved_store):
+                return _json_error(
+                    status.HTTP_401_UNAUTHORIZED,
+                    "DOCS_AUTH_REQUIRED",
+                    "查看 API 文档需要管理员会话或有效 API Key",
+                    request_id,
+                )
         response = await call_next(request)
         response.headers["X-Request-ID"] = request_id
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("Referrer-Policy", "no-referrer")
+        response.headers.setdefault(
+            "Content-Security-Policy",
+            "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'",
+        )
         return response
 
     def get_store() -> ServerStore:
@@ -466,9 +514,19 @@ def create_app(  # noqa: C901
 
     @app.post("/api/admin/bootstrap/admin", status_code=status.HTTP_201_CREATED)
     def create_initial_admin(
+        request: Request,
         payload: CreateAdminRequest,
         current_store: ServerStore = Depends(get_store),
     ) -> dict[str, Any]:
+        source_ip = getattr(request.state, "source_ip", "") or ""
+        if not _is_loopback_host(source_ip):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "code": "BOOTSTRAP_LOCAL_ONLY",
+                    "message": "首次创建管理员仅允许本机回环地址访问",
+                },
+            )
         try:
             return current_store.create_initial_admin(payload.username, payload.password)
         except BootstrapAlreadyCompletedError as exc:
@@ -969,8 +1027,24 @@ def create_app(  # noqa: C901
 
 
 def _on_config_changed(path: Path, app: FastAPI) -> None:
-    """配置文件变化回调"""
-    print(f"配置文件已更新: {path}")
+    """配置文件变化回调。
+
+    只有日志级别可以安全地热更新；``host``/``port``/存储路径等字段已经用于
+    已监听的端口和已打开的数据库连接，这里只提醒需要重启，不做任何处理。
+    """
+    settings: ServerSettings = app.state.settings
+    restart_required, log_level_changed = settings.reload_from_toml(path)
+
+    if log_level_changed:
+        print(f"配置文件已更新: {path}（日志级别已热更新为 {settings.log_level}）")
+    else:
+        print(f"配置文件已更新: {path}")
+
+    if restart_required:
+        print(
+            "以下配置项已在 "
+            f"{path} 中修改，但需要重启服务才能生效: {', '.join(restart_required)}"
+        )
 
 
 def _mount_frontend(app: FastAPI, web_dist_dir: Path) -> None:

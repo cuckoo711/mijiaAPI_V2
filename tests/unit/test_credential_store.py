@@ -156,19 +156,34 @@ def test_find_project_root() -> None:
     assert store._default_path.name == "credential.json"
 
 
-def test_credential_json_format(temp_dir: Path, credential: Credential) -> None:
-    """测试凭据JSON格式"""
+def test_credential_encrypted_on_disk(temp_dir: Path, credential: Credential) -> None:
+    """测试凭据以密文落盘，磁盘上不含明文 token"""
     store = FileCredentialStore(default_path=temp_dir / "credential.json")
-
-    # 保存凭据
     store.save(credential)
 
-    # 读取JSON文件
     with open(temp_dir / "credential.json", "r", encoding="utf-8") as f:
         data = json.load(f)
 
-    # 验证JSON格式
-    assert "user_id" in data
-    assert "service_token" in data
-    assert "ssecurity" in data
-    assert data["user_id"] == credential.user_id
+    assert data.get("alg") == "aes-256-gcm"
+    assert "ciphertext" in data
+    assert "service_token" not in data
+    assert credential.service_token not in json.dumps(data)
+    assert (temp_dir / ".credential_key").exists()
+
+    loaded = store.load()
+    assert loaded is not None
+    assert loaded.service_token == credential.service_token
+
+
+def test_load_legacy_plaintext_credential(temp_dir: Path, credential: Credential) -> None:
+    """旧版明文 JSON 仍可加载"""
+    path = temp_dir / "credential.json"
+    path.write_text(
+        json.dumps(credential.to_dict(), ensure_ascii=False, default=str),
+        encoding="utf-8",
+    )
+    store = FileCredentialStore(default_path=path)
+    loaded = store.load()
+    assert loaded is not None
+    assert loaded.user_id == credential.user_id
+    assert loaded.service_token == credential.service_token

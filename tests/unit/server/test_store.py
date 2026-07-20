@@ -1,5 +1,6 @@
 """Tests for server-local storage and security behavior."""
 
+import os
 import sqlite3
 from pathlib import Path
 
@@ -118,6 +119,39 @@ def test_api_key_scope_is_enforced(tmp_path: Path) -> None:
         store.validate_api_key(created["key"], required_scope="write:devices")
 
 
+def test_api_key_validation_uses_positive_cache(tmp_path: Path) -> None:
+    store = ServerStore(make_settings(tmp_path))
+    store.initialize()
+    created = store.create_api_key("cached", ["read:status"])
+
+    first = store.validate_api_key(created["key"], required_scope="read:status")
+    second = store.validate_api_key(created["key"], required_scope="read:status")
+    assert first["id"] == second["id"]
+    assert created["key"] in store._api_key_cache
+
+    store.update_api_key_status(created["id"], False)
+    with pytest.raises(AuthenticationFailedError):
+        store.validate_api_key(created["key"], required_scope="read:status")
+
+
+def test_purge_expired_audit(tmp_path: Path) -> None:
+    store = ServerStore(make_settings(tmp_path))
+    store.initialize()
+    store.add_audit("old.event", "success")
+    with store._database.connect() as conn:
+        conn.execute(
+            "UPDATE audit_log SET occurred_at = ?",
+            ("2000-01-01T00:00:00+00:00",),
+        )
+    store.add_audit("new.event", "success")
+
+    deleted = store.purge_expired_audit(retention_days=30)
+    assert deleted >= 1
+    remaining = store.list_audit(limit=50)
+    assert any(item["action"] == "new.event" for item in remaining)
+    assert all(item["action"] != "old.event" for item in remaining)
+
+
 def test_system_checks_include_sqlite_and_admin_state(tmp_path: Path) -> None:
     store = ServerStore(make_settings(tmp_path))
     store.initialize()
@@ -135,16 +169,38 @@ def test_system_checks_include_sqlite_and_admin_state(tmp_path: Path) -> None:
     assert checks["openapi_enabled"]["message"] == "disabled"
     assert checks["public_base_url"]["status"] == "warn"
     assert checks["public_base_url"]["message"] == "PUBLIC_BASE_URL is not configured"
+    assert checks["allow_public_access"]["status"] == "pass"
+    assert checks["allow_public_access"]["label"] == "公网请求许可"
+    # 未创建凭据文件时不应出现该检查项
+    assert "credential_file_permissions" not in checks
 
     store.set_config("DOCS_ENABLED", True)
     store.set_config("OPENAPI_ENABLED", True)
     store.set_config("PUBLIC_BASE_URL", "https://miapi.example.com")
+    store.set_config("ALLOW_PUBLIC_ACCESS", True)
     updated_checks = {item["key"]: item for item in store.system_checks()}
 
     assert updated_checks["docs_enabled"]["message"] == "enabled"
     assert updated_checks["openapi_enabled"]["message"] == "enabled"
     assert updated_checks["public_base_url"]["status"] == "pass"
     assert updated_checks["public_base_url"]["message"] == "https://miapi.example.com"
+    assert updated_checks["allow_public_access"]["status"] == "warn"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="File mode bits are POSIX-specific")
+def test_system_checks_flag_overly_open_credential_file(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    store = ServerStore(settings)
+    store.initialize()
+
+    settings.credential_path.write_text("{}", encoding="utf-8")
+    settings.credential_path.chmod(0o644)
+    open_checks = {item["key"]: item for item in store.system_checks()}
+    assert open_checks["credential_file_permissions"]["status"] == "warn"
+
+    settings.credential_path.chmod(0o600)
+    secure_checks = {item["key"]: item for item in store.system_checks()}
+    assert secure_checks["credential_file_permissions"]["status"] == "pass"
 
 
 def test_validate_admin_session_uses_cache_on_hot_path(
