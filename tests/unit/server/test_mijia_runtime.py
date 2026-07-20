@@ -221,6 +221,8 @@ def test_sync_progress_cleanup_does_not_clear_new_run(
     )
 
     runtime = MijiaRuntime(settings, store)
+    # 避免后台 5s 清理线程在断言前抢先清空 progress（整仓跑测时偶发）
+    runtime._progress_cleanup_delay_seconds = 3600.0
 
     # 第一次 sync 完成
     runtime.sync_all()

@@ -1,4 +1,3 @@
-import { ElMessage } from "element-plus";
 import { computed, ref } from "vue";
 
 export type AdminSessionPayload = {

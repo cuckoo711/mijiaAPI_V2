@@ -215,6 +215,7 @@ class MijiaRuntime:
         self._credential_lock = threading.RLock()
         self._sync_lock = threading.Lock()
         self._sync_progress: Optional[SyncProgress] = None
+        self._progress_cleanup_delay_seconds = 5.0
         self._refresh_timer: Optional[threading.Timer] = None
         self._refresh_interval = 24 * 60 * 60  # 每 24 小时检查一次
         # 复用同一个 MijiaAPI，避免每次请求重建 HttpClient / CacheManager 导致 L1 缓存永远失效。
@@ -234,11 +235,12 @@ class MijiaRuntime:
         expires_in_hours = expires_in_seconds / 3600
         expires_in_days = expires_in_hours / 24
         
-        # 判断状态
+        # 判断状态：与定时刷新阈值对齐，避免 UI「即将过期」与后台刷新旋钮不一致
+        refresh_before = self._settings.credential_refresh_before_seconds
         if not credential.is_valid():
             status = "expired"
             status_text = "已过期，请重新登录"
-        elif expires_in_hours < 48:
+        elif expires_in_seconds < refresh_before:
             status = "expiring_soon"
             status_text = f"即将过期（剩余 {expires_in_days:.1f} 天）"
         else:
@@ -441,7 +443,7 @@ class MijiaRuntime:
             def cleanup_progress() -> None:
                 import time
 
-                time.sleep(5)  # 5 seconds delay
+                time.sleep(self._progress_cleanup_delay_seconds)
                 self._clear_progress_if_task(task_id)
 
             threading.Thread(target=cleanup_progress, daemon=True).start()

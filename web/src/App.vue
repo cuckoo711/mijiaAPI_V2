@@ -10,7 +10,6 @@ import {
   Setting,
   Tickets,
 } from "@element-plus/icons-vue";
-import { ElMessage } from "element-plus";
 import type { Component } from "vue";
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { normalizeApiBaseUrl } from "./apiExamples";
