@@ -6,11 +6,18 @@ import os
 from ipaddress import ip_address
 from typing import Annotated, Any, Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field
 
 import mijiaAPI_V2
-from server.deps import extract_bearer_token, get_store
+from server.admin_session_cookie import (
+    admin_session_max_age_seconds,
+    clear_admin_session_cookie,
+    read_admin_session_token,
+    request_is_https,
+    set_admin_session_cookie,
+)
+from server.deps import extract_admin_session_token, get_store
 from server.rate_limit import ADMIN_AUTH_RATE_LIMITER
 from server.store import (
     AdminNotFoundError,
@@ -58,6 +65,24 @@ def _bootstrap_source_allowed(host: str) -> bool:
         "on",
     }
     return bool(allow_private and (address.is_private or address.is_link_local))
+
+
+def _cookie_secure(request: Request, current_store: ServerStore) -> bool:
+    return request_is_https(request, current_store.get_config_map())
+
+
+def _attach_admin_session_cookie(
+    request: Request,
+    response: Response,
+    current_store: ServerStore,
+    session: dict[str, Any],
+) -> None:
+    set_admin_session_cookie(
+        response,
+        str(session["token"]),
+        max_age=admin_session_max_age_seconds(current_store.settings.admin_session_hours),
+        secure=_cookie_secure(request, current_store),
+    )
 
 
 router = APIRouter(tags=["admin-auth"])
@@ -110,6 +135,7 @@ def create_initial_admin(
 def admin_login(
     request: Request,
     payload: LoginRequest,
+    response: Response,
     current_store: ServerStore = Depends(get_store),
 ) -> dict[str, Any]:
     source_ip = getattr(request.state, "source_ip", "") or "unknown"
@@ -124,36 +150,58 @@ def admin_login(
             headers={"Retry-After": str(limit.retry_after_seconds)},
         )
     try:
-        return current_store.authenticate_admin(payload.username, payload.password)
+        session = current_store.authenticate_admin(payload.username, payload.password)
     except AuthenticationFailedError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={"code": "ADMIN_AUTH_FAILED", "message": str(exc)},
         ) from exc
+    _attach_admin_session_cookie(request, response, current_store, session)
+    return session
+
+
+@router.post("/api/admin/auth/logout")
+def admin_logout(
+    request: Request,
+    response: Response,
+    authorization: Annotated[Optional[str], Header()] = None,
+    current_store: ServerStore = Depends(get_store),
+) -> dict[str, Any]:
+    token = read_admin_session_token(request, authorization)
+    if token:
+        current_store.revoke_admin_session(token)
+    clear_admin_session_cookie(response, secure=_cookie_secure(request, current_store))
+    return {"status": "ok"}
 
 
 @router.post("/api/admin/auth/refresh")
 def admin_refresh_session(
+    request: Request,
+    response: Response,
     authorization: Annotated[Optional[str], Header()] = None,
     current_store: ServerStore = Depends(get_store),
 ) -> dict[str, Any]:
-    token = extract_bearer_token(authorization)
+    token = extract_admin_session_token(request, authorization)
     try:
-        return current_store.refresh_admin_session(token)
+        session = current_store.refresh_admin_session(token)
     except AuthenticationFailedError as exc:
+        clear_admin_session_cookie(response, secure=_cookie_secure(request, current_store))
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={"code": "ADMIN_AUTH_FAILED", "message": str(exc)},
         ) from exc
+    _attach_admin_session_cookie(request, response, current_store, session)
+    return session
 
 
 @router.post("/api/admin/auth/change-password")
 def admin_change_password(
+    request: Request,
     payload: ChangePasswordRequest,
     authorization: Annotated[Optional[str], Header()] = None,
     current_store: ServerStore = Depends(get_store),
 ) -> dict[str, Any]:
-    token = extract_bearer_token(authorization)
+    token = extract_admin_session_token(request, authorization)
     try:
         admin = current_store.validate_admin_session(token)
         result = current_store.change_admin_password(

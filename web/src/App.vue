@@ -51,7 +51,7 @@ type MenuSection = {
   pages: PageItem[];
 };
 
-const { token, isAuthed, request, refreshAdminSession, login: loginAdminSession, logout: logoutAdminSession, disposeAdminSession } =
+const { isAuthed, request, refreshAdminSession, login: loginAdminSession, logout: logoutAdminSession, disposeAdminSession } =
   useAdminSession();
 
 const activeMenu = ref(
@@ -174,7 +174,7 @@ async function loadPublic(): Promise<void> {
 }
 
 async function loadAdmin(): Promise<void> {
-  if (!token.value) {
+  if (!isAuthed.value) {
     return;
   }
   const [
@@ -221,7 +221,7 @@ async function refreshAll(): Promise<void> {
 }
 
 async function loadAppInfo(): Promise<void> {
-  if (!token.value) return;
+  if (!isAuthed.value) return;
   try {
     appInfo.value = await request<AppInfo>("/api/admin/app-info");
   } catch (error) {
@@ -230,7 +230,7 @@ async function loadAppInfo(): Promise<void> {
 }
 
 async function checkForUpdates(options: { background?: boolean; force?: boolean } = {}): Promise<void> {
-  if (!token.value) return;
+  if (!isAuthed.value) return;
   const { background = false, force = false } = options;
   if (!background) checkingUpdate.value = true;
   try {
@@ -300,8 +300,8 @@ async function login(): Promise<void> {
   }
 }
 
-function logout(): void {
-  logoutAdminSession();
+async function logout(): Promise<void> {
+  await logoutAdminSession();
 }
 
 function openPasswordDialog(): void {

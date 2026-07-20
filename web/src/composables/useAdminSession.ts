@@ -2,7 +2,7 @@ import { ElMessage } from "element-plus";
 import { computed, ref } from "vue";
 
 export type AdminSessionPayload = {
-  token: string;
+  token?: string;
   expires_at: string;
   admin?: { id: string; username: string };
 };
@@ -23,36 +23,52 @@ export class ApiRequestError extends Error {
   }
 }
 
+const EXPIRES_AT_KEY = "mijia_admin_expires_at";
+const LEGACY_TOKEN_KEY = "mijia_admin_token";
+
 /**
- * Manages the admin session (token storage, refresh scheduling) and the
- * authenticated `request()` helper used across the app. `request()` is kept
- * here rather than in a standalone API client because it is tightly coupled
- * to the current token and to clearing the session on 401 responses.
+ * Manages the admin session and the authenticated `request()` helper.
+ *
+ * Session tokens live in an HttpOnly cookie (`mijia_admin_session`). The SPA
+ * keeps only `expires_at` in localStorage for refresh scheduling and UI state.
+ * A one-time legacy Bearer fallback reads any pre-migration localStorage token
+ * until the next successful login/refresh sets the cookie and clears it.
  */
 export function useAdminSession() {
-  const token = ref(localStorage.getItem("mijia_admin_token") || "");
-  const tokenExpiresAt = ref(localStorage.getItem("mijia_admin_expires_at") || "");
-  let adminRefreshTimer: number | undefined;
+  // Migrate away from readable tokens; keep briefly for Bearer fallback.
+  const legacyBearer = ref(localStorage.getItem(LEGACY_TOKEN_KEY) || "");
+  if (legacyBearer.value) {
+    localStorage.removeItem(LEGACY_TOKEN_KEY);
+  }
 
-  const isAuthed = computed(() => Boolean(token.value));
+  const tokenExpiresAt = ref(localStorage.getItem(EXPIRES_AT_KEY) || "");
+  const sessionActive = ref(_hasUsableExpiry(tokenExpiresAt.value) || Boolean(legacyBearer.value));
+  let adminRefreshTimer: number | undefined;
+  let refreshInFlight: Promise<boolean> | null = null;
+
+  const isAuthed = computed(() => sessionActive.value);
+  /** @deprecated Token is HttpOnly; kept empty for callers that still destructure it. */
+  const token = computed(() => "");
 
   function clearAdminSession(message?: string): void {
-    const hadToken = Boolean(token.value);
-    token.value = "";
+    const wasAuthed = sessionActive.value;
+    sessionActive.value = false;
     tokenExpiresAt.value = "";
-    localStorage.removeItem("mijia_admin_token");
-    localStorage.removeItem("mijia_admin_expires_at");
+    legacyBearer.value = "";
+    localStorage.removeItem(EXPIRES_AT_KEY);
+    localStorage.removeItem(LEGACY_TOKEN_KEY);
     window.clearTimeout(adminRefreshTimer);
-    if (message && hadToken) {
+    if (message && wasAuthed) {
       ElMessage.warning(message);
     }
   }
 
   function saveAdminSession(payload: AdminSessionPayload): void {
-    token.value = payload.token;
+    legacyBearer.value = "";
+    localStorage.removeItem(LEGACY_TOKEN_KEY);
     tokenExpiresAt.value = payload.expires_at;
-    localStorage.setItem("mijia_admin_token", payload.token);
-    localStorage.setItem("mijia_admin_expires_at", payload.expires_at);
+    localStorage.setItem(EXPIRES_AT_KEY, payload.expires_at);
+    sessionActive.value = true;
     scheduleAdminTokenRefresh(payload.expires_at);
   }
 
@@ -70,30 +86,39 @@ export function useAdminSession() {
   }
 
   async function refreshAdminSession(): Promise<boolean> {
-    if (!token.value) {
-      return false;
+    if (refreshInFlight) {
+      return refreshInFlight;
     }
-    try {
-      const payload = await request<AdminSessionPayload>(
-        "/api/admin/auth/refresh",
-        {
-          method: "POST",
-          body: "{}",
-        },
-        { skipAuthRedirect: true },
-      );
-      saveAdminSession(payload);
-      return true;
-    } catch (error) {
-      if (error instanceof ApiRequestError && error.status === 401) {
-        clearAdminSession("登录已过期，请重新登录");
-      } else if (token.value) {
-        adminRefreshTimer = window.setTimeout(() => {
-          void refreshAdminSession();
-        }, 60_000);
+    refreshInFlight = (async () => {
+      try {
+        const payload = await request<AdminSessionPayload>(
+          "/api/admin/auth/refresh",
+          {
+            method: "POST",
+            body: "{}",
+          },
+          { skipAuthRedirect: true },
+        );
+        saveAdminSession(payload);
+        return true;
+      } catch (error) {
+        if (error instanceof ApiRequestError && error.status === 401) {
+          clearAdminSession(
+            sessionActive.value || Boolean(legacyBearer.value)
+              ? "登录已过期，请重新登录"
+              : undefined,
+          );
+        } else if (sessionActive.value) {
+          adminRefreshTimer = window.setTimeout(() => {
+            void refreshAdminSession();
+          }, 60_000);
+        }
+        return false;
+      } finally {
+        refreshInFlight = null;
       }
-      return false;
-    }
+    })();
+    return refreshInFlight;
   }
 
   async function request<T>(
@@ -103,10 +128,14 @@ export function useAdminSession() {
   ): Promise<T> {
     const headers = new Headers(options.headers);
     headers.set("Content-Type", "application/json");
-    if (token.value) {
-      headers.set("Authorization", `Bearer ${token.value}`);
+    if (legacyBearer.value) {
+      headers.set("Authorization", `Bearer ${legacyBearer.value}`);
     }
-    const response = await fetch(url, { ...options, headers });
+    const response = await fetch(url, {
+      ...options,
+      headers,
+      credentials: "include",
+    });
     if (!response.ok) {
       const payload = await response.json().catch(() => ({}));
       const errorCode = payload?.error?.code;
@@ -136,7 +165,16 @@ export function useAdminSession() {
     return payload;
   }
 
-  function logout(): void {
+  async function logout(): Promise<void> {
+    try {
+      await request(
+        "/api/admin/auth/logout",
+        { method: "POST", body: "{}" },
+        { skipAuthRedirect: true },
+      );
+    } catch {
+      // Cookie/local state is cleared below even if the revoke call fails.
+    }
     clearAdminSession();
   }
 
@@ -157,4 +195,12 @@ export function useAdminSession() {
     logout,
     disposeAdminSession,
   };
+}
+
+function _hasUsableExpiry(expiresAt: string): boolean {
+  if (!expiresAt) {
+    return false;
+  }
+  const expiresAtMs = new Date(expiresAt).getTime();
+  return Number.isFinite(expiresAtMs) && expiresAtMs > Date.now();
 }

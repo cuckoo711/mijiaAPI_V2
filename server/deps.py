@@ -7,6 +7,7 @@ from typing import Annotated, Any, Optional
 
 from fastapi import Depends, Header, HTTPException, Request, status
 
+from server.admin_session_cookie import read_admin_session_token
 from server.mijia_runtime import LoginJobManager, MijiaRuntime
 from server.store import AuthenticationFailedError, ServerStore
 from server.updater import UpdateChecker
@@ -41,11 +42,27 @@ def extract_bearer_token(authorization: Optional[str]) -> str:
     return authorization.removeprefix("Bearer ").strip()
 
 
+def extract_admin_session_token(
+    request: Request,
+    authorization: Optional[str] = None,
+) -> str:
+    """Resolve an admin session from Bearer header or HttpOnly cookie."""
+
+    token = read_admin_session_token(request, authorization)
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing bearer token",
+        )
+    return token
+
+
 def require_admin(
+    request: Request,
     authorization: Annotated[Optional[str], Header()] = None,
     current_store: ServerStore = Depends(get_store),
 ) -> dict[str, Any]:
-    token = extract_bearer_token(authorization)
+    token = extract_admin_session_token(request, authorization)
     try:
         return current_store.validate_admin_session(token)
     except AuthenticationFailedError as exc:

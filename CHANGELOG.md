@@ -2,6 +2,21 @@
 
 本项目遵循“面向部署和使用者可读”的更新记录。最新变化放在最前面。
 
+## v3.6.1 - 2026-07-21
+
+### 安全
+
+- 管理台会话改为 HttpOnly Cookie（`mijia_admin_session`，SameSite=Lax；HTTPS 时 Secure），仍兼容 `Authorization: Bearer`。
+- 新增 `POST /api/admin/auth/logout`：吊销会话并清除 Cookie；前端不再把会话令牌写入 localStorage。
+
+### 前端
+
+- Vite `manualChunks` 拆分 `vue` / `element-plus` / icons，缩小主包体积。
+
+### 文档
+
+- 使用指南与故障排查中的项目数据路径统一为 `configs/`。
+
 ## v3.6.0 - 2026-07-21
 
 ### 重构

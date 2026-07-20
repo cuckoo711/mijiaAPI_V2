@@ -42,7 +42,10 @@ def admin_token(client: TestClient) -> str:
         "/api/admin/auth/login",
         json={"username": "admin", "password": "strong-password"},
     )
-    return str(login.json()["token"])
+    token = str(login.json()["token"])
+    # Login sets an HttpOnly cookie; clear it so Bearer-only tests stay explicit.
+    client.cookies.clear()
+    return token
 
 
 def test_admin_auth_refresh_extends_session(tmp_path: Path) -> None:
@@ -533,3 +536,107 @@ def test_admin_updates_check_delegates_to_checker(
     payload = response.json()
     assert payload["update_available"] is True
     assert payload["latest"]["latest_tag"] == "v9.9.9"
+
+
+def test_admin_login_sets_httponly_session_cookie(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    client.post(
+        "/api/admin/bootstrap/admin",
+        json={"username": "admin", "password": "strong-password"},
+    )
+    login = client.post(
+        "/api/admin/auth/login",
+        json={"username": "admin", "password": "strong-password"},
+    )
+
+    assert login.status_code == 200
+    token = login.json()["token"]
+    cookie = login.cookies.get("mijia_admin_session")
+    assert cookie == token
+    set_cookie = login.headers.get("set-cookie", "")
+    assert "HttpOnly" in set_cookie
+    assert "samesite=lax" in set_cookie.lower()
+    assert "Path=/" in set_cookie
+    assert "Secure" not in set_cookie  # plain HTTP test client
+
+
+def test_admin_cookie_auth_without_bearer(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    token = admin_token(client)
+    # Drop Authorization; TestClient keeps cookies from login.
+    client.cookies.set("mijia_admin_session", token)
+
+    response = client.get("/api/admin/app-info")
+
+    assert response.status_code == 200
+    assert response.json()["version"] == mijiaAPI_V2.__version__
+
+
+def test_admin_bearer_still_works_without_cookie(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    token = admin_token(client)
+    client.cookies.clear()
+
+    response = client.get(
+        "/api/admin/app-info",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+
+
+def test_admin_logout_clears_cookie_and_revokes_session(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    token = admin_token(client)
+    client.cookies.set("mijia_admin_session", token)
+
+    logout = client.post("/api/admin/auth/logout")
+    assert logout.status_code == 200
+    assert logout.json()["status"] == "ok"
+    # Cookie deleted (empty / expired)
+    set_cookie = logout.headers.get("set-cookie", "")
+    assert "mijia_admin_session" in set_cookie
+    assert "Max-Age=0" in set_cookie or "max-age=0" in set_cookie.lower()
+
+    client.cookies.clear()
+    denied = client.get(
+        "/api/admin/app-info",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert denied.status_code == 401
+
+
+def test_admin_refresh_accepts_cookie_and_renews_it(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    token = admin_token(client)
+    client.cookies.set("mijia_admin_session", token)
+
+    response = client.post("/api/admin/auth/refresh")
+
+    assert response.status_code == 200
+    assert response.json()["token"] == token
+    assert response.cookies.get("mijia_admin_session") == token
+
+
+def test_api_key_auth_unaffected_by_admin_cookie(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    token = admin_token(client)
+    created = client.post(
+        "/api/admin/api-keys",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "cookie-test", "scopes": ["read:status"]},
+    )
+    assert created.status_code == 201
+    api_key = created.json()["key"]
+    client.cookies.clear()
+    # Stale/invalid admin cookie must not grant /api/v1 access.
+    client.cookies.set("mijia_admin_session", "ms_not_a_real_session")
+
+    denied = client.get("/api/v1/status")
+    assert denied.status_code in {401, 403}
+
+    ok = client.get(
+        "/api/v1/status",
+        headers={"Authorization": f"Bearer {api_key}"},
+    )
+    assert ok.status_code == 200
