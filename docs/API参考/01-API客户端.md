@@ -606,7 +606,7 @@ def create_api_client_from_file(
 ```
 
 **参数**：
-- `credential_path`: 凭据文件路径（可选，默认 `~/.mijia/credential.json`）
+- `credential_path`: 凭据文件路径（可选，默认 `configs/credential.json`）
 - `config_path`: 配置文件路径（可选）
 - `redis_client`: Redis客户端（可选）
 

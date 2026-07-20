@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 import mijiaAPI_V2
+from server.admin_session_cookie import ADMIN_SESSION_COOKIE_NAME, optional_bearer_token
 from server.config import ServerSettings
 from server.mijia_runtime import LoginJobManager, MijiaRuntime, SyncInProgressError
 from server.routers import admin_auth, admin_mijia, admin_resources, api_v1
@@ -156,24 +157,30 @@ def _is_docs_or_openapi_path(path: str) -> bool:
     return normalized_path in DOCS_ROUTES or normalized_path == OPENAPI_JSON_ROUTE
 
 
-def _authorization_has_docs_access(authorization: Optional[str], store: ServerStore) -> bool:
+def _request_has_docs_access(request: Request, store: ServerStore) -> bool:
     """Allow docs/OpenAPI only with a valid admin session or API key."""
 
-    if not authorization or not authorization.startswith("Bearer "):
-        return False
-    token = authorization.removeprefix("Bearer ").strip()
-    if not token:
-        return False
-    try:
-        store.validate_admin_session(token)
-        return True
-    except AuthenticationFailedError:
-        pass
-    try:
-        store.validate_api_key(token)
-        return True
-    except AuthenticationFailedError:
-        return False
+    bearer = optional_bearer_token(request.headers.get("Authorization"))
+    if bearer:
+        try:
+            store.validate_admin_session(bearer)
+            return True
+        except AuthenticationFailedError:
+            pass
+        try:
+            store.validate_api_key(bearer)
+            return True
+        except AuthenticationFailedError:
+            pass
+
+    cookie = (request.cookies.get(ADMIN_SESSION_COOKIE_NAME) or "").strip()
+    if cookie:
+        try:
+            store.validate_admin_session(cookie)
+            return True
+        except AuthenticationFailedError:
+            pass
+    return False
 
 
 def create_app(  # noqa: C901
@@ -292,8 +299,7 @@ def create_app(  # noqa: C901
                 request_id,
             )
         if _is_docs_or_openapi_path(request.url.path):
-            authorization = request.headers.get("Authorization")
-            if not _authorization_has_docs_access(authorization, resolved_store):
+            if not _request_has_docs_access(request, resolved_store):
                 return _json_error(
                     status.HTTP_401_UNAUTHORIZED,
                     "DOCS_AUTH_REQUIRED",

@@ -335,6 +335,31 @@ class AdminAuthMixin:
             else:
                 self._admin_session_cache.pop(token, None)
 
+    def revoke_admin_session(self, token: str) -> bool:
+        """Revoke a single administrator session token. Returns True if found."""
+
+        self._invalidate_admin_session_cache(token)
+        prefix = secret_prefix(token)
+        revoked_at = isoformat(utc_now())
+        with self._database.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT token_hash
+                FROM admin_sessions
+                WHERE token_prefix = ? AND revoked_at IS NULL
+                """,
+                (prefix,),
+            ).fetchall()
+            for row in rows:
+                if not verify_secret(token, row["token_hash"]):
+                    continue
+                conn.execute(
+                    "UPDATE admin_sessions SET revoked_at = ? WHERE token_hash = ?",
+                    (revoked_at, row["token_hash"]),
+                )
+                return True
+        return False
+
     def refresh_admin_session(self, token: str) -> dict[str, Any]:
         """Extend a valid administrator session and return its new expiry."""
 
