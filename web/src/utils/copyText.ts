@@ -1,5 +1,3 @@
-import { ElMessage } from "element-plus";
-
 export async function copyText(value: string, message: string): Promise<void> {
   if (navigator.clipboard?.writeText) {
     await navigator.clipboard.writeText(value);
