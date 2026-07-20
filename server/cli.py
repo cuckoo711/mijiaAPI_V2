@@ -9,7 +9,7 @@ from typing import Any
 
 from server.app import create_app
 from server.config import ServerSettings
-from server.store import BootstrapAlreadyCompletedError, ServerStore
+from server.store import AdminNotFoundError, BootstrapAlreadyCompletedError, ServerStore
 
 
 def _settings() -> ServerSettings:
@@ -70,10 +70,38 @@ def diagnose_command(args: argparse.Namespace) -> None:
 
 
 def reset_admin_command(args: argparse.Namespace) -> None:
-    raise SystemExit(
-        "reset-admin is reserved for the next implementation slice; "
-        "use init --admin before bootstrap is completed."
+    settings = _settings()
+    store = ServerStore(settings)
+    store.initialize()
+    if not store.has_admin():
+        raise SystemExit("No administrator configured; use `init --admin` first.")
+
+    password = args.password
+    if password:
+        confirm = password
+    else:
+        password = getpass.getpass("New admin password: ")
+        confirm = getpass.getpass("Confirm password: ")
+    if password != confirm:
+        raise SystemExit("Passwords do not match")
+    if len(password) < 8:
+        raise SystemExit("Password must be at least 8 characters")
+
+    try:
+        result = store.reset_admin_password(password, username=args.username)
+    except AdminNotFoundError as exc:
+        raise SystemExit(str(exc)) from exc
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+
+    store.add_audit(
+        "admin.password.reset",
+        "success",
+        actor_type="cli",
+        actor_id=result["id"],
+        metadata={"username": result["username"]},
     )
+    _print_json({"reset": True, "admin": result})
 
 
 def run_command(args: argparse.Namespace) -> None:
@@ -127,6 +155,8 @@ def build_parser() -> argparse.ArgumentParser:
     diagnose_parser.set_defaults(func=diagnose_command)
 
     reset_parser = subparsers.add_parser("reset-admin", help="reset administrator password")
+    reset_parser.add_argument("--username", help="administrator username (default: first admin)")
+    reset_parser.add_argument("--password", help="new administrator password")
     reset_parser.set_defaults(func=reset_admin_command)
 
     return parser

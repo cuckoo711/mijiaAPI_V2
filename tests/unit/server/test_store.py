@@ -58,6 +58,54 @@ def test_admin_session_refresh_extends_expiry(tmp_path: Path) -> None:
     assert refreshed["admin"]["username"] == "admin"
 
 
+def test_change_admin_password_keeps_current_session(tmp_path: Path) -> None:
+    store = ServerStore(make_settings(tmp_path))
+    store.initialize()
+    store.create_initial_admin("admin", "strong-password")
+    old_session = store.authenticate_admin("admin", "strong-password")
+    other_session = store.authenticate_admin("admin", "strong-password")
+
+    result = store.change_admin_password(
+        old_session["admin"]["id"],
+        "strong-password",
+        "newer-password",
+        keep_session_token=old_session["token"],
+    )
+
+    assert result["username"] == "admin"
+    assert store.validate_admin_session(old_session["token"])["username"] == "admin"
+    with pytest.raises(AuthenticationFailedError):
+        store.validate_admin_session(other_session["token"])
+    with pytest.raises(AuthenticationFailedError):
+        store.authenticate_admin("admin", "strong-password")
+    assert store.authenticate_admin("admin", "newer-password")["admin"]["username"] == "admin"
+
+
+def test_change_admin_password_rejects_wrong_current(tmp_path: Path) -> None:
+    from server.store import InvalidCurrentPasswordError
+
+    store = ServerStore(make_settings(tmp_path))
+    store.initialize()
+    admin = store.create_initial_admin("admin", "strong-password")
+
+    with pytest.raises(InvalidCurrentPasswordError):
+        store.change_admin_password(admin["id"], "wrong-password", "newer-password")
+
+
+def test_reset_admin_password_revokes_sessions(tmp_path: Path) -> None:
+    store = ServerStore(make_settings(tmp_path))
+    store.initialize()
+    store.create_initial_admin("admin", "strong-password")
+    session = store.authenticate_admin("admin", "strong-password")
+
+    result = store.reset_admin_password("reset-password")
+
+    assert result["username"] == "admin"
+    with pytest.raises(AuthenticationFailedError):
+        store.validate_admin_session(session["token"])
+    assert store.authenticate_admin("admin", "reset-password")["token"].startswith("ms_")
+
+
 def test_api_key_scope_is_enforced(tmp_path: Path) -> None:
     store = ServerStore(make_settings(tmp_path))
     store.initialize()

@@ -176,6 +176,8 @@ const devicePageSize = ref(20);
 const appInfo = ref<AppInfo | null>(null);
 const updateInfo = ref<UpdateInfo | null>(null);
 const aboutDialogVisible = ref(false);
+const passwordDialogVisible = ref(false);
+const changingPassword = ref(false);
 const checkingUpdate = ref(false);
 let qrTimer: number | undefined;
 let adminRefreshTimer: number | undefined;
@@ -184,6 +186,11 @@ const defaultTrustedProxyCidrs = "127.0.0.1/32\n::1/128";
 
 const adminForm = reactive({ username: "admin", password: "" });
 const loginForm = reactive({ username: "admin", password: "" });
+const passwordForm = reactive({
+  currentPassword: "",
+  newPassword: "",
+  confirmPassword: "",
+});
 const keyForm = reactive({
   name: "",
   scopes: ["read:status", "read:devices"] as string[],
@@ -894,6 +901,51 @@ function logout(): void {
   clearAdminSession();
 }
 
+function openPasswordDialog(): void {
+  passwordForm.currentPassword = "";
+  passwordForm.newPassword = "";
+  passwordForm.confirmPassword = "";
+  passwordDialogVisible.value = true;
+}
+
+function resetPasswordForm(): void {
+  passwordForm.currentPassword = "";
+  passwordForm.newPassword = "";
+  passwordForm.confirmPassword = "";
+}
+
+async function changePassword(): Promise<void> {
+  if (passwordForm.newPassword.length < 8) {
+    ElMessage.error("新密码至少需要 8 个字符");
+    return;
+  }
+  if (passwordForm.newPassword !== passwordForm.confirmPassword) {
+    ElMessage.error("两次输入的新密码不一致");
+    return;
+  }
+  if (passwordForm.currentPassword === passwordForm.newPassword) {
+    ElMessage.error("新密码不能与当前密码相同");
+    return;
+  }
+
+  changingPassword.value = true;
+  try {
+    await request("/api/admin/auth/change-password", {
+      method: "POST",
+      body: JSON.stringify({
+        current_password: passwordForm.currentPassword,
+        new_password: passwordForm.newPassword,
+      }),
+    });
+    passwordDialogVisible.value = false;
+    ElMessage.success("密码已修改");
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : "修改密码失败");
+  } finally {
+    changingPassword.value = false;
+  }
+}
+
 async function startQrLogin(): Promise<void> {
   qrJob.value = await request<Record<string, string>>("/api/admin/mijia/login/start", {
     method: "POST",
@@ -1221,6 +1273,7 @@ onBeforeUnmount(() => {
           </p>
         </div>
         <div class="toolbar">
+          <el-button v-if="isAuthed" @click="openPasswordDialog">修改密码</el-button>
           <el-button v-if="isAuthed" @click="logout">退出</el-button>
           <el-button :loading="loading" :icon="Cpu" @click="refreshAll">刷新</el-button>
         </div>
@@ -2024,6 +2077,48 @@ onBeforeUnmount(() => {
           © {{ new Date().getFullYear() }} {{ appInfo?.authors || "MijiaAPI Contributors" }}
         </div>
       </div>
+    </el-dialog>
+
+    <el-dialog
+      v-model="passwordDialogVisible"
+      title="修改密码"
+      width="420px"
+      append-to-body
+      @closed="resetPasswordForm"
+    >
+      <el-form label-width="96px" @submit.prevent>
+        <el-form-item label="当前密码">
+          <el-input
+            v-model="passwordForm.currentPassword"
+            type="password"
+            show-password
+            autocomplete="current-password"
+          />
+        </el-form-item>
+        <el-form-item label="新密码">
+          <el-input
+            v-model="passwordForm.newPassword"
+            type="password"
+            show-password
+            autocomplete="new-password"
+            placeholder="至少 8 个字符"
+          />
+        </el-form-item>
+        <el-form-item label="确认密码">
+          <el-input
+            v-model="passwordForm.confirmPassword"
+            type="password"
+            show-password
+            autocomplete="new-password"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="passwordDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="changingPassword" @click="changePassword">
+          确认修改
+        </el-button>
+      </template>
     </el-dialog>
   </el-container>
 </template>

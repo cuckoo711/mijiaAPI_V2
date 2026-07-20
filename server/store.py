@@ -109,6 +109,14 @@ class BootstrapAlreadyCompletedError(Exception):
     """Raised when trying to create the initial admin twice."""
 
 
+class AdminNotFoundError(Exception):
+    """Raised when no administrator account exists for an operation."""
+
+
+class InvalidCurrentPasswordError(Exception):
+    """Raised when the provided current password does not match."""
+
+
 CONFIG_MAP_CACHE_TTL = 5.0  # runtime_config 每请求都查一次很浪费；给一个 5 秒的进程内缓存
 # admin session 校验里的 PBKDF2(260k) 单次约 30ms，前端高频轮询会重复消耗；
 # 给一个短 TTL 内的正例缓存，敏感度低于常规密码验证：token 本身已通过熵源保护，
@@ -195,19 +203,7 @@ class ServerStore:
                 raise AuthenticationFailedError("Administrator account is locked")
 
             if not verify_secret(password, row["password_hash"]):
-                failed_attempts = int(row["failed_attempts"]) + 1
-                lock_until_value = None
-                if failed_attempts >= 5:
-                    lock_until_value = isoformat(now + timedelta(minutes=15))
-                    failed_attempts = 0
-                conn.execute(
-                    """
-                    UPDATE admin_users
-                    SET failed_attempts = ?, locked_until = ?, updated_at = ?
-                    WHERE id = ?
-                    """,
-                    (failed_attempts, lock_until_value, isoformat(now), row["id"]),
-                )
+                self._record_admin_auth_failure(conn, row, now)
                 raise AuthenticationFailedError("Invalid administrator credentials")
 
             conn.execute(
@@ -249,6 +245,166 @@ class ServerStore:
             "token": token,
             "expires_at": isoformat(expires_at),
             "admin": {"id": row["id"], "username": row["username"]},
+        }
+
+    def _record_admin_auth_failure(self, conn: Any, row: Any, now: datetime) -> None:
+        """Increment failed-login counters and optionally lock the account."""
+
+        failed_attempts = int(row["failed_attempts"]) + 1
+        lock_until_value = None
+        if failed_attempts >= 5:
+            lock_until_value = isoformat(now + timedelta(minutes=15))
+            failed_attempts = 0
+        conn.execute(
+            """
+            UPDATE admin_users
+            SET failed_attempts = ?, locked_until = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (failed_attempts, lock_until_value, isoformat(now), row["id"]),
+        )
+
+    def _revoke_admin_sessions(
+        self,
+        conn: Any,
+        admin_id: str,
+        *,
+        keep_token: Optional[str] = None,
+        now: Optional[datetime] = None,
+    ) -> None:
+        """Revoke administrator sessions, optionally keeping the caller's token."""
+
+        revoked_at = isoformat(now or utc_now())
+        if keep_token is None:
+            conn.execute(
+                """
+                UPDATE admin_sessions
+                SET revoked_at = ?
+                WHERE admin_id = ? AND revoked_at IS NULL
+                """,
+                (revoked_at, admin_id),
+            )
+            return
+
+        rows = conn.execute(
+            """
+            SELECT token_hash
+            FROM admin_sessions
+            WHERE admin_id = ? AND revoked_at IS NULL
+            """,
+            (admin_id,),
+        ).fetchall()
+        for row in rows:
+            if verify_secret(keep_token, row["token_hash"]):
+                continue
+            conn.execute(
+                "UPDATE admin_sessions SET revoked_at = ? WHERE token_hash = ?",
+                (revoked_at, row["token_hash"]),
+            )
+
+    def change_admin_password(
+        self,
+        admin_id: str,
+        current_password: str,
+        new_password: str,
+        *,
+        keep_session_token: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Change an administrator password after verifying the current one."""
+
+        if len(new_password) < 8:
+            raise ValueError("Password must be at least 8 characters")
+        if current_password == new_password:
+            raise ValueError("New password must differ from the current password")
+
+        now = utc_now()
+        with self._database.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM admin_users WHERE id = ?",
+                (admin_id,),
+            ).fetchone()
+            if row is None:
+                raise AdminNotFoundError("Administrator not found")
+
+            locked_until = parse_datetime(row["locked_until"])
+            if locked_until and locked_until > now:
+                raise AuthenticationFailedError("Administrator account is locked")
+
+            if not verify_secret(current_password, row["password_hash"]):
+                self._record_admin_auth_failure(conn, row, now)
+                raise InvalidCurrentPasswordError("Invalid current password")
+
+            updated_at = isoformat(now)
+            conn.execute(
+                """
+                UPDATE admin_users
+                SET password_hash = ?,
+                    failed_attempts = 0,
+                    locked_until = NULL,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (hash_secret(new_password), updated_at, admin_id),
+            )
+            self._revoke_admin_sessions(
+                conn,
+                admin_id,
+                keep_token=keep_session_token,
+                now=now,
+            )
+
+        self._invalidate_admin_session_cache()
+        return {
+            "id": row["id"],
+            "username": row["username"],
+            "updated_at": updated_at,
+        }
+
+    def reset_admin_password(
+        self,
+        new_password: str,
+        *,
+        username: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Reset an administrator password without knowing the current one.
+
+        Intended for local CLI recovery. Revokes every active admin session.
+        """
+
+        if len(new_password) < 8:
+            raise ValueError("Password must be at least 8 characters")
+
+        now = utc_now()
+        with self._database.connect() as conn:
+            if username:
+                row = conn.execute(
+                    "SELECT * FROM admin_users WHERE username = ?",
+                    (username,),
+                ).fetchone()
+            else:
+                row = conn.execute("SELECT * FROM admin_users LIMIT 1").fetchone()
+            if row is None:
+                raise AdminNotFoundError("Administrator not found")
+
+            updated_at = isoformat(now)
+            conn.execute(
+                """
+                UPDATE admin_users
+                SET password_hash = ?,
+                    failed_attempts = 0,
+                    locked_until = NULL,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (hash_secret(new_password), updated_at, row["id"]),
+            )
+            self._revoke_admin_sessions(conn, row["id"], now=now)
+
+        self._invalidate_admin_session_cache()
+        return {
+            "id": row["id"],
+            "username": row["username"],
+            "updated_at": updated_at,
         }
 
     def validate_admin_session(self, token: str) -> dict[str, Any]:
