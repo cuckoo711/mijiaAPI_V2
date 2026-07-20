@@ -31,6 +31,19 @@ from server.updater import UpdateChecker
 DEFAULT_TRUSTED_PROXY_CIDRS = ("127.0.0.1/32", "::1/128")
 DOCS_ROUTES = {"/docs", "/redoc", "/docs/oauth2-redirect"}
 OPENAPI_JSON_ROUTE = "/api/v1/openapi.json"
+# Vite emits content-hashed filenames under /assets/; safe to cache forever.
+_ASSETS_CACHE_CONTROL = "public, max-age=31536000, immutable"
+# index.html must revalidate so deploys pick up new hashed asset references.
+_INDEX_CACHE_CONTROL = "no-cache"
+
+
+class CachedAssetsStaticFiles(StaticFiles):
+    """StaticFiles that sets long-cache headers for hashed Vite assets."""
+
+    def file_response(self, full_path, stat_result, scope, status_code=200):
+        response = super().file_response(full_path, stat_result, scope, status_code=status_code)
+        response.headers["Cache-Control"] = _ASSETS_CACHE_CONTROL
+        return response
 
 
 class ErrorEnvelope(BaseModel):
@@ -376,13 +389,20 @@ def _mount_frontend(app: FastAPI, web_dist_dir: Path) -> None:
     assets_dir = web_dist_dir / "assets"
 
     if assets_dir.exists():
-        app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+        app.mount(
+            "/assets",
+            CachedAssetsStaticFiles(directory=assets_dir),
+            name="assets",
+        )
 
     if index_html.exists():
 
         @app.get("/{full_path:path}", include_in_schema=False)
         def spa_fallback(full_path: str) -> FileResponse:
-            return FileResponse(index_html)
+            return FileResponse(
+                index_html,
+                headers={"Cache-Control": _INDEX_CACHE_CONTROL},
+            )
 
     else:
 

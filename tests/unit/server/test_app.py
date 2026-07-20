@@ -65,6 +65,39 @@ def admin_cookie_session(client: TestClient) -> tuple[str, str]:
     return token, csrf
 
 
+def test_spa_assets_use_long_cache_and_index_is_no_cache(tmp_path: Path) -> None:
+    web_dist = tmp_path / "web-dist"
+    assets = web_dist / "assets"
+    assets.mkdir(parents=True)
+    (assets / "app.abc123.js").write_text("console.log('ok');\n", encoding="utf-8")
+    (web_dist / "index.html").write_text(
+        "<!doctype html><html><body>spa</body></html>\n",
+        encoding="utf-8",
+    )
+    settings = ServerSettings(
+        data_dir=tmp_path,
+        database_path=tmp_path / "server.sqlite3",
+        credential_path=tmp_path / "credential.json",
+        web_dist_dir=web_dist,
+    )
+    client = TestClient(create_app(settings), client=("127.0.0.1", 50000))
+
+    asset = client.get("/assets/app.abc123.js")
+    assert asset.status_code == 200
+    assert asset.headers.get("cache-control") == "public, max-age=31536000, immutable"
+    assert "console.log" in asset.text
+
+    index = client.get("/")
+    assert index.status_code == 200
+    assert index.headers.get("cache-control") == "no-cache"
+    assert "spa" in index.text
+
+    deep = client.get("/admin/devices")
+    assert deep.status_code == 200
+    assert deep.headers.get("cache-control") == "no-cache"
+    assert "spa" in deep.text
+
+
 def test_admin_auth_refresh_extends_session(tmp_path: Path) -> None:
     client = make_client(tmp_path)
     token = admin_token(client)

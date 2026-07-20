@@ -26,7 +26,7 @@
     devices = api.get_devices(home_id="your_home_id")
 """
 
-__version__ = "3.6.3"
+__version__ = "3.6.4"
 __author__ = "MijiaAPI Contributors"
 
 from mijiaAPI_V2.api_client import AsyncMijiaAPI, MijiaAPI

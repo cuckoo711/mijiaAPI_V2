@@ -1,13 +1,16 @@
 [Unit]
 Description=Mijia API Server
+Documentation=https://github.com/cuckoo711/mijiaAPI_V2
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
+# Required for production: run as a dedicated unprivileged account (do not run as root).
 # User=mijia
 # Group=mijia
 WorkingDirectory=/opt/mijia_server
+# Optional overrides; same names as README / Docker. Copy from deploy/mijia-server.env.example.
 EnvironmentFile=-/etc/mijia-server.env
 Environment=MIJIA_SERVER_HOST=127.0.0.1
 Environment=MIJIA_SERVER_PORT=8123
@@ -15,14 +18,17 @@ Environment=MIJIA_SERVER_DATA_DIR=/opt/mijia_server/configs
 Environment=MIJIA_SERVER_DATABASE_PATH=/opt/mijia_server/configs/server/server.sqlite3
 Environment=MIJIA_CREDENTIAL_PATH=/opt/mijia_server/configs/credential.json
 Environment=MIJIA_WEB_DIST_DIR=/opt/mijia_server/web/dist
+# Optional: MIJIA_SERVER_LOG_LEVEL=INFO
 ExecStart=/opt/mijia_server/.venv/bin/python -m server.cli run
 Restart=always
 RestartSec=3
 
+# Hardening (ProtectSystem=strict makes the FS read-only except ReadWritePaths)
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
+# Data dir + legacy migration path (.mijia); adjust if MIJIA_SERVER_DATA_DIR changes.
 ReadWritePaths=/opt/mijia_server/configs /opt/mijia_server/.mijia
 
 [Install]

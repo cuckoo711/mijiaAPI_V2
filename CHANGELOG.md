@@ -2,6 +2,17 @@
 
 本项目遵循“面向部署和使用者可读”的更新记录。最新变化放在最前面。
 
+## v3.6.4 - 2026-07-21
+
+### 运维
+
+- SPA：`/assets/*` 长缓存（immutable），`index.html` 使用 `no-cache`，部署后可立即拿到新入口。
+- 强化示例 `deploy/mijia-server.service` 与 `deploy/mijia-server.env.example`。
+
+### 可靠
+
+- 启动审计清理与登录时会话清理失败改为 warning 日志，不再静默吞掉。
+
 ## v3.6.3 - 2026-07-21
 
 ### 修复
