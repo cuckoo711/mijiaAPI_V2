@@ -45,6 +45,8 @@ uv run python -m server.cli write-config   # 从模板生成 configs/server.toml
 
 也可通过 `configs/server.toml` 配置（环境变量优先）。可用 `write-config` 从模板生成。
 
+旧版项目根目录 `.mijia/` 会在启动时迁入 `configs/`，完成后**删除** `.mijia` 与 `.mijia_backup*`（不留备份）。SDK 默认凭据/缓存亦为 `configs/`。
+
 ## 访问来源与反向代理
 
 服务默认只监听本机。要让局域网或公网客户端访问，需要同时满足：
