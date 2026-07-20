@@ -54,7 +54,8 @@ uv run python -m server.cli run
 | 场景控制 | 场景列表、一键执行、权限管理 |
 | API Key | 创建/启停/删除，细粒度权限控制 |
 | 实时同步进度 | 同步时显示进度条、步骤、设备/场景计数 |
-| 安全策略 | 局域网/公网开关、可信代理、审计日志 |
+| 安全策略 | 全站网络 ACL、可信代理（默认关）、Cookie+CSRF、审计日志、凭据加密 |
+| 管理改密 | 管理台改密 + CLI `reset-admin` |
 
 ## 对外 API
 
@@ -68,7 +69,7 @@ curl -H "Authorization: Bearer YOUR_API_KEY" \
 |------|------|------|
 | `GET` | `/api/v1/status` | 服务状态 |
 | `GET` | `/api/v1/homes` | 家庭列表 |
-| `GET` | `/api/v1/devices` | 设备列表 |
+| `GET` | `/api/v1/devices` | 设备列表（可选 `include_spec` / `include_raw`） |
 | `GET` | `/api/v1/devices/{slug}/state` | 设备状态 |
 | `POST` | `/api/v1/devices/{slug}/properties` | 控制设备 |
 | `POST` | `/api/v1/devices/{slug}/actions` | 执行动作 |
@@ -103,8 +104,27 @@ api.control_device(device_id=devices[0].did, siid=2, piid=1, value=True)
 | `MIJIA_SERVER_HOST` | `127.0.0.1` | 监听地址 |
 | `MIJIA_SERVER_PORT` | `8123` | 监听端口 |
 | `MIJIA_SERVER_DATA_DIR` | `configs` | 数据目录 |
-| `MIJIA_CREDENTIAL_PATH` | `configs/credential.json` | 凭据文件 |
+| `MIJIA_SERVER_DATABASE_PATH` | `configs/server/server.sqlite3` | SQLite 路径 |
+| `MIJIA_CREDENTIAL_PATH` | `configs/credential.json` | 凭据文件（AES-GCM 加密） |
+| `MIJIA_WEB_DIST_DIR` | `web/dist` | 前端静态资源 |
 | `MIJIA_LOG_LEVEL` | `INFO` | 日志级别（支持 `DEBUG`） |
+| `MIJIA_BOOTSTRAP_ALLOW_PRIVATE` | 空 | `1` 时允许私网完成首次建管理员（Docker） |
+| `MIJIA_CREDENTIAL_SECRET` | 空 | 可选凭据加密密钥；不设则用 `.credential_key` |
+
+也可编辑 `configs/server.toml`（可用 `python -m server.cli write-config` 生成）；环境变量优先。
+
+### 常用 CLI
+
+```bash
+uv run python -m server.cli init
+uv run python -m server.cli run
+uv run python -m server.cli check
+uv run python -m server.cli status          # 版本 / 路径 / 磁盘占用
+uv run python -m server.cli reset-admin     # 本机重置管理员密码
+uv run python -m server.cli purge-audit
+uv run python -m server.cli purge-cache     # 可加 --all
+uv run python -m server.cli write-config
+```
 
 ## 部署
 
@@ -157,25 +177,25 @@ server {
 
 ```
 mijiaAPI_V2/
-├── mijiaAPI_V2/        # SDK 核心
-│   ├── api_client.py   # API 客户端
-│   ├── core/           # 配置、日志
-│   ├── domain/         # 领域模型
-│   ├── repositories/   # 数据仓储
-│   ├── services/       # 业务服务
-│   └── infrastructure/ # HTTP、缓存、加密
-├── server/             # FastAPI 服务端
-│   ├── app.py          # 路由和鉴权
-│   ├── mijia_runtime.py # SDK 桥接层
-│   └── store.py        # SQLite 读写
-├── web/                # Vue3 管理后台
-├── examples/           # 11 个示例
-├── docs/               # 详细文档
-├── build.py            # 多平台构建脚本
-├── build.sh            # Linux/macOS 构建脚本
-├── build.bat           # Windows 构建脚本
-└── mijia-server.spec   # PyInstaller 配置
+├── mijiaAPI_V2/           # SDK 核心
+├── server/                # FastAPI 服务端
+│   ├── app.py             # 应用工厂、中间件、SPA
+│   ├── cli.py             # 运维 CLI
+│   ├── routers/           # admin_auth / admin_mijia / admin_resources / api_v1
+│   ├── store*.py          # SQLite 仓储（auth / api_keys / registry）
+│   └── mijia_runtime.py   # SDK 桥接
+├── web/                   # Vue3 管理台（views + composables）
+├── configs/               # 运行时数据与 TOML 模板（凭据加密落盘）
+├── deploy/                # systemd 示例
+├── examples/              # SDK 示例
+├── docs/                  # 详细文档
+├── Dockerfile             # 多阶段构建
+├── docker-compose.yml
+└── mijia-server.spec      # PyInstaller 配置
 ```
+
+管理台使用 HttpOnly Cookie 会话 + CSRF；对外 API 仍用 `Authorization: Bearer <api_key>`。
+详见 [docs/开发指南/05-API-Server-开发启动.md](docs/开发指南/05-API-Server-开发启动.md)。
 
 ## 打包为可执行文件
 
@@ -211,8 +231,8 @@ uv run pyinstaller --clean --noconfirm mijia-server.spec
 推送版本标签后会自动触发 GitHub Actions 构建：
 
 ```bash
-git tag v2.1.0
-git push origin v2.1.0
+git tag v3.6.7
+git push origin v3.6.7
 ```
 
 ### 运行可执行文件
@@ -227,10 +247,14 @@ git push origin v2.1.0
 
 ## 常见问题
 
-**同步按钮可以连续点吗？** 前端会禁用按钮，后端返回 `409 SYNC_IN_PROGRESS`。
+**同步按钮可以连续点吗？** 前端会禁用按钮，后端返回 `409 SYNC_IN_PROGRESS`；进度接口按 `task_id` 区分轮次。
 
-**API 返回 `NETWORK_ACCESS_DENIED`？** 需在「系统安全」开启局域网/公网请求。
+**API 返回 `NETWORK_ACCESS_DENIED`？** 需在「系统安全」开启局域网/公网请求。策略覆盖管理台与对外 API。
 
 **API Key 创建后还能查看完整密钥吗？** 不能，只在创建时显示一次。
 
-**支持 Docker 吗？** 支持，核心只需 Python、Node 和 SQLite。
+**忘记管理员密码？** 本机执行 `python -m server.cli reset-admin`。
+
+**管理台登录态存在哪？** HttpOnly Cookie（`mijia_admin_session`）+ CSRF；不要跨域依赖 Cookie。
+
+**支持 Docker 吗？** 支持，见上方 Docker 小节与仓库根目录 `Dockerfile` / `docker-compose.yml`。

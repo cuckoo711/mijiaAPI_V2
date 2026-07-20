@@ -2,6 +2,13 @@
 
 本项目遵循“面向部署和使用者可读”的更新记录。最新变化放在最前面。
 
+## v3.6.8 - 2026-07-21
+
+### 文档
+
+- 重写 `docs/开发指南/05-API-Server-开发启动.md`：CLI、Cookie+CSRF、全站 ACL、`TRUST_PROXY` 默认关、路由结构与常用接口。
+- 更新 README 环境变量/CLI/项目结构/FAQ；`configs/README`、`docs/README`、故障排查与 examples 凭据路径说明。
+
 ## v3.6.7 - 2026-07-21
 
 ### 修复
