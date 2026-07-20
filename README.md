@@ -108,6 +108,18 @@ api.control_device(device_id=devices[0].did, siid=2, piid=1, value=True)
 
 ## 部署
 
+### Docker
+
+```bash
+docker compose up -d --build
+```
+
+数据与凭据持久化在命名卷 `mijia-data`（可在 `docker-compose.yml` 中改为 `./data:/data`）。首次启动后访问 `http://127.0.0.1:8123` 创建管理员。可选初始化：
+
+```bash
+docker compose run --rm mijia-server mijia-server init --admin admin
+```
+
 ### systemd
 
 仓库提供加固示例单元，见 [`deploy/mijia-server.service`](deploy/mijia-server.service) 与

@@ -16,13 +16,8 @@ from pydantic import BaseModel, Field
 import mijiaAPI_V2
 from server.config import ServerSettings
 from server.mijia_runtime import LoginJobManager, MijiaRuntime, SyncInProgressError
-from server.store import (
-    AuthenticationFailedError,
-    AdminNotFoundError,
-    BootstrapAlreadyCompletedError,
-    InvalidCurrentPasswordError,
-    ServerStore,
-)
+from server.routers import admin_auth
+from server.store import AuthenticationFailedError, ServerStore
 from server.updater import UpdateChecker
 
 DEFAULT_TRUSTED_PROXY_CIDRS = ("127.0.0.1/32", "::1/128")
@@ -34,35 +29,6 @@ class ErrorEnvelope(BaseModel):
     """Standard API error envelope."""
 
     error: dict[str, Any]
-
-
-class BootstrapStateResponse(BaseModel):
-    """Current bootstrap state."""
-
-    initialized: bool
-    status: str
-    version: str
-
-
-class CreateAdminRequest(BaseModel):
-    """Create the initial administrator."""
-
-    username: str = Field(default="admin", min_length=3, max_length=64)
-    password: str = Field(min_length=8, max_length=256)
-
-
-class LoginRequest(BaseModel):
-    """Administrator login payload."""
-
-    username: str
-    password: str
-
-
-class ChangePasswordRequest(BaseModel):
-    """Change the current administrator password."""
-
-    current_password: str = Field(min_length=1, max_length=256)
-    new_password: str = Field(min_length=8, max_length=256)
 
 
 class CreateApiKeyRequest(BaseModel):
@@ -252,11 +218,6 @@ def _request_network_allowed(host: str, config: dict[str, Any]) -> bool:
     if address.is_private or address.is_link_local:
         return _config_bool(config, "ALLOW_LAN_ACCESS")
     return _config_bool(config, "ALLOW_PUBLIC_ACCESS")
-
-
-def _is_loopback_host(host: str) -> bool:
-    address = _parse_ip(host)
-    return bool(address and address.is_loopback)
 
 
 def _network_policy_required(path: str) -> bool:
@@ -504,107 +465,7 @@ def create_app(  # noqa: C901
     def healthz() -> dict[str, Any]:
         return {"status": "ok", "version": mijiaAPI_V2.__version__}
 
-    @app.get("/api/admin/bootstrap/state", response_model=BootstrapStateResponse)
-    def bootstrap_state(current_store: ServerStore = Depends(get_store)) -> dict[str, Any]:
-        return {
-            "initialized": current_store.has_admin(),
-            "status": "ok",
-            "version": mijiaAPI_V2.__version__,
-        }
-
-    @app.post("/api/admin/bootstrap/admin", status_code=status.HTTP_201_CREATED)
-    def create_initial_admin(
-        request: Request,
-        payload: CreateAdminRequest,
-        current_store: ServerStore = Depends(get_store),
-    ) -> dict[str, Any]:
-        source_ip = getattr(request.state, "source_ip", "") or ""
-        if not _is_loopback_host(source_ip):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail={
-                    "code": "BOOTSTRAP_LOCAL_ONLY",
-                    "message": "首次创建管理员仅允许本机回环地址访问",
-                },
-            )
-        try:
-            return current_store.create_initial_admin(payload.username, payload.password)
-        except BootstrapAlreadyCompletedError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail={"code": "BOOTSTRAP_ALREADY_COMPLETED", "message": str(exc)},
-            ) from exc
-
-    @app.post("/api/admin/auth/login")
-    def admin_login(
-        payload: LoginRequest,
-        current_store: ServerStore = Depends(get_store),
-    ) -> dict[str, Any]:
-        try:
-            return current_store.authenticate_admin(payload.username, payload.password)
-        except AuthenticationFailedError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail={"code": "ADMIN_AUTH_FAILED", "message": str(exc)},
-            ) from exc
-
-    @app.post("/api/admin/auth/refresh")
-    def admin_refresh_session(
-        authorization: Annotated[Optional[str], Header()] = None,
-        current_store: ServerStore = Depends(get_store),
-    ) -> dict[str, Any]:
-        token = _extract_bearer_token(authorization)
-        try:
-            return current_store.refresh_admin_session(token)
-        except AuthenticationFailedError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail={"code": "ADMIN_AUTH_FAILED", "message": str(exc)},
-            ) from exc
-
-    @app.post("/api/admin/auth/change-password")
-    def admin_change_password(
-        payload: ChangePasswordRequest,
-        authorization: Annotated[Optional[str], Header()] = None,
-        current_store: ServerStore = Depends(get_store),
-    ) -> dict[str, Any]:
-        token = _extract_bearer_token(authorization)
-        try:
-            admin = current_store.validate_admin_session(token)
-            result = current_store.change_admin_password(
-                admin["id"],
-                payload.current_password,
-                payload.new_password,
-                keep_session_token=token,
-            )
-        except InvalidCurrentPasswordError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={"code": "CURRENT_PASSWORD_INVALID", "message": str(exc)},
-            ) from exc
-        except AuthenticationFailedError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail={"code": "ADMIN_AUTH_FAILED", "message": str(exc)},
-            ) from exc
-        except AdminNotFoundError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail={"code": "ADMIN_NOT_FOUND", "message": str(exc)},
-            ) from exc
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={"code": "PASSWORD_CHANGE_REJECTED", "message": str(exc)},
-            ) from exc
-
-        current_store.add_audit(
-            "admin.password.change",
-            "success",
-            actor_type="admin",
-            actor_id=admin["id"],
-        )
-        return result
+    app.include_router(admin_auth.router)
 
     @app.get("/api/admin/system/check")
     def admin_system_check(

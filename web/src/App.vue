@@ -986,18 +986,29 @@ async function pollQrLogin(): Promise<void> {
 function startSyncPolling(): void {
   if (isSyncPolling.value) return;
   isSyncPolling.value = true;
-  syncPollTimer.value = window.setInterval(pollSyncProgress, 500);
+  void scheduleSyncPoll(800);
 }
 
 function stopSyncPolling(): void {
   if (syncPollTimer.value) {
-    window.clearInterval(syncPollTimer.value);
+    window.clearTimeout(syncPollTimer.value);
     syncPollTimer.value = null;
   }
   isSyncPolling.value = false;
 }
 
-async function pollSyncProgress(): Promise<void> {
+function scheduleSyncPoll(delayMs: number): void {
+  if (!isSyncPolling.value) return;
+  syncPollTimer.value = window.setTimeout(() => {
+    void pollSyncProgress().then((nextDelay) => {
+      if (isSyncPolling.value) {
+        scheduleSyncPoll(nextDelay);
+      }
+    });
+  }, delayMs);
+}
+
+async function pollSyncProgress(): Promise<number> {
   try {
     const progress = await request<{
       task_id: string;
@@ -1017,7 +1028,7 @@ async function pollSyncProgress(): Promise<void> {
     }>("/api/admin/sync/progress");
     // 如果后端返回 idle 但前端正在同步，保留前端的初始状态
     if (progress.status === "idle" && syncing.value) {
-      return;
+      return 1200;
     }
     syncProgress.value = progress;
     if (progress.status === "completed" || progress.status === "failed") {
@@ -1032,9 +1043,13 @@ async function pollSyncProgress(): Promise<void> {
       } else {
         ElMessage.error(`同步失败：${progress.error}`);
       }
+      return 800;
     }
+    // 运行中稍密，其它状态放宽间隔，降低管理会话与 SQLite 压力
+    return progress.status === "running" ? 1000 : 2000;
   } catch (error) {
     console.error("获取同步进度失败:", error);
+    return 2000;
   }
 }
 
@@ -1471,7 +1486,7 @@ onBeforeUnmount(() => {
                 </el-button>
               </div>
               <div v-if="qrJob" class="qr-box">
-                <img :src="qrJob.qr_url" alt="米家登录二维码" />
+                <img :src="qrJob.qr_image || qrJob.qr_url" alt="米家登录二维码" />
                 <div class="qr-status">
                   <el-tag :type="qrJob.status === 'success' ? 'success' : 
                                qrJob.status === 'failed' ? 'danger' : 'info'" size="large">
