@@ -7,8 +7,8 @@
 import sys
 from pathlib import Path
 
-# 添加项目根目录到路径
-project_root = Path(__file__).parent.parent
+# 添加项目根目录到路径（本文件位于 deploy/scripts/）
+project_root = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(project_root))
 
 from mijiaAPI_V2 import create_api_client_from_file

@@ -45,7 +45,8 @@
 
 ## 🛠️ 工具文档
 
-- [../scripts/README.md](../scripts/README.md) - 项目脚本使用说明（清理、测试等）
+- [../deploy/scripts/README.md](../deploy/scripts/README.md) - 项目脚本使用说明（清理、设备规格等）
+- [../deploy/README.md](../deploy/README.md) - Docker / systemd / 打包
 - [故障排查指南.md](故障排查指南.md) - 常见问题诊断和解决方案
 
 ## 📦 归档文档

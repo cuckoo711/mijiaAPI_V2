@@ -201,7 +201,7 @@ def main():
                 print(f"  ✗ 动作执行失败: {e}")
         else:
             print("  跳过：所有动作都需要参数")
-            print(f"  提示：设备有 {len(spec.actions)} 个动作，可使用 'python scripts/show_device_spec.py' 查看详情")
+            print(f"  提示：设备有 {len(spec.actions)} 个动作，可使用 'python deploy/scripts/show_device_spec.py' 查看详情")
     else:
         print("  跳过：设备没有可用的动作")
     print()
@@ -226,7 +226,7 @@ def main():
     print("=== 示例完成 ===")
     print("\n提示：")
     print("- siid 和 piid 需要根据设备规格确定")
-    print("- 使用 'python scripts/show_device_spec.py' 查看完整设备规格")
+    print("- 使用 'python deploy/scripts/show_device_spec.py' 查看完整设备规格")
     print("- 参考文档：docs/使用指南/05-设备规格翻译.md")
 
 

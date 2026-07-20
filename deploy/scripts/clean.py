@@ -17,8 +17,8 @@ from typing import List
 
 
 def get_project_root() -> Path:
-    """获取项目根目录"""
-    return Path(__file__).parent.parent
+    """获取项目根目录（本文件位于 deploy/scripts/）"""
+    return Path(__file__).resolve().parents[2]
 
 
 def clean_patterns(root: Path, patterns: List[str], description: str) -> int:

@@ -36,3 +36,8 @@ python deploy/packaging/build.py
 ```
 
 图标资源在 [`assets/`](assets/)；Windows 旁路启动脚本：[`packaging/start-server.bat`](packaging/start-server.bat)（检测 `configs/server/server.sqlite3`）。
+
+## 运维脚本
+
+见 [`scripts/`](scripts/)：`clean`、`extract_release_notes`、`show_device_spec`。
+

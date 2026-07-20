@@ -74,8 +74,8 @@ def main():
                         print(f"  - {prop.name} (siid={prop.siid}, piid={prop.piid})")
             
             # 注意：控制设备需要知道正确的 siid 和 piid
-            # 可以使用 scripts/show_device_spec.py 查看设备规格
-            print("\n提示：使用 'python scripts/show_device_spec.py' 查看设备规格后再控制设备")
+            # 可以使用 deploy/scripts/show_device_spec.py 查看设备规格
+            print("\n提示：使用 'python deploy/scripts/show_device_spec.py' 查看设备规格后再控制设备")
         else:
             print("未找到可控制的灯光设备")
     

@@ -1,4 +1,4 @@
-"""scripts/extract_release_notes.py 的单元测试。"""
+"""deploy/scripts/extract_release_notes.py 的单元测试。"""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 # 让脚本包路径可 import
-_SCRIPTS_DIR = Path(__file__).resolve().parents[2] / "scripts"
+_SCRIPTS_DIR = Path(__file__).resolve().parents[2] / "deploy" / "scripts"
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 

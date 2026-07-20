@@ -27,20 +27,20 @@ make help
 
 ```bash
 # 运行清理脚本
-./scripts/clean.sh
+./deploy/scripts/clean.sh
 
 # 或者
-bash scripts/clean.sh
+bash deploy/scripts/clean.sh
 ```
 
 **方式三：使用 Python 脚本**
 
 ```bash
 # 运行清理脚本
-uv run python scripts/clean.py
+uv run python deploy/scripts/clean.py
 
 # 或者
-python scripts/clean.py
+python deploy/scripts/clean.py
 ```
 
 #### 清理内容
@@ -83,13 +83,13 @@ python scripts/clean.py
 
 ```bash
 # 交互式选择设备
-uv run python scripts/show_device_spec.py
+uv run python deploy/scripts/show_device_spec.py
 
 # 通过设备名称查看
-uv run python scripts/show_device_spec.py "设备名称"
+uv run python deploy/scripts/show_device_spec.py "设备名称"
 
 # 通过设备型号查看
-uv run python scripts/show_device_spec.py "yeelink.light.lamp4"
+uv run python deploy/scripts/show_device_spec.py "yeelink.light.lamp4"
 ```
 
 ## 其他 Makefile 命令
@@ -125,6 +125,6 @@ make dev
 
 ## 相关文档
 
-- [示例代码](../examples/README.md) - 完整的API使用示例
-- [开发指南](../docs/开发指南/01-开发环境.md) - 开发环境配置
-- [使用指南](../docs/使用指南/01-快速开始.md) - 快速开始指南
+- [示例代码](../../examples/README.md) - 完整的API使用示例
+- [开发指南](../../docs/开发指南/01-开发环境.md) - 开发环境配置
+- [使用指南](../../docs/使用指南/01-快速开始.md) - 快速开始指南

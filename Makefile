@@ -41,8 +41,8 @@ test-cov:
 
 format:
 	@echo "格式化代码..."
-	@uv run black mijiaAPI_V2/ server/ tests/ examples/ scripts/
-	@uv run isort mijiaAPI_V2/ server/ tests/ examples/ scripts/
+	@uv run black mijiaAPI_V2/ server/ tests/ examples/ deploy/scripts/
+	@uv run isort mijiaAPI_V2/ server/ tests/ examples/ deploy/scripts/
 	@echo "✓ 代码格式化完成"
 
 lint:
