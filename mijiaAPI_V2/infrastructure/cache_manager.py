@@ -317,6 +317,33 @@ class CacheManager:
 
         return stats
 
+    def purge_expired_files(self) -> int:
+        """Delete expired L3 file-cache entries. Returns the number removed."""
+
+        removed = 0
+        if not self._cache_dir.exists():
+            return 0
+        now = time.time()
+        for file_path in self._cache_dir.iterdir():
+            if not file_path.is_file():
+                continue
+            try:
+                with open(file_path, "r", encoding="utf-8") as handle:
+                    payload = json.load(handle)
+            except Exception:
+                continue
+            if not isinstance(payload, dict) or "data" not in payload:
+                continue
+            expires_at = payload.get("expires_at")
+            if expires_at is None or now <= expires_at:
+                continue
+            try:
+                file_path.unlink(missing_ok=True)
+                removed += 1
+            except OSError:
+                pass
+        return removed
+
     def _load_from_file(self, key: str) -> Optional[Any]:
         """从文件加载缓存
 

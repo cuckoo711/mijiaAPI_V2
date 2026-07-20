@@ -34,6 +34,8 @@ ProtectHome=true
 PrivateTmp=true
 # Data dir + legacy migration path (.mijia); adjust if MIJIA_SERVER_DATA_DIR changes.
 ReadWritePaths=/opt/mijia_server/configs /opt/mijia_server/.mijia
+# Optional soft memory ceiling (process is typically ~40-80MB RSS idle).
+# MemoryMax=256M
 
 [Install]
 WantedBy=multi-user.target

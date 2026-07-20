@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import shutil
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
@@ -254,46 +255,80 @@ class ServerSettings:
 
     @classmethod
     def _migrate_v2_to_v3_if_needed(cls) -> None:
-        """检查并迁移 v2.x 版本的数据"""
+        """Idempotently migrate leftover ``.mijia`` data into ``configs/``.
+
+        Re-runs must be silent when everything is already on the v3 layout.
+        Leftover files under ``.mijia`` that would collide with existing
+        ``configs/`` targets are discarded (the live copy wins).
+        """
+
         old_dir = Path(".mijia")
         new_dir = Path("configs")
-        
-        if not old_dir.exists():
-            return
-            
-        print("检测到旧版本数据，正在迁移到 v3.0...")
-        
-        # 确保新目录存在
-        new_dir.mkdir(parents=True, exist_ok=True)
-        
-        # 迁移凭据文件
-        old_credential = old_dir / "credential.json"
-        new_credential = new_dir / "credential.json"
-        if old_credential.exists() and not new_credential.exists():
-            shutil.move(str(old_credential), str(new_credential))
-            print(f"  迁移凭据文件: {old_credential} -> {new_credential}")
-            
-        # 迁移服务器数据
-        old_server = old_dir / "server"
-        new_server = new_dir / "server"
-        if old_server.exists() and not new_server.exists():
-            shutil.move(str(old_server), str(new_server))
-            print(f"  迁移服务器数据: {old_server} -> {new_server}")
-            
-        # 迁移缓存
-        old_cache = old_dir / "cache"
-        new_cache = new_dir / "cache"
-        if old_cache.exists() and not new_cache.exists():
-            shutil.move(str(old_cache), str(new_cache))
-            print(f"  迁移缓存: {old_cache} -> {new_cache}")
-            
-        # 保留旧目录作为备份
-        backup_dir = old_dir.parent / ".mijia_backup"
-        if not backup_dir.exists():
+        moved: list[str] = []
+
+        def _take(src: Path, dst: Path, label: str) -> None:
+            if not src.exists():
+                return
+            if dst.exists():
+                # Already migrated earlier; drop the stale leftover source.
+                if src.is_dir():
+                    shutil.rmtree(src, ignore_errors=True)
+                else:
+                    src.unlink(missing_ok=True)
+                return
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(src), str(dst))
+            moved.append(f"{label}: {src} -> {dst}")
+
+        if old_dir.exists():
+            new_dir.mkdir(parents=True, exist_ok=True)
+            _take(old_dir / "credential.json", new_dir / "credential.json", "凭据文件")
+            _take(old_dir / "server", new_dir / "server", "服务器数据")
+            _take(old_dir / "cache", new_dir / "cache", "缓存")
+
+            if old_dir.exists():
+                # Remove emptied directories; anything still left gets a unique backup.
+                for path in sorted(old_dir.rglob("*"), reverse=True):
+                    if path.is_dir():
+                        try:
+                            path.rmdir()
+                        except OSError:
+                            pass
+                try:
+                    remaining = list(old_dir.iterdir()) if old_dir.exists() else []
+                except OSError:
+                    remaining = []
+                if not remaining:
+                    try:
+                        old_dir.rmdir()
+                    except OSError:
+                        pass
+                else:
+                    stamp = time.strftime("%Y%m%d%H%M%S")
+                    backup_dir = Path(f".mijia_backup_{stamp}")
+                    try:
+                        old_dir.rename(backup_dir)
+                        moved.append(f"残留备份: {old_dir} -> {backup_dir}")
+                    except OSError as exc:
+                        print(f"  警告: 无法归档旧目录 {old_dir}: {exc}")
+
+        # Canonical SDK disk cache is ``configs/cache``; drop the orphaned
+        # ``configs/server/cache`` leftover from older layouts to reclaim disk.
+        orphaned_cache = new_dir / "server" / "cache"
+        canonical_cache = new_dir / "cache"
+        if orphaned_cache.is_dir() and canonical_cache.is_dir():
+            shutil.rmtree(orphaned_cache, ignore_errors=True)
+
+        # Empty placeholder created by earlier buggy migration attempts.
+        empty_backup = Path(".mijia_backup")
+        if empty_backup.is_dir() and not any(empty_backup.iterdir()):
             try:
-                old_dir.rename(backup_dir)
-                print(f"  旧目录已备份到: {backup_dir}")
-            except Exception as e:
-                print(f"  警告: 无法重命名旧目录: {e}")
-                
-        print("迁移完成!")
+                empty_backup.rmdir()
+            except OSError:
+                pass
+
+        if moved:
+            print("检测到旧版本数据，正在迁移到 v3.0...")
+            for line in moved:
+                print(f"  {line}")
+            print("迁移完成!")
