@@ -1,0 +1,22 @@
+services:
+  mijia-server:
+    build: .
+    image: mijia-server:latest
+    container_name: mijia-server
+    ports:
+      - "8123:8123"
+    volumes:
+      - mijia-data:/data
+    environment:
+      MIJIA_SERVER_HOST: 0.0.0.0
+      MIJIA_SERVER_PORT: 8123
+      MIJIA_SERVER_DATA_DIR: /data
+      MIJIA_SERVER_DATABASE_PATH: /data/server/server.sqlite3
+      MIJIA_CREDENTIAL_PATH: /data/credential.json
+      MIJIA_WEB_DIST_DIR: /app/web/dist
+      # 容器端口映射后来源多为 Docker 网桥私网 IP，允许首次本机建管理员
+      MIJIA_BOOTSTRAP_ALLOW_PRIVATE: "1"
+    restart: unless-stopped
+
+volumes:
+  mijia-data:

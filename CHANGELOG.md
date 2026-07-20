@@ -2,6 +2,19 @@
 
 本项目遵循“面向部署和使用者可读”的更新记录。最新变化放在最前面。
 
+## v3.4.1 - 2026-07-21
+
+### 修复
+
+- 管理台米家登录二维码改为后端本地生成 PNG（`qr_image` data URL），避免前端直连小米域名被 CSP/跨域拦截。
+
+### 改进
+
+- 管理员登录 / bootstrap 增加按 IP 的滑动窗口限流（429）。
+- 同步进度轮询改为自适应间隔（约 1–2s），降低无效高频请求。
+- 抽出 `server/routers/admin_auth.py` 与 `server/deps.py`，开始拆分 `create_app`。
+- 新增 `Dockerfile` / `docker-compose.yml`；容器内可通过 `MIJIA_BOOTSTRAP_ALLOW_PRIVATE=1` 完成首次建管理员。
+
 ## v3.4.0 - 2026-07-21
 
 ### 安全

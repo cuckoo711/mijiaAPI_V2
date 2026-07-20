@@ -13,8 +13,14 @@ import pytest
 from mijiaAPI_V2.domain.models import Credential, Home
 from mijiaAPI_V2.infrastructure.credential_store import FileCredentialStore
 from server.config import ServerSettings
-from server.mijia_runtime import MijiaRuntime, SyncInProgressError
+from server.mijia_runtime import MijiaRuntime, SyncInProgressError, render_qr_data_url
 from server.store import ServerStore
+
+
+def test_render_qr_data_url_is_png_data_uri() -> None:
+    data_url = render_qr_data_url("https://account.xiaomi.com/pass/qr/login?ticket=demo")
+    assert data_url.startswith("data:image/png;base64,")
+    assert len(data_url) > 100
 
 
 def _wait_for_sync_completion(runtime: MijiaRuntime, timeout: float = 5.0) -> dict[str, Any]:

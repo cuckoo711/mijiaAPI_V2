@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import base64
+import io
 import threading
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Optional
 
+import qrcode
 from mijiaAPI_V2 import create_api_client, create_auth_service
 from mijiaAPI_V2.core.config import ConfigManager
 from mijiaAPI_V2.domain.models import Credential, Device, Home
@@ -29,6 +32,24 @@ def model_to_dict(value: Any) -> dict[str, Any]:
     return dict(value)
 
 
+def render_qr_data_url(content: str, *, box_size: int = 6, border: int = 2) -> str:
+    """Render ``content`` as a PNG data URL for the admin UI.
+
+    The browser must not fetch Xiaomi's ``qr`` image URL directly — CSP and
+    cross-origin restrictions routinely break ``<img src="https://account.xiaomi.com/...">``.
+    Generating the QR locally from ``loginUrl`` matches the CLI path and stays same-origin.
+    """
+
+    qr = qrcode.QRCode(version=None, error_correction=qrcode.constants.ERROR_CORRECT_M, box_size=box_size, border=border)
+    qr.add_data(content)
+    qr.make(fit=True)
+    image = qr.make_image(fill_color="black", back_color="white")
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+    return f"data:image/png;base64,{encoded}"
+
+
 @dataclass
 class LoginJob:
     """In-memory state for a QR login session."""
@@ -37,6 +58,7 @@ class LoginJob:
     qr_url: str
     login_url: str
     poll_url: str
+    qr_image: str = ""
     status: str = "pending"
     message: str = "等待扫码"
     created_at: str = field(default_factory=lambda: isoformat(utc_now()))
@@ -47,8 +69,8 @@ class LoginJob:
         return {
             "id": self.id,
             "qr_url": self.qr_url,
+            "qr_image": self.qr_image,
             "login_url": self.login_url,
-            "poll_url": self.poll_url,
             "status": self.status,
             "message": self.message,
             "created_at": self.created_at,
@@ -113,11 +135,13 @@ class LoginJobManager:
         if location_data.get("code") == 0:
             raise RuntimeError("已有有效登录态，请加载已保存凭据")
         qr_data = provider._get_qrcode_data(location_data)
+        login_url = str(qr_data["loginUrl"])
         job = LoginJob(
             id=str(uuid.uuid4()),
             qr_url=str(qr_data["qr"]),
-            login_url=str(qr_data["loginUrl"]),
+            login_url=login_url,
             poll_url=str(qr_data["lp"]),
+            qr_image=render_qr_data_url(login_url),
         )
         with self._lock:
             self._jobs[job.id] = job
