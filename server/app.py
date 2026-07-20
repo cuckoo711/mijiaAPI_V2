@@ -18,7 +18,9 @@ from server.config import ServerSettings
 from server.mijia_runtime import LoginJobManager, MijiaRuntime, SyncInProgressError
 from server.store import (
     AuthenticationFailedError,
+    AdminNotFoundError,
     BootstrapAlreadyCompletedError,
+    InvalidCurrentPasswordError,
     ServerStore,
 )
 from server.updater import UpdateChecker
@@ -54,6 +56,13 @@ class LoginRequest(BaseModel):
 
     username: str
     password: str
+
+
+class ChangePasswordRequest(BaseModel):
+    """Change the current administrator password."""
+
+    current_password: str = Field(min_length=1, max_length=256)
+    new_password: str = Field(min_length=8, max_length=256)
 
 
 class CreateApiKeyRequest(BaseModel):
@@ -494,6 +503,50 @@ def create_app(  # noqa: C901
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail={"code": "ADMIN_AUTH_FAILED", "message": str(exc)},
             ) from exc
+
+    @app.post("/api/admin/auth/change-password")
+    def admin_change_password(
+        payload: ChangePasswordRequest,
+        authorization: Annotated[Optional[str], Header()] = None,
+        current_store: ServerStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        token = _extract_bearer_token(authorization)
+        try:
+            admin = current_store.validate_admin_session(token)
+            result = current_store.change_admin_password(
+                admin["id"],
+                payload.current_password,
+                payload.new_password,
+                keep_session_token=token,
+            )
+        except InvalidCurrentPasswordError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"code": "CURRENT_PASSWORD_INVALID", "message": str(exc)},
+            ) from exc
+        except AuthenticationFailedError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"code": "ADMIN_AUTH_FAILED", "message": str(exc)},
+            ) from exc
+        except AdminNotFoundError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"code": "ADMIN_NOT_FOUND", "message": str(exc)},
+            ) from exc
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"code": "PASSWORD_CHANGE_REJECTED", "message": str(exc)},
+            ) from exc
+
+        current_store.add_audit(
+            "admin.password.change",
+            "success",
+            actor_type="admin",
+            actor_id=admin["id"],
+        )
+        return result
 
     @app.get("/api/admin/system/check")
     def admin_system_check(

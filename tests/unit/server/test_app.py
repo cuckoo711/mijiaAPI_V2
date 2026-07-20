@@ -61,6 +61,45 @@ def test_admin_auth_refresh_extends_session(tmp_path: Path) -> None:
     assert payload["admin"]["username"] == "admin"
 
 
+def test_admin_change_password(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    token = admin_token(client)
+
+    bad = client.post(
+        "/api/admin/auth/change-password",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"current_password": "wrong-password", "new_password": "newer-password"},
+    )
+    assert bad.status_code == 400
+    assert bad.json()["error"]["code"] == "CURRENT_PASSWORD_INVALID"
+
+    ok = client.post(
+        "/api/admin/auth/change-password",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"current_password": "strong-password", "new_password": "newer-password"},
+    )
+    assert ok.status_code == 200
+    assert ok.json()["username"] == "admin"
+
+    still_valid = client.post(
+        "/api/admin/auth/refresh",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert still_valid.status_code == 200
+
+    old_login = client.post(
+        "/api/admin/auth/login",
+        json={"username": "admin", "password": "strong-password"},
+    )
+    assert old_login.status_code == 401
+
+    new_login = client.post(
+        "/api/admin/auth/login",
+        json={"username": "admin", "password": "newer-password"},
+    )
+    assert new_login.status_code == 200
+
+
 def test_healthz_is_public(tmp_path: Path) -> None:
     client = make_client(tmp_path)
 
