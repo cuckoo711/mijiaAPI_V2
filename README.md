@@ -195,6 +195,7 @@ mijiaAPI_V2/
 ```
 
 管理台使用 HttpOnly Cookie 会话 + CSRF；对外 API 仍用 `Authorization: Bearer <api_key>`。
+SDK 与 Server 默认数据目录均为 `configs/`（旧 `.mijia/` 启动时迁移后删除）。
 详见 [docs/开发指南/05-API-Server-开发启动.md](docs/开发指南/05-API-Server-开发启动.md)。
 
 ## 打包为可执行文件
