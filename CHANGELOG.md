@@ -2,6 +2,17 @@
 
 本项目遵循“面向部署和使用者可读”的更新记录。最新变化放在最前面。
 
+## v3.6.2 - 2026-07-21
+
+### 安全
+
+- 管理台 Cookie 会话增加双重提交 CSRF：登录/刷新下发可读 `mijia_csrf`，Cookie 认证的不安全方法须带匹配的 `X-CSRF-Token`；`Authorization: Bearer` 免检。
+- 新增 `GET /api/admin/auth/csrf` 用于补发 CSRF Cookie；SPA 在缺失时自动拉取。
+
+### 运维
+
+- Docker 入口使用 `gosu` 修正数据卷属主后再降权运行。
+
 ## v3.6.1 - 2026-07-21
 
 ### 安全

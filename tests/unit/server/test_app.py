@@ -48,6 +48,23 @@ def admin_token(client: TestClient) -> str:
     return token
 
 
+def admin_cookie_session(client: TestClient) -> tuple[str, str]:
+    """Bootstrap + login, keeping session and CSRF cookies for cookie-auth tests."""
+
+    client.post(
+        "/api/admin/bootstrap/admin",
+        json={"username": "admin", "password": "strong-password"},
+    )
+    login = client.post(
+        "/api/admin/auth/login",
+        json={"username": "admin", "password": "strong-password"},
+    )
+    token = str(login.json()["token"])
+    csrf = str(login.cookies.get("mijia_csrf") or "")
+    assert csrf
+    return token, csrf
+
+
 def test_admin_auth_refresh_extends_session(tmp_path: Path) -> None:
     client = make_client(tmp_path)
     token = admin_token(client)
@@ -553,7 +570,10 @@ def test_admin_login_sets_httponly_session_cookie(tmp_path: Path) -> None:
     token = login.json()["token"]
     cookie = login.cookies.get("mijia_admin_session")
     assert cookie == token
+    assert login.cookies.get("mijia_csrf")
     set_cookie = login.headers.get("set-cookie", "")
+    assert "mijia_admin_session=" in set_cookie
+    assert "mijia_csrf=" in set_cookie
     assert "HttpOnly" in set_cookie
     assert "samesite=lax" in set_cookie.lower()
     assert "Path=/" in set_cookie
@@ -587,16 +607,19 @@ def test_admin_bearer_still_works_without_cookie(tmp_path: Path) -> None:
 
 def test_admin_logout_clears_cookie_and_revokes_session(tmp_path: Path) -> None:
     client = make_client(tmp_path)
-    token = admin_token(client)
-    client.cookies.set("mijia_admin_session", token)
+    token, csrf = admin_cookie_session(client)
 
-    logout = client.post("/api/admin/auth/logout")
+    logout = client.post(
+        "/api/admin/auth/logout",
+        headers={"X-CSRF-Token": csrf},
+    )
     assert logout.status_code == 200
     assert logout.json()["status"] == "ok"
     # Cookie deleted (empty / expired)
     set_cookie = logout.headers.get("set-cookie", "")
     assert "mijia_admin_session" in set_cookie
     assert "Max-Age=0" in set_cookie or "max-age=0" in set_cookie.lower()
+    assert "mijia_csrf" in set_cookie
 
     client.cookies.clear()
     denied = client.get(
@@ -608,14 +631,58 @@ def test_admin_logout_clears_cookie_and_revokes_session(tmp_path: Path) -> None:
 
 def test_admin_refresh_accepts_cookie_and_renews_it(tmp_path: Path) -> None:
     client = make_client(tmp_path)
-    token = admin_token(client)
-    client.cookies.set("mijia_admin_session", token)
+    token, csrf = admin_cookie_session(client)
 
-    response = client.post("/api/admin/auth/refresh")
+    response = client.post(
+        "/api/admin/auth/refresh",
+        headers={"X-CSRF-Token": csrf},
+    )
 
     assert response.status_code == 200
     assert response.json()["token"] == token
     assert response.cookies.get("mijia_admin_session") == token
+    assert response.cookies.get("mijia_csrf")
+
+
+def test_admin_cookie_post_without_csrf_fails(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    token, _csrf = admin_cookie_session(client)
+    # Keep session cookie but drop CSRF cookie / header.
+    client.cookies.clear()
+    client.cookies.set("mijia_admin_session", token)
+
+    response = client.post("/api/admin/auth/refresh")
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "CSRF_FAILED"
+
+
+def test_admin_cookie_post_with_matching_csrf_succeeds(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    token, csrf = admin_cookie_session(client)
+
+    response = client.post(
+        "/api/admin/auth/refresh",
+        headers={"X-CSRF-Token": csrf},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["token"] == token
+    assert response.cookies.get("mijia_csrf")
+
+
+def test_admin_bearer_post_without_csrf_succeeds(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    token = admin_token(client)
+    client.cookies.clear()
+
+    response = client.post(
+        "/api/admin/auth/refresh",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["token"] == token
 
 
 def test_api_key_auth_unaffected_by_admin_cookie(tmp_path: Path) -> None:

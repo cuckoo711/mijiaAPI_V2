@@ -10,6 +10,12 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 import mijiaAPI_V2
+from server.admin_csrf import (
+    CSRF_COOKIE_NAME,
+    clear_csrf_cookie,
+    generate_csrf_token,
+    set_csrf_cookie,
+)
 from server.admin_session_cookie import (
     admin_session_max_age_seconds,
     clear_admin_session_cookie,
@@ -17,7 +23,7 @@ from server.admin_session_cookie import (
     request_is_https,
     set_admin_session_cookie,
 )
-from server.deps import extract_admin_session_token, get_store
+from server.deps import extract_admin_session_token, get_store, require_admin
 from server.rate_limit import ADMIN_AUTH_RATE_LIMITER
 from server.store import (
     AdminNotFoundError,
@@ -71,18 +77,40 @@ def _cookie_secure(request: Request, current_store: ServerStore) -> bool:
     return request_is_https(request, current_store.get_config_map())
 
 
+def _session_cookie_max_age(current_store: ServerStore) -> int:
+    return admin_session_max_age_seconds(current_store.settings.admin_session_hours)
+
+
 def _attach_admin_session_cookie(
     request: Request,
     response: Response,
     current_store: ServerStore,
     session: dict[str, Any],
 ) -> None:
+    max_age = _session_cookie_max_age(current_store)
+    secure = _cookie_secure(request, current_store)
     set_admin_session_cookie(
         response,
         str(session["token"]),
-        max_age=admin_session_max_age_seconds(current_store.settings.admin_session_hours),
-        secure=_cookie_secure(request, current_store),
+        max_age=max_age,
+        secure=secure,
     )
+    set_csrf_cookie(
+        response,
+        generate_csrf_token(),
+        max_age=max_age,
+        secure=secure,
+    )
+
+
+def _clear_admin_cookies(
+    request: Request,
+    response: Response,
+    current_store: ServerStore,
+) -> None:
+    secure = _cookie_secure(request, current_store)
+    clear_admin_session_cookie(response, secure=secure)
+    clear_csrf_cookie(response, secure=secure)
 
 
 router = APIRouter(tags=["admin-auth"])
@@ -160,6 +188,25 @@ def admin_login(
     return session
 
 
+@router.get("/api/admin/auth/csrf")
+def admin_csrf_token(
+    request: Request,
+    response: Response,
+    _admin: dict[str, Any] = Depends(require_admin),
+    current_store: ServerStore = Depends(get_store),
+) -> dict[str, Any]:
+    """Issue or refresh the readable double-submit CSRF cookie for the SPA."""
+
+    token = generate_csrf_token()
+    set_csrf_cookie(
+        response,
+        token,
+        max_age=_session_cookie_max_age(current_store),
+        secure=_cookie_secure(request, current_store),
+    )
+    return {"csrf_token": token, "cookie": CSRF_COOKIE_NAME}
+
+
 @router.post("/api/admin/auth/logout")
 def admin_logout(
     request: Request,
@@ -170,7 +217,7 @@ def admin_logout(
     token = read_admin_session_token(request, authorization)
     if token:
         current_store.revoke_admin_session(token)
-    clear_admin_session_cookie(response, secure=_cookie_secure(request, current_store))
+    _clear_admin_cookies(request, response, current_store)
     return {"status": "ok"}
 
 
@@ -185,7 +232,7 @@ def admin_refresh_session(
     try:
         session = current_store.refresh_admin_session(token)
     except AuthenticationFailedError as exc:
-        clear_admin_session_cookie(response, secure=_cookie_secure(request, current_store))
+        _clear_admin_cookies(request, response, current_store)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={"code": "ADMIN_AUTH_FAILED", "message": str(exc)},

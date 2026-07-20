@@ -14,6 +14,13 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 import mijiaAPI_V2
+from server.admin_csrf import (
+    CSRF_COOKIE_NAME,
+    CSRF_HEADER_NAME,
+    csrf_protection_required,
+    csrf_tokens_match,
+    read_csrf_header,
+)
 from server.admin_session_cookie import ADMIN_SESSION_COOKIE_NAME, optional_bearer_token
 from server.config import ServerSettings
 from server.mijia_runtime import LoginJobManager, MijiaRuntime, SyncInProgressError
@@ -304,6 +311,16 @@ def create_app(  # noqa: C901
                     status.HTTP_401_UNAUTHORIZED,
                     "DOCS_AUTH_REQUIRED",
                     "查看 API 文档需要管理员会话或有效 API Key",
+                    request_id,
+                )
+        if csrf_protection_required(request):
+            cookie_token = (request.cookies.get(CSRF_COOKIE_NAME) or "").strip()
+            header_token = read_csrf_header(request)
+            if not csrf_tokens_match(cookie_token, header_token):
+                return _json_error(
+                    status.HTTP_403_FORBIDDEN,
+                    "CSRF_FAILED",
+                    f"Missing or invalid {CSRF_HEADER_NAME} for cookie session",
                     request_id,
                 )
         response = await call_next(request)
