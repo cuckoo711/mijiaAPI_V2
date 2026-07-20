@@ -20,6 +20,12 @@ export type SyncProgress = {
   error: string | null;
 };
 
+type SyncStartResponse = {
+  status: string;
+  task_id?: string;
+  message?: string;
+};
+
 export type UseSyncProgressOptions = {
   request: RequestFn;
   /** Called once a sync completes successfully, to reload admin data. */
@@ -30,12 +36,17 @@ export type UseSyncProgressOptions = {
  * Drives the mijia home/device/scene sync: kicking off a sync and polling
  * its progress with an adaptive interval (denser while running, sparser
  * otherwise) to keep the admin session and SQLite load low.
+ *
+ * When the start API returns ``task_id``, only progress payloads for that
+ * run are applied — matching backend cleanup that keys on ``task_id``.
  */
 export function useSyncProgress(options: UseSyncProgressOptions) {
   const syncing = ref(false);
   const syncProgress = ref<SyncProgress | null>(null);
   const syncPollTimer = ref<number | null>(null);
   const isSyncPolling = ref(false);
+  /** Current run id from POST /api/admin/sync; ignore mismatched progress. */
+  const currentSyncTaskId = ref<string | null>(null);
 
   function startSyncPolling(): void {
     if (isSyncPolling.value) return;
@@ -65,6 +76,11 @@ export function useSyncProgress(options: UseSyncProgressOptions) {
   async function pollSyncProgress(): Promise<number> {
     try {
       const progress = await options.request<SyncProgress>("/api/admin/sync/progress");
+      const expectedTaskId = currentSyncTaskId.value;
+      // 忽略上一轮终态 / 其它 task 的进度，避免误判本次同步已结束
+      if (expectedTaskId && progress.task_id && progress.task_id !== expectedTaskId) {
+        return syncing.value ? 1000 : 2000;
+      }
       // 如果后端返回 idle 但前端正在同步，保留前端的初始状态
       if (progress.status === "idle" && syncing.value) {
         return 1200;
@@ -73,6 +89,7 @@ export function useSyncProgress(options: UseSyncProgressOptions) {
       if (progress.status === "completed" || progress.status === "failed") {
         stopSyncPolling();
         syncing.value = false;
+        currentSyncTaskId.value = null;
         if (progress.status === "completed") {
           const warningText = progress.warnings?.length ? `，${progress.warnings.length} 个警告` : "";
           ElMessage.success(
@@ -98,6 +115,7 @@ export function useSyncProgress(options: UseSyncProgressOptions) {
       return;
     }
     syncing.value = true;
+    currentSyncTaskId.value = null;
     // 立即显示进度卡片，让用户知道同步已开始
     syncProgress.value = {
       task_id: "",
@@ -115,16 +133,23 @@ export function useSyncProgress(options: UseSyncProgressOptions) {
       completed_at: null,
       error: null,
     };
-    // 先开始轮询，再发起同步请求（同步请求是阻塞的）
-    startSyncPolling();
     try {
-      await options.request("/api/admin/sync", {
+      // POST 已非阻塞：先拿到 task_id 再轮询，避免读到上一轮 completed
+      const started = await options.request<SyncStartResponse>("/api/admin/sync", {
         method: "POST",
         body: "{}",
       });
+      if (started.task_id) {
+        currentSyncTaskId.value = started.task_id;
+        if (syncProgress.value) {
+          syncProgress.value = { ...syncProgress.value, task_id: started.task_id };
+        }
+      }
+      startSyncPolling();
     } catch (error) {
       ElMessage.error(error instanceof Error ? error.message : "同步失败");
       syncing.value = false;
+      currentSyncTaskId.value = null;
       stopSyncPolling();
     }
   }

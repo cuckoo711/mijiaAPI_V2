@@ -19,6 +19,10 @@ Environment=MIJIA_SERVER_DATABASE_PATH=/opt/mijia_server/configs/server/server.s
 Environment=MIJIA_CREDENTIAL_PATH=/opt/mijia_server/configs/credential.json
 Environment=MIJIA_WEB_DIST_DIR=/opt/mijia_server/web/dist
 # Optional: MIJIA_SERVER_LOG_LEVEL=INFO
+#
+# Admin Cookie + CSRF assume same-origin: serve the SPA and API from one origin
+# (or a reverse proxy that preserves Host / does not strip Cookie). Cross-origin
+# frontends need Authorization: Bearer instead of Cookie session.
 ExecStart=/opt/mijia_server/.venv/bin/python -m server.cli run
 Restart=always
 RestartSec=3
