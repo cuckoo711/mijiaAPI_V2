@@ -25,6 +25,9 @@ export class ApiRequestError extends Error {
 
 const EXPIRES_AT_KEY = "mijia_admin_expires_at";
 const LEGACY_TOKEN_KEY = "mijia_admin_token";
+const CSRF_COOKIE_NAME = "mijia_csrf";
+const CSRF_HEADER_NAME = "X-CSRF-Token";
+const UNSAFE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
 /**
  * Manages the admin session and the authenticated `request()` helper.
@@ -33,6 +36,9 @@ const LEGACY_TOKEN_KEY = "mijia_admin_token";
  * keeps only `expires_at` in localStorage for refresh scheduling and UI state.
  * A one-time legacy Bearer fallback reads any pre-migration localStorage token
  * until the next successful login/refresh sets the cookie and clears it.
+ *
+ * Mutating requests send double-submit CSRF: readable `mijia_csrf` cookie value
+ * is copied into the `X-CSRF-Token` header (Bearer auth skips CSRF on the server).
  */
 export function useAdminSession() {
   // Migrate away from readable tokens; keep briefly for Bearer fallback.
@@ -121,6 +127,23 @@ export function useAdminSession() {
     return refreshInFlight;
   }
 
+  async function ensureCsrfCookie(): Promise<void> {
+    if (_readCookie(CSRF_COOKIE_NAME) || legacyBearer.value) {
+      return;
+    }
+    if (!sessionActive.value) {
+      return;
+    }
+    try {
+      await fetch("/api/admin/auth/csrf", {
+        method: "GET",
+        credentials: "include",
+      });
+    } catch {
+      // Mutating call will fail CSRF if the cookie still cannot be issued.
+    }
+  }
+
   async function request<T>(
     url: string,
     options: RequestInit = {},
@@ -130,6 +153,14 @@ export function useAdminSession() {
     headers.set("Content-Type", "application/json");
     if (legacyBearer.value) {
       headers.set("Authorization", `Bearer ${legacyBearer.value}`);
+    }
+    const method = (options.method || "GET").toUpperCase();
+    if (UNSAFE_METHODS.has(method) && !headers.has("Authorization")) {
+      await ensureCsrfCookie();
+      const csrf = _readCookie(CSRF_COOKIE_NAME);
+      if (csrf) {
+        headers.set(CSRF_HEADER_NAME, csrf);
+      }
     }
     const response = await fetch(url, {
       ...options,
@@ -203,4 +234,18 @@ function _hasUsableExpiry(expiresAt: string): boolean {
   }
   const expiresAtMs = new Date(expiresAt).getTime();
   return Number.isFinite(expiresAtMs) && expiresAtMs > Date.now();
+}
+
+function _readCookie(name: string): string {
+  if (typeof document === "undefined") {
+    return "";
+  }
+  const prefix = `${encodeURIComponent(name)}=`;
+  for (const part of document.cookie.split(";")) {
+    const trimmed = part.trim();
+    if (trimmed.startsWith(prefix)) {
+      return decodeURIComponent(trimmed.slice(prefix.length));
+    }
+  }
+  return "";
 }

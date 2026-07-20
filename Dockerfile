@@ -26,6 +26,7 @@ WORKDIR /app
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
+        gosu \
         libjpeg62-turbo \
         zlib1g \
     && rm -rf /var/lib/apt/lists/*
@@ -37,16 +38,17 @@ RUN pip install --no-cache-dir .
 
 COPY configs/*.toml.template configs/
 COPY --from=web-builder /build/web/dist web/dist/
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
 RUN groupadd --gid 1000 mijia \
     && useradd --uid 1000 --gid mijia --home-dir /home/mijia --shell /usr/sbin/nologin mijia \
     && mkdir -p /data/server /data/cache \
-    && chown -R mijia:mijia /app /data
-
-USER mijia
+    && chown -R mijia:mijia /app /data \
+    && chmod +x /usr/local/bin/docker-entrypoint.sh
 
 EXPOSE 8123
 
 VOLUME ["/data"]
 
+ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["mijia-server", "run"]
