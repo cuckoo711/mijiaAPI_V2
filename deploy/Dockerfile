@@ -38,7 +38,7 @@ RUN pip install --no-cache-dir .
 
 COPY configs/*.toml.template configs/
 COPY --from=web-builder /build/web/dist web/dist/
-COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+COPY deploy/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
 RUN groupadd --gid 1000 mijia \
     && useradd --uid 1000 --gid mijia --home-dir /home/mijia --shell /usr/sbin/nologin mijia \
