@@ -7,7 +7,7 @@
 | 路径 | 说明 |
 |------|------|
 | `credential.json` | 米家凭据（AES-GCM 加密） |
-| `.credential_key` | 本地加密密钥（可用 `MIJIA_CREDENTIAL_SECRET` 覆盖） |
+| `.credential_key` | 本地加密密钥（二进制；可用 `MIJIA_CREDENTIAL_SECRET` 覆盖）。备份时须与 `credential.json` 成对复制，勿当文本编辑 |
 | `server/server.sqlite3` | 管理台 SQLite |
 | `cache/` | SDK 磁盘缓存（L3） |
 | `server.toml` | Server 配置（可由 CLI 生成） |
