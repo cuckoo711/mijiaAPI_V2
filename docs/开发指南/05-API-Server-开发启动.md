@@ -1,51 +1,60 @@
 # API Server 开发启动
 
-本项目在 SDK 外新增 `server/` 和 `web/` 两个上层应用目录。
+本项目在 SDK 外提供 `server/`（FastAPI）与 `web/`（Vue3 管理台）。当前版本以 **v3.6.x** 行为为准。
 
 ## 后端
 
-初始化本地 SQLite 数据库：
+初始化本地 SQLite：
 
 ```bash
 uv run python -m server.cli init
+# 可选：一并创建管理员
+uv run python -m server.cli init --admin admin --password 'your-password'
 ```
 
-启动 API Server：
+启动：
 
 ```bash
 uv run python -m server.cli run
 ```
 
-执行自检：
+常用运维命令：
 
 ```bash
-uv run python -m server.cli check
+uv run python -m server.cli check          # 系统自检
+uv run python -m server.cli status         # 版本、路径、库/缓存体积
+uv run python -m server.cli diagnose       # 导出诊断信息
+uv run python -m server.cli reset-admin    # 本机重置管理员密码
+uv run python -m server.cli purge-audit    # 清理过期审计
+uv run python -m server.cli purge-cache    # 清理过期磁盘缓存（可加 --all）
+uv run python -m server.cli write-config   # 从模板生成 configs/server.toml
 ```
 
-默认监听 `127.0.0.1:8123`，可通过环境变量调整：
+默认监听 `127.0.0.1:8123`。常用环境变量：
 
-- `MIJIA_SERVER_HOST`
-- `MIJIA_SERVER_PORT`
-- `MIJIA_SERVER_DATA_DIR`
-- `MIJIA_SERVER_DATABASE_PATH`
-- `MIJIA_CREDENTIAL_PATH`
-- `MIJIA_PUBLIC_BASE_URL`
+| 变量 | 默认 | 说明 |
+|------|------|------|
+| `MIJIA_SERVER_HOST` | `127.0.0.1` | 监听地址 |
+| `MIJIA_SERVER_PORT` | `8123` | 端口 |
+| `MIJIA_SERVER_DATA_DIR` | `configs` | 数据目录 |
+| `MIJIA_SERVER_DATABASE_PATH` | `configs/server/server.sqlite3` | SQLite |
+| `MIJIA_CREDENTIAL_PATH` | `configs/credential.json` | 米家凭据（落盘加密） |
+| `MIJIA_WEB_DIST_DIR` | `web/dist` | 前端构建产物 |
+| `MIJIA_BOOTSTRAP_ALLOW_PRIVATE` | 空 | 设为 `1` 时允许私网 IP 完成首次建管理员（Docker 常用） |
+| `MIJIA_CREDENTIAL_SECRET` | 空 | 可选；不设则使用同目录 `.credential_key` |
+
+也可通过 `configs/server.toml` 配置（环境变量优先）。可用 `write-config` 从模板生成。
 
 ## 访问来源与反向代理
 
-服务默认只监听本机，并且本机请求始终允许。要让局域网或公网客户端访问，需要同时满足两件事：
+服务默认只监听本机。要让局域网或公网客户端访问，需要同时满足：
 
-1. 启动时监听可被外部访问的地址，例如 `MIJIA_SERVER_HOST=0.0.0.0`，或由 Nginx/Caddy/NAS 反向代理转发到本服务。
-2. 在管理台的“系统安全”中开启对应的“允许局域网请求”或“允许公网请求”开关，控制对外 API 和健康检查的来源范围。
+1. 监听可被外部访问的地址（如 `MIJIA_SERVER_HOST=0.0.0.0`），或由反向代理转发到本服务。
+2. 在管理台「系统安全」开启「允许局域网请求」和/或「允许公网请求」。
 
-管理台和 `/api/admin/*` 由管理员登录鉴权保护，不受上述来源开关拦截，避免清库环境无法完成初始化。
+**网络 ACL 覆盖整站**（管理台、`/api/admin/*`、SPA、`/api/v1/*`、文档页、健康检查），不仅限对外 API。本机回环地址始终放行。
 
-反向代理模式默认开启。后端只会信任“可信代理地址”传来的 `X-Forwarded-For` / `X-Real-IP`，再用真实客户端 IP 判断局域网/公网权限。默认可信代理仅包含：
-
-```text
-127.0.0.1/32
-::1/128
-```
+`TRUST_PROXY_HEADERS` **默认关闭**。仅在确认前置代理可信时开启，并正确配置 `TRUSTED_PROXY_CIDRS`；否则伪造 `X-Forwarded-For` 可能绕过来源策略。
 
 Nginx 示例：
 
@@ -55,66 +64,95 @@ proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 proxy_set_header X-Forwarded-Proto $scheme;
 ```
 
+同仓库还提供加固示例：[`deploy/mijia-server.service`](../../deploy/mijia-server.service)、[`docker-compose.yml`](../../docker-compose.yml)。
+
+## 管理台会话（Cookie + CSRF）
+
+管理台登录后：
+
+- 服务端设置 HttpOnly Cookie：`mijia_admin_session`（SameSite=Lax；HTTPS 时 Secure）。
+- 同时下发可读 CSRF Cookie：`mijia_csrf`。Cookie 会话下的 `POST/PUT/PATCH/DELETE` 须带匹配头 `X-CSRF-Token`。
+- 仍兼容 `Authorization: Bearer <admin_token>`（Bearer 路径免 CSRF，适合脚本）。
+- 登出：`POST /api/admin/auth/logout`（吊销会话并清 Cookie）。
+- 补发 CSRF：`GET /api/admin/auth/csrf`（需已登录）。
+- 修改密码：管理台 UI，或 CLI `reset-admin`。
+
+管理台与 API 须**同源**部署（或反代保持同一站点 Cookie）。跨域前端请改用 Bearer，不要依赖 Cookie。
+
 ## 前端
 
-开发期进入 `web/`：
+开发：
 
 ```bash
-npm install
+cd web
+npm ci
 npm run dev
 ```
 
-构建前端：
+生产构建：
 
 ```bash
+cd web
+npm ci
 npm run build
 ```
 
-构建产物默认输出到 `web/dist`。当该目录存在时，FastAPI 会托管前端静态文件。
+产物在 `web/dist`。存在时由 FastAPI 托管；`/assets/*` 长缓存，`index.html` 为 `no-cache`。
 
-## 当前实现范围
+## 代码结构（服务端）
 
-当前 MVP 已包含：
+```
+server/
+├── app.py                 # 应用工厂、中间件、SPA
+├── cli.py                 # 运维入口
+├── config.py              # 环境变量 + server.toml + v2→v3 迁移
+├── deps.py                # 共享依赖
+├── routers/
+│   ├── admin_auth.py      # 登录 / CSRF / 改密 / bootstrap
+│   ├── admin_mijia.py     # 扫码登录、同步
+│   ├── admin_resources.py # 设备/场景/API Key/配置/审计…
+│   └── api_v1.py          # 对外 REST
+├── store.py               # ServerStore 组合入口
+├── store_auth.py          # 管理员会话
+├── store_api_keys.py      # API Key
+└── store_registry.py      # 家庭/设备/场景注册表
+```
 
-- FastAPI 应用工厂。
-- SQLite schema 初始化。
-- 管理员初始化和登录。
-- API Key 创建、列表、启停、删除和作用域鉴权。
-- `/healthz` 和 `/api/v1/status`。
-- 管理台构建后由 FastAPI 单服务托管。
-- 米家二维码登录任务。
-- 凭据状态、刷新和删除。
-- 家庭、设备、场景同步到 SQLite 注册表。
-- 设备 slug、别名、隐藏和只读/可控权限维护。
-- 场景隐藏和可执行权限维护。
-- 对外 REST API：账号、家庭、设备、设备状态、设备规格、设备控制、批量控制、场景执行、缓存和日志。
-- 运行时配置读写。
-- 局域网/公网访问来源开关，以及可信反向代理来源识别。
-- 审计日志写入和查询。
+## 当前能力摘要
+
+- 管理员初始化、登录、改密、logout、会话刷新
+- 米家扫码登录（同源二维码图片）、凭据加密落盘与定时刷新
+- 家庭/设备/场景同步（非阻塞 + `task_id` 进度）
+- API Key 作用域与资源策略；校验有短 TTL 缓存
+- 对外 REST：状态、家庭、设备、属性/动作、场景、缓存、审计
+- 设备列表默认不带重型 `raw`/`spec`；需要时传 `include_raw=1` / `include_spec=1`
+- 审计保留清理、磁盘缓存清理、系统自检
+- OpenAPI/Swagger 可开关；开启后仍受网络 ACL 与文档鉴权策略约束
 
 ## 常用接口
 
-管理后台接口使用管理员会话 token：
+管理台（Cookie 或 Bearer）：
 
-- `POST /api/admin/bootstrap/admin`
+- `POST /api/admin/bootstrap/admin`（仅回环；Docker 可放宽）
 - `POST /api/admin/auth/login`
-- `GET /api/admin/system/check`
+- `POST /api/admin/auth/logout`
+- `POST /api/admin/auth/refresh`
+- `GET  /api/admin/auth/csrf`
+- `POST /api/admin/auth/change-password`
 - `POST /api/admin/mijia/login/start`
-- `POST /api/admin/sync`
-- `GET /api/admin/devices`
-- `PATCH /api/admin/devices/{device_id}`
-- `GET /api/admin/api-keys`
+- `POST /api/admin/sync` → 返回 `task_id`；轮询 `GET /api/admin/sync/progress`
+- `GET  /api/admin/devices`
 - `POST /api/admin/api-keys`
 
-对外 API 使用 `Authorization: Bearer <api_key>`：
+对外 API（`Authorization: Bearer <api_key>`）：
 
-- `GET /api/v1/status`
-- `GET /api/v1/account`
-- `GET /api/v1/homes`
-- `GET /api/v1/devices`
-- `GET /api/v1/devices/{device_slug}/state`
-- `POST /api/v1/devices/{device_slug}/properties`
-- `POST /api/v1/devices/{device_slug}/actions`
-- `POST /api/v1/batch/devices/properties`
-- `GET /api/v1/scenes`
-- `POST /api/v1/scenes/{scene_id}/execute`
+- `GET  /api/v1/status`
+- `GET  /api/v1/homes`
+- `GET  /api/v1/devices`（可选 `include_spec` / `include_raw`）
+- `GET  /api/v1/devices/{slug}/state`
+- `POST /api/v1/devices/{slug}/properties`
+- `POST /api/v1/devices/{slug}/actions`
+- `GET  /api/v1/scenes`
+- `POST /api/v1/scenes/{id}/execute`
+
+管理台「API 使用」页有完整示例；交互式文档可在「系统安全」开启。

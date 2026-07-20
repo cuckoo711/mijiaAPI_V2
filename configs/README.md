@@ -1,62 +1,54 @@
 # 配置文件说明
 
-本目录包含米家API SDK的配置文件。
+本目录是 **API Server 默认数据目录**（`MIJIA_SERVER_DATA_DIR=configs`），同时存放 SDK / Server 的 TOML 模板。
 
-## 文件说明
+## 运行时文件（勿提交）
 
-- `*.toml.template` - 配置模板文件，提交到版本控制
-- `*.toml` - 实际使用的配置文件，已在 `.gitignore` 中忽略
+| 路径 | 说明 |
+|------|------|
+| `credential.json` | 米家凭据（AES-GCM 加密） |
+| `.credential_key` | 本地生成的加密密钥（可用环境变量 `MIJIA_CREDENTIAL_SECRET` 覆盖） |
+| `server/server.sqlite3` | 管理台 SQLite |
+| `cache/` | SDK 磁盘缓存（L3） |
+| `server.toml` | Server 配置（可由 CLI 生成） |
 
-## 配置文件查找顺序
+旧版 `.mijia/` 布局会在启动时幂等迁移到本目录；迁移完成后不应再保留有效 `.mijia` 数据。
 
-SDK会按以下顺序查找配置文件（优先级从高到低）：
+## 模板文件（可提交）
 
-1. `configs/mijiaAPI.toml` - 项目根目录的configs目录（推荐）
-2. `config.toml` - 项目根目录
-3. `~/.mijia/config.toml` - 用户主目录
-4. SDK自带的默认配置 - 最低优先级
+- `server.toml.template` — API Server 配置模板  
+  生成：`python -m server.cli write-config`
+- `mijiaAPI.toml.template` — SDK 配置模板
 
-## 首次使用
-
-复制模板文件创建实际配置：
+复制模板：
 
 ```bash
-cp configs/default.toml.template configs/mijiaAPI.toml
+# Server
+python -m server.cli write-config
+# 或
+cp configs/server.toml.template configs/server.toml
+
+# SDK（如需）
+cp configs/mijiaAPI.toml.template configs/mijiaAPI.toml
 ```
 
-然后根据需要修改 `mijiaAPI.toml` 中的配置项。
+## SDK 配置查找顺序
 
-## 不同使用场景
+优先级从高到低：
 
-### 项目级配置（推荐）
-使用 `configs/mijiaAPI.toml`，适合将配置保存在项目目录中：
-```bash
-cp configs/default.toml.template configs/mijiaAPI.toml
-```
+1. `configs/mijiaAPI.toml`（推荐）
+2. 项目根目录 `config.toml`
+3. `~/.mijia/config.toml`（多项目共享的用户主目录配置）
+4. SDK 内置默认值
 
-### 项目根目录配置
-使用 `config.toml`，适合简单项目：
-```bash
-cp configs/default.toml.template config.toml
-```
+> 注意：用户主目录的 `~/.mijia/` 是 **SDK 全局配置/凭据的可选位置**，与 Server 数据目录 `configs/` 不是同一概念。Server 部署请优先使用 `configs/`。
 
-### 全局配置
-使用 `~/.mijia/config.toml`，适合多个项目共享配置：
-```bash
-mkdir -p ~/.mijia
-cp configs/default.toml.template ~/.mijia/config.toml
-```
+## 敏感信息
 
-## 配置文件不会被提交
-
-为了保护敏感信息，所有 `*.toml` 文件（除了 `*.toml.template`）都已在 `.gitignore` 中忽略，不会被提交到版本控制。
-
-你可以放心地在配置文件中添加：
-- Redis 密码
-- 自定义的超时时间
-- 日志路径
-- 其他个性化配置
+`*.toml`（除 `*.toml.template`）与凭据、数据库、缓存已在 `.gitignore` 中忽略，请勿提交密钥或生产库。
 
 ## 更多信息
 
-详细的配置说明请参考：[配置说明文档](../docs/使用指南/03-配置说明.md)
+- [配置说明](../docs/使用指南/03-配置说明.md)
+- [API Server 开发启动](../docs/开发指南/05-API-Server-开发启动.md)
+- 运维快照：`python -m server.cli status`
