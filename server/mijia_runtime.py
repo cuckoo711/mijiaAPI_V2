@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import io
 import threading
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -326,25 +327,47 @@ class MijiaRuntime:
 
         同步在守护线程中执行，前端可通过 ``/api/admin/sync/progress`` 轮询进度。
         若已有同步在运行则抛出 :class:`SyncInProgressError`。
+
+        在启动后台线程前即写入新的 ``running`` progress，避免前端短暂读到
+        上一轮 ``completed`` 终态而误判同步已结束。
         """
         if not self._sync_lock.acquire(blocking=False):
             raise SyncInProgressError("同步正在进行中，请稍后再试")
 
+        task_id = str(uuid.uuid4())
+        self._sync_progress = SyncProgress(
+            task_id=task_id,
+            status="running",
+            step="排队中",
+            started_at=isoformat(utc_now()),
+        )
         thread = threading.Thread(target=self._sync_background, daemon=True)
         thread.start()
         return {
             "status": "started",
+            "task_id": task_id,
             "message": "同步已在后台启动，请轮询 /api/admin/sync/progress",
         }
 
     def _sync_background(self) -> None:
         """后台线程入口：执行同步逻辑并确保锁被释放。"""
+        task_id: Optional[str] = None
         try:
             self._sync_all_unlocked()
         except Exception:
             logger.warning("sync background thread failed", exc_info=True)
         finally:
+            task_id = self._sync_progress.task_id if self._sync_progress else None
+            # 先释放锁，再安排延迟清理，避免前端已看到终态却仍无法立刻发起下一轮同步。
             self._sync_lock.release()
+            if task_id is not None:
+                delay = self._progress_cleanup_delay_seconds
+
+                def cleanup_progress() -> None:
+                    time.sleep(delay)
+                    self._clear_progress_if_task(task_id)
+
+                threading.Thread(target=cleanup_progress, daemon=True).start()
 
     def get_sync_progress(self) -> Optional[dict[str, Any]]:
         """Get current sync progress."""
@@ -353,17 +376,18 @@ class MijiaRuntime:
         return self._sync_progress.as_dict()
 
     def _sync_all_unlocked(self) -> dict[str, Any]:
-        # Initialize progress
-        self._sync_progress = SyncProgress(
-            task_id=str(uuid.uuid4()),
-            status="running",
-            step="初始化",
-            started_at=isoformat(utc_now()),
-        )
-        
+        # Prefer the progress seeded by sync_all(); create one only as fallback.
+        if self._sync_progress is None:
+            self._sync_progress = SyncProgress(
+                task_id=str(uuid.uuid4()),
+                status="running",
+                step="初始化",
+                started_at=isoformat(utc_now()),
+            )
+
         try:
             # Step 1: Initialize
-            self._update_progress(step="初始化同步任务", progress=0)
+            self._update_progress(step="初始化同步任务", progress=0, status="running")
             
             # Step 2: Get homes
             self._update_progress(step="获取家庭列表", progress=5)
@@ -435,18 +459,6 @@ class MijiaRuntime:
                 completed_at=isoformat(utc_now()),
             )
             raise
-        finally:
-            # 延迟清理，给前端一个短窗口去拿到终态。只清"这次任务"的 progress，
-            # 避免在窗口期内被新一轮 sync 覆盖后误清新任务的进度。
-            task_id = self._sync_progress.task_id if self._sync_progress else None
-
-            def cleanup_progress() -> None:
-                import time
-
-                time.sleep(self._progress_cleanup_delay_seconds)
-                self._clear_progress_if_task(task_id)
-
-            threading.Thread(target=cleanup_progress, daemon=True).start()
 
     def _clear_progress_if_task(self, task_id: Optional[str]) -> None:
         """仅在当前 progress 属于指定 task 时清空，避免误清新一轮任务。"""

@@ -23,12 +23,39 @@ def test_render_qr_data_url_is_png_data_uri() -> None:
     assert len(data_url) > 100
 
 
-def _wait_for_sync_completion(runtime: MijiaRuntime, timeout: float = 5.0) -> dict[str, Any]:
-    """轮询 sync progress 直到进入终态或超时。"""
+def _start_sync(runtime: MijiaRuntime) -> dict[str, Any]:
+    """Start sync, briefly retrying if the previous run has not released its lock yet."""
+    deadline = time.monotonic() + 2.0
+    while True:
+        try:
+            return runtime.sync_all()
+        except SyncInProgressError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.02)
+
+
+def _wait_for_sync_completion(
+    runtime: MijiaRuntime,
+    timeout: float = 5.0,
+    *,
+    previous_task_id: str | None = None,
+) -> dict[str, Any]:
+    """轮询 sync progress 直到进入终态或超时。
+
+    ``previous_task_id`` 用于第二轮及以后：忽略仍停留在上一轮 task 的终态，
+    避免新线程尚未覆盖 progress 时误把旧 completed 当成新结果。
+    """
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         progress = runtime.get_sync_progress()
-        if progress is not None and progress["status"] in {"completed", "failed"}:
+        if progress is None:
+            time.sleep(0.02)
+            continue
+        if previous_task_id is not None and progress.get("task_id") == previous_task_id:
+            time.sleep(0.02)
+            continue
+        if progress["status"] in {"completed", "failed"}:
             return progress
         time.sleep(0.02)
     raise AssertionError("sync did not finish within timeout")
@@ -225,13 +252,15 @@ def test_sync_progress_cleanup_does_not_clear_new_run(
     runtime._progress_cleanup_delay_seconds = 3600.0
 
     # 第一次 sync 完成
-    runtime.sync_all()
+    _start_sync(runtime)
     first_progress = _wait_for_sync_completion(runtime)
     first_task_id = first_progress["task_id"]
 
     # 第二次 sync 完成，覆盖了 _sync_progress
-    runtime.sync_all()
-    second_progress = _wait_for_sync_completion(runtime)
+    _start_sync(runtime)
+    second_progress = _wait_for_sync_completion(
+        runtime, previous_task_id=first_task_id
+    )
     second_task_id = second_progress["task_id"]
     assert second_task_id != first_task_id
 
