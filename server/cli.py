@@ -119,6 +119,21 @@ def purge_audit_command(args: argparse.Namespace) -> None:
     )
 
 
+def write_config_command(args: argparse.Namespace) -> None:
+    """Create configs/server.toml from the template if missing (or force overwrite)."""
+
+    settings = _settings()
+    target = args.output or settings.config_file_path
+    template = settings.config_template_path
+    if not template.exists():
+        raise SystemExit(f"Template not found: {template}")
+    if target.exists() and not args.force:
+        raise SystemExit(f"Config already exists: {target} (use --force to overwrite)")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(template.read_text(encoding="utf-8"), encoding="utf-8")
+    _print_json({"written": str(target), "from": str(template)})
+
+
 def run_command(args: argparse.Namespace) -> None:
     import os
 
@@ -182,6 +197,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="retention days (default: settings.audit_retention_days)",
     )
     purge_parser.set_defaults(func=purge_audit_command)
+
+    config_parser = subparsers.add_parser(
+        "write-config", help="write configs/server.toml from the bundled template"
+    )
+    config_parser.add_argument(
+        "--output",
+        type=lambda value: __import__("pathlib").Path(value),
+        help="output path (default: configs/server.toml)",
+    )
+    config_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="overwrite existing config file",
+    )
+    config_parser.set_defaults(func=write_config_command)
 
     return parser
 
