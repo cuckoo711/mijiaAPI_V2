@@ -151,7 +151,12 @@ class FileCredentialStore(ICredentialStore):
 
         key_path = self._key_path_for(credential_path)
         if key_path.exists():
-            return key_path.read_bytes().strip()
+            # 密钥为原始随机字节，不可 strip：首尾若恰为空白字节会被剥掉，
+            # 导致偶发 AES-GCM MAC check failed（CI/本地间歇红）。
+            secret = key_path.read_bytes()
+            if not secret:
+                raise ValueError(f"凭据密钥文件为空: {key_path}")
+            return secret
 
         secret = get_random_bytes(32)
         key_path.write_bytes(secret)

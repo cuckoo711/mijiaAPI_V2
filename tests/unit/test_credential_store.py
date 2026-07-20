@@ -175,6 +175,19 @@ def test_credential_encrypted_on_disk(temp_dir: Path, credential: Credential) ->
     assert loaded.service_token == credential.service_token
 
 
+def test_binary_key_with_whitespace_bytes_roundtrip(temp_dir: Path, credential: Credential) -> None:
+    """密钥文件若含首尾空白字节，仍须按原样读取，不可 strip。"""
+    key_path = temp_dir / ".credential_key"
+    # 0x20 / 0x0a 若被 strip 掉会导致 MAC 失败
+    key_path.write_bytes(b" \n" + b"k" * 28 + b"\t")
+    store = FileCredentialStore(default_path=temp_dir / "credential.json")
+    store.save(credential)
+    loaded = store.load()
+    assert loaded is not None
+    assert loaded.service_token == credential.service_token
+    assert key_path.read_bytes() == b" \n" + b"k" * 28 + b"\t"
+
+
 def test_load_legacy_plaintext_credential(temp_dir: Path, credential: Credential) -> None:
     """旧版明文 JSON 仍可加载"""
     path = temp_dir / "credential.json"

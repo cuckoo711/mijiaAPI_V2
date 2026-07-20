@@ -233,8 +233,8 @@ uv run pyinstaller --clean --noconfirm deploy/packaging/mijia-server.spec
 推送版本标签后会自动触发 GitHub Actions 构建：
 
 ```bash
-git tag v3.7.2
-git push origin v3.7.2
+git tag v3.7.3
+git push origin v3.7.3
 ```
 
 ### 运行可执行文件

@@ -1,6 +1,6 @@
 # API Server 开发启动
 
-本项目在 SDK 外提供 `server/`（FastAPI）与 `web/`（Vue3 管理台）。当前版本以 **v3.6.x** 行为为准。
+本项目在 SDK 外提供 `server/`（FastAPI）与 `web/`（Vue3 管理台）。当前行为以 **v3.7.x** 为准（默认数据目录 `configs/`，部署资产在 `deploy/`）。
 
 ## 后端
 
@@ -66,7 +66,15 @@ proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 proxy_set_header X-Forwarded-Proto $scheme;
 ```
 
-同仓库部署资产见 [`deploy/`](../../deploy/)（Docker、`systemd`、打包脚本），说明见 [`deploy/README.md`](../../deploy/README.md)。
+同仓库部署资产见 [`deploy/`](../../deploy/)（Docker、`systemd`、打包脚本、运维脚本），说明见 [`deploy/README.md`](../../deploy/README.md)。
+
+常用命令：
+
+```bash
+docker compose -f deploy/docker-compose.yml up -d --build
+uv run python deploy/packaging/build.py
+uv run python deploy/scripts/show_device_spec.py
+```
 
 ## 管理台会话（Cookie + CSRF）
 
