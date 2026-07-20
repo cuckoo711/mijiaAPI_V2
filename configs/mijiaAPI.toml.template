@@ -8,7 +8,7 @@
 # 配置文件查找顺序（优先级从高到低）：
 # 1. configs/mijiaAPI.toml - 项目根目录的configs目录（推荐）
 # 2. config.toml - 项目根目录
-# 3. ~/.mijia/config.toml - 用户主目录
+# 3. ~/.mijia/config.toml - 用户主目录（可选）
 # 4. SDK自带的默认配置 - 最低优先级
 
 [api]
@@ -36,8 +36,8 @@ max_keepalive_connections = 20
 device_list_ttl = 300      # 设备列表缓存5分钟
 device_state_ttl = 30      # 设备状态缓存30秒（状态变化较快）
 device_spec_ttl = 2592000 # 设备规格缓存1月（30天，规格基本不变）
-# 缓存目录
-cache_dir = ".mijia/cache"
+# 缓存目录（相对项目根；默认与 Server 共用 configs/）
+cache_dir = "configs/cache"
 
 [redis]
 # Redis配置（可选，不配置则使用内存+文件缓存）
@@ -62,14 +62,15 @@ file = ""
 [security]
 # 凭据存储路径
 # 支持以下格式：
-# - 相对路径: .mijia/credential.json (相对于项目根目录，推荐用于项目级配置)
-# - 用户目录: ~/.mijia/credential.json (推荐用于全局配置)
+# - 相对路径: configs/credential.json (相对于项目根目录，推荐)
+# - 用户目录: ~/mijia/credential.json 等自定义路径
 # - 绝对路径: /path/to/credential.json
-# 
+#
 # 注意：
 # - 相对路径会相对于包含 pyproject.toml 的项目根目录
 # - 使用 ~ 开头的路径会自动展开为用户主目录
 # - 凭据文件会自动设置为仅所有者可读写（权限 0o600）
-credential_path = ".mijia/credential.json"
+# - 旧版 .mijia/ 会在 Server 启动时迁移到 configs/ 并删除
+credential_path = "configs/credential.json"
 # 凭据文件权限（八进制 0o600 = 十进制 384）
 credential_file_mode = 384

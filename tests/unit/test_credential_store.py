@@ -151,8 +151,8 @@ def test_find_project_root() -> None:
     """测试查找项目根目录"""
     store = FileCredentialStore()
 
-    # 验证默认路径包含 .mijia 目录
-    assert ".mijia" in str(store._default_path)
+    # 验证默认路径落在 configs/
+    assert "configs" in str(store._default_path)
     assert store._default_path.name == "credential.json"
 
 

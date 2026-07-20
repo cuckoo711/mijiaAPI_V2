@@ -17,6 +17,7 @@ from typing import Any, Dict, Optional
 from cachetools import TTLCache
 
 from ..core.logging import get_logger
+from .credential_store import _sdk_default_data_dir
 
 logger = get_logger(__name__)
 
@@ -39,7 +40,7 @@ class CacheManager:
         """初始化缓存管理器
 
         Args:
-            cache_dir: 文件缓存目录，默认为 ~/.mijia/cache
+            cache_dir: 文件缓存目录，默认为 ``configs/cache``
             redis_client: Redis客户端实例（可选），如果提供则启用L2缓存
         """
         # L1: 内存缓存 - 设备列表（5分钟TTL）
@@ -51,7 +52,7 @@ class CacheManager:
         self._redis_client = redis_client
 
         # L3: 文件缓存目录
-        self._cache_dir = cache_dir or Path.home() / ".mijia" / "cache"
+        self._cache_dir = cache_dir or (_sdk_default_data_dir() / "cache")
         self._cache_dir.mkdir(parents=True, exist_ok=True)
 
         # 缓存统计

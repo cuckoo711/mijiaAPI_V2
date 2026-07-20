@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 import shutil
 import sys
-import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
@@ -255,11 +254,12 @@ class ServerSettings:
 
     @classmethod
     def _migrate_v2_to_v3_if_needed(cls) -> None:
-        """Idempotently migrate leftover ``.mijia`` data into ``configs/``.
+        """Migrate leftover ``.mijia`` data into ``configs/``, then delete the old tree.
 
-        Re-runs must be silent when everything is already on the v3 layout.
-        Leftover files under ``.mijia`` that would collide with existing
-        ``configs/`` targets are discarded (the live copy wins).
+        Idempotent and silent when already on the v3 layout. After taking what
+        we need (or discarding collisions), the project-local ``.mijia``
+        directory and any ``.mijia_backup*`` leftovers are removed — no backup
+        retention.
         """
 
         old_dir = Path(".mijia")
@@ -270,7 +270,6 @@ class ServerSettings:
             if not src.exists():
                 return
             if dst.exists():
-                # Already migrated earlier; drop the stale leftover source.
                 if src.is_dir():
                     shutil.rmtree(src, ignore_errors=True)
                 else:
@@ -283,52 +282,33 @@ class ServerSettings:
         if old_dir.exists():
             new_dir.mkdir(parents=True, exist_ok=True)
             _take(old_dir / "credential.json", new_dir / "credential.json", "凭据文件")
+            _take(old_dir / ".credential_key", new_dir / ".credential_key", "凭据密钥")
             _take(old_dir / "server", new_dir / "server", "服务器数据")
             _take(old_dir / "cache", new_dir / "cache", "缓存")
 
+            # Always delete the old project-local tree after migration attempts.
             if old_dir.exists():
-                # Remove emptied directories; anything still left gets a unique backup.
-                for path in sorted(old_dir.rglob("*"), reverse=True):
-                    if path.is_dir():
-                        try:
-                            path.rmdir()
-                        except OSError:
-                            pass
-                try:
-                    remaining = list(old_dir.iterdir()) if old_dir.exists() else []
-                except OSError:
-                    remaining = []
-                if not remaining:
-                    try:
-                        old_dir.rmdir()
-                    except OSError:
-                        pass
-                else:
-                    stamp = time.strftime("%Y%m%d%H%M%S")
-                    backup_dir = Path(f".mijia_backup_{stamp}")
-                    try:
-                        old_dir.rename(backup_dir)
-                        moved.append(f"残留备份: {old_dir} -> {backup_dir}")
-                    except OSError as exc:
-                        print(f"  警告: 无法归档旧目录 {old_dir}: {exc}")
+                shutil.rmtree(old_dir, ignore_errors=True)
+            if not old_dir.exists():
+                moved.append(f"已删除旧目录: {old_dir}")
+            else:
+                print(f"  警告: 无法删除旧目录 {old_dir}，请手动移除")
 
-        # Canonical SDK disk cache is ``configs/cache``; drop the orphaned
-        # ``configs/server/cache`` leftover from older layouts to reclaim disk.
+        # Canonical SDK disk cache is ``configs/cache``.
         orphaned_cache = new_dir / "server" / "cache"
         canonical_cache = new_dir / "cache"
         if orphaned_cache.is_dir() and canonical_cache.is_dir():
             shutil.rmtree(orphaned_cache, ignore_errors=True)
 
-        # Empty placeholder created by earlier buggy migration attempts.
-        empty_backup = Path(".mijia_backup")
-        if empty_backup.is_dir() and not any(empty_backup.iterdir()):
-            try:
-                empty_backup.rmdir()
-            except OSError:
-                pass
+        # Remove leftover backup dirs from older migration attempts.
+        for backup in sorted(Path(".").glob(".mijia_backup*")):
+            if backup.is_dir():
+                shutil.rmtree(backup, ignore_errors=True)
+                if not backup.exists():
+                    moved.append(f"已删除旧备份: {backup}")
 
         if moved:
-            print("检测到旧版本数据，正在迁移到 v3.0...")
+            print("检测到旧版本数据，正在迁移到 configs/ ...")
             for line in moved:
                 print(f"  {line}")
             print("迁移完成!")

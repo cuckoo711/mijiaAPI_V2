@@ -71,7 +71,8 @@ class ConfigManager:
             # 日志相关配置
             "LOG_LEVEL": "INFO",
             # 安全相关配置
-            "CREDENTIAL_PATH": ".mijia/credential.json",
+            "CREDENTIAL_PATH": "configs/credential.json",
+            "CACHE_DIR": "configs/cache",
             # Redis配置（可选）
             "REDIS_ENABLED": False,
             "REDIS_HOST": "localhost",

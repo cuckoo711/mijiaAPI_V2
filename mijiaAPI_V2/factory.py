@@ -257,7 +257,7 @@ def create_auth_service(
     # 创建凭据存储
     if credential_store is None:
         # 从配置读取凭据路径
-        credential_path_str = config.get("CREDENTIAL_PATH", ".mijia/credential.json")
+        credential_path_str = config.get("CREDENTIAL_PATH", "configs/credential.json")
         credential_path = Path(credential_path_str)
         
         # 如果是相对路径，相对于项目根目录
@@ -318,7 +318,9 @@ def create_multi_user_clients(
         # 为每个用户创建独立的缓存目录（如果不使用Redis）
         cache_dir = None
         if redis_client is None:
-            cache_dir = Path.home() / ".mijia" / "cache" / user_id
+            cache_dir = Path("configs") / "cache" / user_id
+            project_root = _find_project_root()
+            cache_dir = project_root / cache_dir
 
         # 创建API客户端
         client = create_api_client(
@@ -370,7 +372,7 @@ def create_api_client_from_file(
     
     # 如果未指定凭据路径，从配置读取
     if credential_path is None:
-        credential_path_str = config.get("CREDENTIAL_PATH", ".mijia/credential.json")
+        credential_path_str = config.get("CREDENTIAL_PATH", "configs/credential.json")
         credential_path = Path(credential_path_str)
         
         # 如果是相对路径，相对于项目根目录

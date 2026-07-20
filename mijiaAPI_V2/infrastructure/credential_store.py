@@ -26,27 +26,31 @@ PBKDF2_ITERATIONS = 200_000
 KEY_ENV = "MIJIA_CREDENTIAL_SECRET"
 
 
-def _sdk_default_credential_path() -> Path:
-    """Return a stable default credential path regardless of the runtime environment.
+def _sdk_default_data_dir() -> Path:
+    """Return the default on-disk data directory (``configs/``).
 
-    - PyInstaller single-file exe: uses the directory that contains the exe
-      (``sys.executable``), so the credential sits next to the binary.
-    - Normal source / installed package: walks up from this file to find the
-      project root (directory that contains ``pyproject.toml``), then falls
-      back to ``cwd()`` if not found.
+    - PyInstaller single-file exe: next to the binary.
+    - Source / installed package: project root (directory with ``pyproject.toml``),
+      else ``cwd()``.
     """
     if getattr(sys, "frozen", False):
-        return Path(sys.executable).parent / ".mijia" / "credential.json"
+        return Path(sys.executable).parent / "configs"
 
     current = Path(__file__).resolve()
     for _ in range(10):
         current = current.parent
         if (current / "pyproject.toml").exists():
-            return current / ".mijia" / "credential.json"
+            return current / "configs"
         if current.parent == current:
             break
 
-    return Path.cwd() / ".mijia" / "credential.json"
+    return Path.cwd() / "configs"
+
+
+def _sdk_default_credential_path() -> Path:
+    """Return the default credential path: ``configs/credential.json``."""
+
+    return _sdk_default_data_dir() / "credential.json"
 
 
 logger = get_logger(__name__)

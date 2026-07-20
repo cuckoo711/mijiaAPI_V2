@@ -97,9 +97,9 @@
 uv run python examples/01_authentication.py
 ```
 
-登录成功后，凭据会自动保存到项目下的 `.mijia/credential.json`（**SDK 默认路径**），后续使用无需重复登录。
+登录成功后，凭据会自动保存到 `configs/credential.json`，后续使用无需重复登录。
 
-> 若你同时部署 API Server，服务端默认使用 `configs/credential.json`（加密落盘），与 SDK 示例的 `.mijia/` 路径相互独立。
+> API Server 与 SDK 现已统一使用 `configs/` 作为默认数据目录；旧版项目根目录下的 `.mijia/` 会在 Server 启动时迁移并删除。
 
 ### 运行示例
 
@@ -144,21 +144,20 @@ uv run python examples/01_authentication.py
 ```
 
 按照提示使用米家APP扫描二维码即可完成登录。登录成功后：
-- 凭据默认保存到 `.mijia/credential.json`（SDK 约定；Server 则用 `configs/credential.json`）
+- 凭据默认保存到 `configs/credential.json`（加密落盘）
 - 凭据有效期约7天
 - 后续使用会自动加载凭据，无需重复登录
 
 ### 凭据管理
 
 凭据文件位置：
-- SDK 示例默认：`.mijia/credential.json`（项目根目录）
-- API Server 默认：`configs/credential.json`（加密；可用 `MIJIA_CREDENTIAL_PATH` 覆盖）
-- 可通过配置文件自定义路径
+- 默认：`configs/credential.json`
+- 可通过配置文件或 `MIJIA_CREDENTIAL_PATH` 自定义
 
 凭据过期后需要重新登录：
 ```bash
 # 删除旧凭据
-rm .mijia/credential.json
+rm configs/credential.json
 
 # 重新登录
 uv run python examples/01_authentication.py
@@ -219,7 +218,7 @@ A: 请先运行 `examples/01_authentication.py` 进行登录。
 
 A: 删除凭据文件后重新运行认证示例：
 ```bash
-rm .mijia/credential.json
+rm configs/credential.json
 uv run python examples/01_authentication.py
 ```
 
