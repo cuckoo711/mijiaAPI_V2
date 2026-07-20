@@ -137,7 +137,7 @@ def main():
     
     print("\n=== 示例完成 ===")
     print("\n提示：")
-    print("- 使用 scripts/show_device_spec.py 可以查看完整的设备规格")
+    print("- 使用 deploy/scripts/show_device_spec.py 可以查看完整的设备规格")
     print("- 参考文档：docs/使用指南/05-设备规格翻译.md")
 
 

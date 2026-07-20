@@ -2,13 +2,13 @@
 """从 CHANGELOG.md 提取指定版本的段落，作为 GitHub Release 描述。
 
 用法：
-    python scripts/extract_release_notes.py v3.2.2 [--changelog CHANGELOG.md]
+    python deploy/scripts/extract_release_notes.py v3.2.2 [--changelog CHANGELOG.md]
 
 匹配规则：找到 ``## v3.2.2`` 或 ``## 3.2.2`` 打头的一段（允许后缀 ``- 日期``），
 提取到下一个 ``##`` 之前的所有内容。找不到时以退出码 1 返回，并把默认提示写到 stdout。
 
 输出到 stdout；如果未找到并想强制不报错，加 ``--allow-missing``：
-    python scripts/extract_release_notes.py v3.2.2 --allow-missing
+    python deploy/scripts/extract_release_notes.py v3.2.2 --allow-missing
 """
 
 from __future__ import annotations

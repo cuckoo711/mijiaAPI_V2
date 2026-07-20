@@ -183,12 +183,13 @@ mijiaAPI_V2/
 ├── server/                # FastAPI 服务端
 ├── web/                   # Vue3 管理台
 ├── configs/               # 运行时数据与 TOML 模板
-├── deploy/                # Docker / systemd / PyInstaller 打包
+├── docs/ · examples/ · tests/
+├── deploy/                # Docker / systemd / 打包 / 运维脚本
 │   ├── Dockerfile
 │   ├── docker-compose.yml
 │   ├── packaging/         # build 脚本与 mijia-server.spec
+│   ├── scripts/           # clean / release notes / 设备规格工具
 │   └── assets/            # 应用图标
-├── docs/ · examples/ · tests/ · scripts/
 ├── pyproject.toml · Makefile · README.md
 └── .dockerignore          # 需在仓库根（Docker build context）
 ```
@@ -232,8 +233,8 @@ uv run pyinstaller --clean --noconfirm deploy/packaging/mijia-server.spec
 推送版本标签后会自动触发 GitHub Actions 构建：
 
 ```bash
-git tag v3.7.1
-git push origin v3.7.1
+git tag v3.7.2
+git push origin v3.7.2
 ```
 
 ### 运行可执行文件

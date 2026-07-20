@@ -169,10 +169,10 @@ uv run python examples/01_authentication.py
 
 ```bash
 # 查看设备规格
-python scripts/show_device_spec.py <device_model>
+python deploy/scripts/show_device_spec.py <device_model>
 
 # 或交互式选择
-python scripts/show_device_spec.py
+python deploy/scripts/show_device_spec.py
 ```
 
 ### 错误处理
@@ -224,7 +224,7 @@ uv run python examples/01_authentication.py
 
 ### Q: 如何找到设备的 siid 和 piid？
 
-A: 使用 `04_device_spec.py` 或 `scripts/show_device_spec.py` 查看设备规格。
+A: 使用 `04_device_spec.py` 或 `deploy/scripts/show_device_spec.py` 查看设备规格。
 
 ### Q: 批量操作有数量限制吗？
 

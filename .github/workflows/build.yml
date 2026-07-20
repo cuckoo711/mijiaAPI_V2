@@ -114,7 +114,7 @@ jobs:
           TAG_NAME="${GITHUB_REF#refs/tags/}"
           echo "Extracting release notes for $TAG_NAME"
           BODY_FILE="$RUNNER_TEMP/release_notes.md"
-          python scripts/extract_release_notes.py "$TAG_NAME" --allow-missing > "$BODY_FILE"
+          python deploy/scripts/extract_release_notes.py "$TAG_NAME" --allow-missing > "$BODY_FILE"
           echo "body_file=$BODY_FILE" >> "$GITHUB_OUTPUT"
           echo "----- release notes preview -----"
           cat "$BODY_FILE"
