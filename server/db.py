@@ -164,9 +164,10 @@ class ServerDatabase:
         """
 
         self._settings.ensure_directories()
-        conn = sqlite3.connect(self._settings.database_path)
+        conn = sqlite3.connect(self._settings.database_path, timeout=5.0)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA busy_timeout = 5000")
         try:
             yield conn
             conn.commit()

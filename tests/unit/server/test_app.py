@@ -19,7 +19,7 @@ def make_client(tmp_path: Path) -> TestClient:
         credential_path=tmp_path / "credential.json",
         web_dist_dir=tmp_path / "missing-web-dist",
     )
-    return TestClient(create_app(settings))
+    return TestClient(create_app(settings), client=("127.0.0.1", 50000))
 
 
 def make_client_with_store(tmp_path: Path) -> tuple[TestClient, ServerStore]:
@@ -30,7 +30,7 @@ def make_client_with_store(tmp_path: Path) -> tuple[TestClient, ServerStore]:
         web_dist_dir=tmp_path / "missing-web-dist",
     )
     store = ServerStore(settings)
-    return TestClient(create_app(settings, store=store)), store
+    return TestClient(create_app(settings, store=store), client=("127.0.0.1", 50000)), store
 
 
 def admin_token(client: TestClient) -> str:
@@ -178,7 +178,7 @@ def test_network_access_policy_uses_forwarded_for_from_trusted_proxy(tmp_path: P
     assert allowed_response.status_code == 200
 
 
-def test_network_access_policy_trusts_loopback_proxy_headers_by_default(tmp_path: Path) -> None:
+def test_network_access_policy_ignores_forwarded_for_by_default(tmp_path: Path) -> None:
     settings = ServerSettings(
         data_dir=tmp_path,
         database_path=tmp_path / "server.sqlite3",
@@ -188,15 +188,12 @@ def test_network_access_policy_trusts_loopback_proxy_headers_by_default(tmp_path
     app = create_app(settings, store=store)
     client = TestClient(app, client=("127.0.0.1", 50000))
 
-    blocked_response = client.get("/healthz", headers={"X-Forwarded-For": "8.8.8.8"})
-    assert blocked_response.status_code == 403
-
-    store.set_config("ALLOW_PUBLIC_ACCESS", True)
-    allowed_response = client.get("/healthz", headers={"X-Forwarded-For": "8.8.8.8"})
-    assert allowed_response.status_code == 200
+    # TRUST_PROXY_HEADERS 默认关闭：伪造的公网 XFF 不应改变来源判定
+    response = client.get("/healthz", headers={"X-Forwarded-For": "8.8.8.8"})
+    assert response.status_code == 200
 
 
-def test_network_access_policy_allows_admin_bootstrap_from_public_proxy(tmp_path: Path) -> None:
+def test_network_access_policy_blocks_admin_api_from_public_source(tmp_path: Path) -> None:
     settings = ServerSettings(
         data_dir=tmp_path,
         database_path=tmp_path / "server.sqlite3",
@@ -205,26 +202,37 @@ def test_network_access_policy_allows_admin_bootstrap_from_public_proxy(tmp_path
     )
     store = ServerStore(settings)
     app = create_app(settings, store=store)
+    store.set_config("TRUST_PROXY_HEADERS", True)
+    store.set_config("TRUSTED_PROXY_CIDRS", ["127.0.0.1/32", "::1/128"])
     client = TestClient(app, client=("127.0.0.1", 50000))
     headers = {"X-Forwarded-For": "8.8.8.8"}
 
-    frontend_response = client.get("/", headers=headers)
-    assert frontend_response.status_code == 200
-
     state_response = client.get("/api/admin/bootstrap/state", headers=headers)
-    assert state_response.status_code == 200
-    assert state_response.json() == {
-        "initialized": False,
-        "status": "ok",
-        "version": mijiaAPI_V2.__version__,
-    }
+    assert state_response.status_code == 403
+    assert state_response.json()["error"]["code"] == "NETWORK_ACCESS_DENIED"
 
     created_admin = client.post(
         "/api/admin/bootstrap/admin",
         headers=headers,
         json={"username": "admin", "password": "strong-password"},
     )
-    assert created_admin.status_code == 201
+    assert created_admin.status_code == 403
+
+    store.set_config("ALLOW_PUBLIC_ACCESS", True)
+    # 即使开启公网访问，bootstrap 仍仅允许回环来源
+    created_admin = client.post(
+        "/api/admin/bootstrap/admin",
+        headers=headers,
+        json={"username": "admin", "password": "strong-password"},
+    )
+    assert created_admin.status_code == 403
+    assert created_admin.json()["error"]["code"] == "BOOTSTRAP_LOCAL_ONLY"
+
+    local_create = client.post(
+        "/api/admin/bootstrap/admin",
+        json={"username": "admin", "password": "strong-password"},
+    )
+    assert local_create.status_code == 201
 
     login = client.post(
         "/api/admin/auth/login",
@@ -232,17 +240,6 @@ def test_network_access_policy_allows_admin_bootstrap_from_public_proxy(tmp_path
         json={"username": "admin", "password": "strong-password"},
     )
     assert login.status_code == 200
-    admin_token = login.json()["token"]
-
-    config_response = client.get(
-        "/api/admin/config",
-        headers={**headers, "Authorization": f"Bearer {admin_token}"},
-    )
-    assert config_response.status_code == 200
-
-    external_api_response = client.get("/api/v1/status", headers=headers)
-    assert external_api_response.status_code == 403
-    assert external_api_response.json()["error"]["code"] == "NETWORK_ACCESS_DENIED"
 
 
 def test_docs_routes_follow_runtime_config_without_restart(tmp_path: Path) -> None:
@@ -254,7 +251,9 @@ def test_docs_routes_follow_runtime_config_without_restart(tmp_path: Path) -> No
     )
     store = ServerStore(settings)
     app = create_app(settings, store=store)
-    client = TestClient(app)
+    client = TestClient(app, client=("127.0.0.1", 50000))
+    token = admin_token(client)
+    auth_headers = {"Authorization": f"Bearer {token}"}
 
     assert client.get("/docs").status_code == 404
     assert client.get("/redoc").status_code == 404
@@ -262,21 +261,25 @@ def test_docs_routes_follow_runtime_config_without_restart(tmp_path: Path) -> No
 
     store.set_config("DOCS_ENABLED", True)
 
-    assert client.get("/docs").status_code == 200
-    assert client.get("/redoc").status_code == 200
-    assert client.get("/api/v1/openapi.json").status_code == 200
+    unauth = client.get("/docs")
+    assert unauth.status_code == 401
+    assert unauth.json()["error"]["code"] == "DOCS_AUTH_REQUIRED"
+
+    assert client.get("/docs", headers=auth_headers).status_code == 200
+    assert client.get("/redoc", headers=auth_headers).status_code == 200
+    assert client.get("/api/v1/openapi.json", headers=auth_headers).status_code == 200
 
     store.set_config("DOCS_ENABLED", False)
+    assert client.get("/docs", headers=auth_headers).status_code == 404
     store.set_config("OPENAPI_ENABLED", True)
 
-    assert client.get("/docs").status_code == 404
-    assert client.get("/redoc").status_code == 404
-    assert client.get("/api/v1/openapi.json").status_code == 200
+    assert client.get("/docs", headers=auth_headers).status_code == 404
+    assert client.get("/redoc", headers=auth_headers).status_code == 404
+    assert client.get("/api/v1/openapi.json").status_code == 401
+    assert client.get("/api/v1/openapi.json", headers=auth_headers).status_code == 200
 
 
-def test_openapi_json_is_available_when_runtime_docs_are_enabled_from_public_proxy(
-    tmp_path: Path,
-) -> None:
+def test_openapi_json_requires_auth_and_follows_network_policy(tmp_path: Path) -> None:
     settings = ServerSettings(
         data_dir=tmp_path,
         database_path=tmp_path / "server.sqlite3",
@@ -286,16 +289,24 @@ def test_openapi_json_is_available_when_runtime_docs_are_enabled_from_public_pro
     store = ServerStore(settings)
     app = create_app(settings, store=store)
     store.set_config("DOCS_ENABLED", True)
+    store.set_config("TRUST_PROXY_HEADERS", True)
+    store.set_config("TRUSTED_PROXY_CIDRS", ["127.0.0.1/32", "::1/128"])
     client = TestClient(app, client=("127.0.0.1", 50000))
-    headers = {"X-Forwarded-For": "8.8.8.8"}
+    token = admin_token(client)
+    auth_headers = {"Authorization": f"Bearer {token}"}
+    public_headers = {"X-Forwarded-For": "8.8.8.8", **auth_headers}
 
-    openapi_response = client.get("/api/v1/openapi.json", headers=headers)
-    external_api_response = client.get("/api/v1/status", headers=headers)
+    assert client.get("/api/v1/openapi.json").status_code == 401
+    assert client.get("/api/v1/openapi.json", headers=auth_headers).status_code == 200
 
-    assert openapi_response.status_code == 200
-    assert openapi_response.json()["info"]["title"] == "Mijia API Server"
-    assert external_api_response.status_code == 403
-    assert external_api_response.json()["error"]["code"] == "NETWORK_ACCESS_DENIED"
+    denied = client.get("/api/v1/openapi.json", headers=public_headers)
+    assert denied.status_code == 403
+    assert denied.json()["error"]["code"] == "NETWORK_ACCESS_DENIED"
+
+    store.set_config("ALLOW_PUBLIC_ACCESS", True)
+    allowed = client.get("/api/v1/openapi.json", headers=public_headers)
+    assert allowed.status_code == 200
+    assert allowed.json()["info"]["title"] == "Mijia API Server"
 
 
 def test_network_access_policy_uses_real_ip_from_trusted_proxy(tmp_path: Path) -> None:
@@ -344,7 +355,7 @@ def test_admin_sync_reports_conflict_when_sync_is_running(tmp_path: Path) -> Non
     )
     store = ServerStore(settings)
     app = create_app(settings, store=store)
-    client = TestClient(app)
+    client = TestClient(app, client=("127.0.0.1", 50000))
     token = admin_token(client)
 
     class BusyRuntime:

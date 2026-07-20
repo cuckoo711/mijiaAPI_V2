@@ -102,28 +102,27 @@ api.control_device(device_id=devices[0].did, siid=2, piid=1, value=True)
 |------|--------|------|
 | `MIJIA_SERVER_HOST` | `127.0.0.1` | 监听地址 |
 | `MIJIA_SERVER_PORT` | `8123` | 监听端口 |
-| `MIJIA_SERVER_DATA_DIR` | `.mijia/server` | 数据目录 |
-| `MIJIA_CREDENTIAL_PATH` | `.mijia/credential.json` | 凭据文件 |
+| `MIJIA_SERVER_DATA_DIR` | `configs` | 数据目录 |
+| `MIJIA_CREDENTIAL_PATH` | `configs/credential.json` | 凭据文件 |
 | `MIJIA_LOG_LEVEL` | `INFO` | 日志级别（支持 `DEBUG`） |
 
 ## 部署
 
 ### systemd
 
-```ini
-[Unit]
-Description=Mijia API Server
-After=network-online.target
+仓库提供加固示例单元，见 [`deploy/mijia-server.service`](deploy/mijia-server.service) 与
+[`deploy/mijia-server.env.example`](deploy/mijia-server.env.example)。
 
-[Service]
-Type=simple
-WorkingDirectory=/opt/mijia_server
-ExecStart=/usr/bin/env uv run python -m server.cli run
-Restart=always
-
-[Install]
-WantedBy=multi-user.target
+```bash
+sudo cp deploy/mijia-server.service /etc/systemd/system/
+sudo cp deploy/mijia-server.env.example /etc/mijia-server.env
+# 按需修改路径与 User=
+sudo systemctl daemon-reload
+sudo systemctl enable --now mijia-server
 ```
+
+默认仅监听 `127.0.0.1`。若经 Nginx 反代并需要按真实客户端 IP 做网络策略，请在管理台开启
+`TRUST_PROXY_HEADERS`，并正确配置 `TRUSTED_PROXY_CIDRS`。
 
 ### Nginx 反向代理
 

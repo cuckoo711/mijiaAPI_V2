@@ -63,6 +63,8 @@ configs/*.toml
 # ==================== 配置目录数据文件 ====================
 # 忽略 configs 目录下的运行时数据
 configs/credential.json
+configs/.credential_key
+**/.credential_key
 configs/server/
 configs/cache/
 configs/*.json

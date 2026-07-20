@@ -2,6 +2,27 @@
 
 本项目遵循“面向部署和使用者可读”的更新记录。最新变化放在最前面。
 
+## v3.4.0 - 2026-07-21
+
+### 安全
+
+- 网络访问策略覆盖管理台、文档与 SPA（不再只限制 `/api/v1`）。
+- OpenAPI /docs /redoc 开启后仍需管理员会话或 API Key。
+- 首次创建管理员（bootstrap）仅允许本机回环来源。
+- `TRUST_PROXY_HEADERS` 默认关闭，避免伪造 `X-Forwarded-For` 绕过策略。
+- 米家凭据默认 AES-256-GCM 加密落盘（兼容读取旧明文并在下次保存时迁移）；可用 `MIJIA_CREDENTIAL_SECRET` 或 `configs/.credential_key`。
+- 响应增加基础安全头（`X-Frame-Options` / CSP 等）。
+
+### 新增 / 改进
+
+- `configs/server.toml` 真正参与启动配置（环境变量仍优先）；配置监视可热更新日志级别。
+- API Key 校验增加短 TTL 正例缓存，并节流 `use_count` 写入。
+- 审计日志按 `audit_retention_days` 启动清理，新增 CLI `purge-audit`。
+- SQLite 连接设置 `busy_timeout`。
+- 系统自检增加公网访问与凭据文件权限项。
+- CI 新增 `test.yml` 跑单元测试；覆盖率纳入 `server/`。
+- 提供 `LICENSE`、`deploy/mijia-server.service` 加固示例；移除断裂的 `mijia` 控制台入口。
+
 ## v3.3.0 - 2026-07-20
 
 ### 新增

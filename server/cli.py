@@ -104,6 +104,21 @@ def reset_admin_command(args: argparse.Namespace) -> None:
     _print_json({"reset": True, "admin": result})
 
 
+def purge_audit_command(args: argparse.Namespace) -> None:
+    settings = _settings()
+    store = ServerStore(settings)
+    store.initialize()
+    deleted = store.purge_expired_audit(retention_days=args.days)
+    _print_json(
+        {
+            "purged": deleted,
+            "retention_days": (
+                settings.audit_retention_days if args.days is None else args.days
+            ),
+        }
+    )
+
+
 def run_command(args: argparse.Namespace) -> None:
     import os
 
@@ -158,6 +173,15 @@ def build_parser() -> argparse.ArgumentParser:
     reset_parser.add_argument("--username", help="administrator username (default: first admin)")
     reset_parser.add_argument("--password", help="new administrator password")
     reset_parser.set_defaults(func=reset_admin_command)
+
+    purge_parser = subparsers.add_parser("purge-audit", help="purge expired audit log rows")
+    purge_parser.add_argument(
+        "--days",
+        type=int,
+        default=None,
+        help="retention days (default: settings.audit_retention_days)",
+    )
+    purge_parser.set_defaults(func=purge_audit_command)
 
     return parser
 
