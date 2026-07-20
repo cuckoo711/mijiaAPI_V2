@@ -131,14 +131,16 @@ uv run python -m server.cli write-config
 ### Docker
 
 ```bash
-docker compose up -d --build
+docker compose -f deploy/docker-compose.yml up -d --build
 ```
 
-数据与凭据持久化在命名卷 `mijia-data`（可在 `docker-compose.yml` 中改为 `./data:/data`）。首次启动后访问 `http://127.0.0.1:8123` 创建管理员。可选初始化：
+数据与凭据持久化在命名卷 `mijia-data`（可在 `deploy/docker-compose.yml` 中改为绑定 `./data:/data`）。首次启动后访问 `http://127.0.0.1:8123` 创建管理员。可选初始化：
 
 ```bash
-docker compose run --rm mijia-server mijia-server init --admin admin
+docker compose -f deploy/docker-compose.yml run --rm mijia-server mijia-server init --admin admin
 ```
+
+更多说明见 [`deploy/README.md`](deploy/README.md)。
 
 ### systemd
 
@@ -179,19 +181,16 @@ server {
 mijiaAPI_V2/
 ├── mijiaAPI_V2/           # SDK 核心
 ├── server/                # FastAPI 服务端
-│   ├── app.py             # 应用工厂、中间件、SPA
-│   ├── cli.py             # 运维 CLI
-│   ├── routers/           # admin_auth / admin_mijia / admin_resources / api_v1
-│   ├── store*.py          # SQLite 仓储（auth / api_keys / registry）
-│   └── mijia_runtime.py   # SDK 桥接
-├── web/                   # Vue3 管理台（views + composables）
-├── configs/               # 运行时数据与 TOML 模板（凭据加密落盘）
-├── deploy/                # systemd 示例
-├── examples/              # SDK 示例
-├── docs/                  # 详细文档
-├── Dockerfile             # 多阶段构建
-├── docker-compose.yml
-└── mijia-server.spec      # PyInstaller 配置
+├── web/                   # Vue3 管理台
+├── configs/               # 运行时数据与 TOML 模板
+├── deploy/                # Docker / systemd / PyInstaller 打包
+│   ├── Dockerfile
+│   ├── docker-compose.yml
+│   ├── packaging/         # build 脚本与 mijia-server.spec
+│   └── assets/            # 应用图标
+├── docs/ · examples/ · tests/ · scripts/
+├── pyproject.toml · Makefile · README.md
+└── .dockerignore          # 需在仓库根（Docker build context）
 ```
 
 管理台使用 HttpOnly Cookie 会话 + CSRF；对外 API 仍用 `Authorization: Bearer <api_key>`。
@@ -206,16 +205,17 @@ SDK 与 Server 默认数据目录均为 `configs/`（旧 `.mijia/` 启动时迁�
 
 ```bash
 # 安装构建工具
-uv pip install pyinstaller
+uv pip install pyinstaller pillow
 
-# 构建前端
+# 一键构建（前端 + 可执行文件）
+uv run python deploy/packaging/build.py
+
+# 或分步：
 cd web && npm ci && npm run build && cd ..
-
-# 构建可执行文件
-uv run pyinstaller --clean --noconfirm mijia-server.spec
-
-# 输出目录: dist/mijia-server/
+uv run pyinstaller --clean --noconfirm deploy/packaging/mijia-server.spec
 ```
+
+输出目录：`dist/`。
 
 ### 多平台构建
 
@@ -232,8 +232,8 @@ uv run pyinstaller --clean --noconfirm mijia-server.spec
 推送版本标签后会自动触发 GitHub Actions 构建：
 
 ```bash
-git tag v3.6.7
-git push origin v3.6.7
+git tag v3.7.1
+git push origin v3.7.1
 ```
 
 ### 运行可执行文件
@@ -258,4 +258,4 @@ git push origin v3.6.7
 
 **管理台登录态存在哪？** HttpOnly Cookie（`mijia_admin_session`）+ CSRF；不要跨域依赖 Cookie。
 
-**支持 Docker 吗？** 支持，见上方 Docker 小节与仓库根目录 `Dockerfile` / `docker-compose.yml`。
+**支持 Docker 吗？** 支持：`docker compose -f deploy/docker-compose.yml up -d --build`，详见 [`deploy/README.md`](deploy/README.md)。

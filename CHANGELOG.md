@@ -2,6 +2,14 @@
 
 本项目遵循“面向部署和使用者可读”的更新记录。最新变化放在最前面。
 
+## v3.7.1 - 2026-07-21
+
+### 整理
+
+- 根目录精简：Docker / systemd / PyInstaller 打包与图标收进 `deploy/`（`packaging/`、`assets/`）。
+- 删除与 `pyproject.toml` 重复的根目录 `mypy.ini`。
+- `.dockerignore` 留在仓库根（Docker build context 要求）；日常使用 `docker compose -f deploy/docker-compose.yml`。
+
 ## v3.7.0 - 2026-07-21
 
 ### 变更

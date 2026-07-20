@@ -1,6 +1,8 @@
 services:
   mijia-server:
-    build: .
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
     image: mijia-server:latest
     container_name: mijia-server
     ports:

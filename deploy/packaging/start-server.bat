@@ -7,8 +7,8 @@ echo 米家 API Server 启动器
 echo ========================================
 echo.
 
-REM 检查是否已初始化
-if not exist ".mijia\server\server.sqlite3" (
+REM Prefer configs/ (v3 layout); fall back to init when missing.
+if not exist "configs\server\server.sqlite3" (
     echo 首次运行，正在初始化...
     echo.
     mijia-server-windows-x64.exe init

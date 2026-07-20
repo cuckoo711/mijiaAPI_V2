@@ -57,10 +57,10 @@ jobs:
         run: npm run build
 
       - name: Create application icon
-        run: python create_icon.py
+        run: python deploy/packaging/create_icon.py
 
       - name: Build executable
-        run: pyinstaller --clean --noconfirm mijia-server.spec
+        run: pyinstaller --clean --noconfirm deploy/packaging/mijia-server.spec
 
       - name: Rename executable (Linux/macOS)
         if: matrix.platform != 'windows'

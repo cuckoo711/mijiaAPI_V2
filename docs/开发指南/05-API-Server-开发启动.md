@@ -66,7 +66,7 @@ proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 proxy_set_header X-Forwarded-Proto $scheme;
 ```
 
-同仓库还提供加固示例：[`deploy/mijia-server.service`](../../deploy/mijia-server.service)、[`docker-compose.yml`](../../docker-compose.yml)。
+同仓库部署资产见 [`deploy/`](../../deploy/)（Docker、`systemd`、打包脚本），说明见 [`deploy/README.md`](../../deploy/README.md)。
 
 ## 管理台会话（Cookie + CSRF）
 
