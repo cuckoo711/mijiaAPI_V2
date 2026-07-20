@@ -2,6 +2,18 @@
 
 本项目遵循“面向部署和使用者可读”的更新记录。最新变化放在最前面。
 
+## v3.6.0 - 2026-07-21
+
+### 重构
+
+- `ServerStore` 拆分为 `store_auth` / `store_api_keys` / `store_registry` mixin，主文件降至约 500 行。
+- 管理台页面拆为 `views/*`（总览、检查、登录、设备、场景、API Key、文档、安全、设置、审计），`App.vue` 降至约 800 行。
+- 抽出共享 `types/admin.ts`、`data/apiDocs.ts` 与配置/剪贴板工具。
+
+### 说明
+
+- 对外 API 与管理接口行为保持兼容；设备列表仍支持 `include_raw` / `include_spec`。
+
 ## v3.5.0 - 2026-07-21
 
 ### 重构

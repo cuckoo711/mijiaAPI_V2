@@ -212,10 +212,10 @@ def test_validate_admin_session_uses_cache_on_hot_path(
     store.create_initial_admin("admin", "strong-password")
     session = store.authenticate_admin("admin", "strong-password")
 
-    # 用 monkeypatch 计数 verify_secret 调用
-    from server import store as store_module
+    # 用 monkeypatch 计数 verify_secret 调用（实现位于 AdminAuthMixin）
+    from server import store_auth as store_auth_module
 
-    original_verify = store_module.verify_secret
+    original_verify = store_auth_module.verify_secret
     call_count = 0
 
     def counting_verify(secret: str, stored_hash: str) -> bool:
@@ -223,7 +223,7 @@ def test_validate_admin_session_uses_cache_on_hot_path(
         call_count += 1
         return original_verify(secret, stored_hash)
 
-    monkeypatch.setattr(store_module, "verify_secret", counting_verify)
+    monkeypatch.setattr(store_auth_module, "verify_secret", counting_verify)
 
     # 首次：走完整 PBKDF2 校验
     admin_1 = store.validate_admin_session(session["token"])
