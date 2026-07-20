@@ -2,6 +2,23 @@
 
 本项目遵循“面向部署和使用者可读”的更新记录。最新变化放在最前面。
 
+## v3.5.0 - 2026-07-21
+
+### 重构
+
+- `server/app.py` 拆分为 `routers/admin_auth.py`、`admin_mijia.py`、`admin_resources.py`、`api_v1.py` 与共享 `deps.py`。
+- 管理台抽出 `useAdminSession` / `useMijiaLogin` / `useSyncProgress` composables，缩小 `App.vue`。
+- 移除未使用的 `vue-router` 依赖。
+
+### 性能
+
+- 设备列表默认不再反序列化 `raw` / `spec`；需要时传 `include_raw=1` / `include_spec=1`。
+
+### 运维
+
+- 新增 CLI `write-config`，可从模板生成 `configs/server.toml`。
+- 同步后台与凭据刷新失败改为结构化 warning 日志，不再静默吞掉。
+
 ## v3.4.1 - 2026-07-21
 
 ### 修复

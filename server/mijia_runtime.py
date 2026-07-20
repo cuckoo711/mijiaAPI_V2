@@ -17,7 +17,10 @@ from mijiaAPI_V2.domain.models import Credential, Device, Home
 from mijiaAPI_V2.infrastructure.credential_provider import CredentialProvider
 from mijiaAPI_V2.infrastructure.credential_store import FileCredentialStore
 from server.config import ServerSettings
+from server.logging_utils import get_server_logger
 from server.store import ServerStore, isoformat, utc_now
+
+logger = get_server_logger(__name__)
 
 
 def model_to_dict(value: Any) -> dict[str, Any]:
@@ -277,7 +280,7 @@ class MijiaRuntime:
             if self._api_client is not None:
                 self._api_client.clear_all_cache()
         except Exception:
-            pass
+            logger.warning("failed to clear SDK cache before credential delete", exc_info=True)
 
         FileCredentialStore(self._settings.credential_path).delete()
         self._invalidate_api_client()
@@ -311,8 +314,7 @@ class MijiaRuntime:
             if credential.is_valid() and credential.expires_in() < threshold:
                 self._refresh_credential(credential)
         except Exception:
-            # 定时任务失败不应拖垮主进程，但要留下可观测线索
-            print("credential refresh job failed", flush=True)
+            logger.warning("credential refresh job failed", exc_info=True)
         finally:
             # 重新启动定时器
             self.start_credential_refresh_timer()
@@ -338,9 +340,7 @@ class MijiaRuntime:
         try:
             self._sync_all_unlocked()
         except Exception:
-            # ``_sync_all_unlocked`` 已经把错误信息写入 progress，这里静默避免
-            # 未捕获异常污染日志。
-            pass
+            logger.warning("sync background thread failed", exc_info=True)
         finally:
             self._sync_lock.release()
 

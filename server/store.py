@@ -964,23 +964,41 @@ class ServerStore:
         ]
 
     def list_devices(
-        self, include_hidden: bool = False, include_spec: bool = False
+        self,
+        include_hidden: bool = False,
+        include_spec: bool = False,
+        include_raw: bool = False,
     ) -> list[dict[str, Any]]:
         """List locally synced devices.
 
-        默认不返回 ``spec`` 字段（每台设备的 JSON 可能达几十 KB，全量返回
-        时反序列化开销累积可观）。需要 spec 时显式传 ``include_spec=True``
-        或改用 :meth:`get_device` 单点查询。
+        默认不返回 ``spec`` / ``raw`` 字段（每台设备的 JSON 可能达几十 KB，
+        全量列表反序列化开销累积可观）。需要时显式传参，或改用
+        :meth:`get_device` 单点查询。
         """
 
         where = "" if include_hidden else "WHERE hidden = 0"
+        columns = (
+            "id, miot_did, slug, name, alias, model, home_id, room_id, "
+            "tags_json, group_name, hidden, access_mode, status, last_synced_at"
+        )
+        if include_raw:
+            columns += ", raw_json"
+        if include_spec:
+            columns += ", spec_json"
         with self._database.connect() as conn:
-            rows = conn.execute(f"""
-                SELECT * FROM device_registry
+            rows = conn.execute(
+                f"""
+                SELECT {columns} FROM device_registry
                 {where}
                 ORDER BY home_id, group_name, COALESCE(alias, name), name
-                """).fetchall()
-        return [self._device_from_row(row, include_spec=include_spec) for row in rows]
+                """
+            ).fetchall()
+        return [
+            self._device_from_row(
+                row, include_spec=include_spec, include_raw=include_raw
+            )
+            for row in rows
+        ]
 
     def get_device(self, device_slug_or_id: str) -> dict[str, Any]:
         """Get a device by slug, internal id, or original did."""
@@ -995,7 +1013,7 @@ class ServerStore:
             ).fetchone()
         if row is None:
             raise KeyError(f"Device not found: {device_slug_or_id}")
-        return self._device_from_row(row, include_spec=True)
+        return self._device_from_row(row, include_spec=True, include_raw=True)
 
     def update_device(self, device_id: str, updates: dict[str, Any]) -> dict[str, Any]:
         """Update local device presentation and authorization metadata."""
@@ -1327,7 +1345,12 @@ class ServerStore:
         except Exception as exc:
             return {"key": "sqlite", "status": "fail", "message": str(exc)}
 
-    def _device_from_row(self, row: Any, include_spec: bool = True) -> dict[str, Any]:
+    def _device_from_row(
+        self,
+        row: Any,
+        include_spec: bool = True,
+        include_raw: bool = True,
+    ) -> dict[str, Any]:
         payload = {
             "id": row["id"],
             "did": row["miot_did"],
@@ -1344,9 +1367,10 @@ class ServerStore:
             "hidden": bool(row["hidden"]),
             "access_mode": row["access_mode"],
             "status": row["status"],
-            "raw": json.loads(row["raw_json"]),
             "last_synced_at": row["last_synced_at"],
         }
+        if include_raw:
+            payload["raw"] = json.loads(row["raw_json"]) if row["raw_json"] else {}
         if include_spec:
             payload["spec"] = (
                 json.loads(row["spec_json"]) if row["spec_json"] else None

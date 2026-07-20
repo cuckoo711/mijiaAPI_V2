@@ -17,6 +17,9 @@ import { ElMessage } from "element-plus";
 import type { Component } from "vue";
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { buildSceneExecuteCurl, curlApiKey, normalizeApiBaseUrl } from "./apiExamples";
+import { useAdminSession } from "./composables/useAdminSession";
+import { useMijiaLogin } from "./composables/useMijiaLogin";
+import { useSyncProgress } from "./composables/useSyncProgress";
 
 type ApiList<T> = { items: T[] };
 type PageItem = {
@@ -87,14 +90,6 @@ type ApiEndpointRow = {
   note: string;
   body?: string;
 };
-type AdminSessionPayload = {
-  token: string;
-  expires_at: string;
-  admin?: { id: string; username: string };
-};
-type RequestBehavior = {
-  skipAuthRedirect?: boolean;
-};
 type AppInfo = {
   name: string;
   version: string;
@@ -120,44 +115,14 @@ type UpdateInfo = {
   repository_url: string;
 };
 
-class ApiRequestError extends Error {
-  status: number;
-  code?: string;
+const { token, isAuthed, request, refreshAdminSession, login: loginAdminSession, logout: logoutAdminSession, disposeAdminSession } =
+  useAdminSession();
 
-  constructor(message: string, status: number, code?: string) {
-    super(message);
-    this.name = "ApiRequestError";
-    this.status = status;
-    this.code = code;
-  }
-}
-
-const token = ref(localStorage.getItem("mijia_admin_token") || "");
-const tokenExpiresAt = ref(localStorage.getItem("mijia_admin_expires_at") || "");
 // 从 URL hash 或 localStorage 初始化当前页面
 const activeMenu = ref(
   window.location.hash.slice(1) || localStorage.getItem("mijia_active_menu") || "dashboard"
 );
 const loading = ref(false);
-const syncing = ref(false);
-const syncProgress = ref<{
-  task_id: string;
-  status: string;
-  step: string;
-  progress: number;
-  current_home: string;
-  homes_total: number;
-  homes_processed: number;
-  devices_found: number;
-  scenes_found: number;
-  warnings: Array<{ kind: string; home_name: string; message: string }>;
-  started_at: string;
-  updated_at: string;
-  completed_at: string | null;
-  error: string | null;
-} | null>(null);
-const syncPollTimer = ref<number | null>(null);
-const isSyncPolling = ref(false);
 const health = ref<{ status: string; version: string } | null>(null);
 const initialized = ref(false);
 const account = ref<Record<string, unknown>>({});
@@ -169,7 +134,6 @@ const apiKeys = ref<ApiKeyItem[]>([]);
 const configs = ref<Array<Record<string, unknown>>>([]);
 const audits = ref<Array<Record<string, unknown>>>([]);
 const oneTimeApiKey = ref("");
-const qrJob = ref<Record<string, string> | null>(null);
 const proxyCidrs = ref("");
 const devicePage = ref(1);
 const devicePageSize = ref(20);
@@ -179,8 +143,15 @@ const aboutDialogVisible = ref(false);
 const passwordDialogVisible = ref(false);
 const changingPassword = ref(false);
 const checkingUpdate = ref(false);
-let qrTimer: number | undefined;
-let adminRefreshTimer: number | undefined;
+
+const { qrJob, startQrLogin, deleteCredential, disposeMijiaLogin } = useMijiaLogin({
+  request,
+  onAccountChanged: () => refreshAll(),
+});
+const { syncing, syncProgress, startSyncPolling, stopSyncPolling, syncMijia } = useSyncProgress({
+  request,
+  onCompleted: () => refreshAll(),
+});
 
 const defaultTrustedProxyCidrs = "127.0.0.1/32\n::1/128";
 
@@ -464,7 +435,6 @@ const apiEndpointRows: ApiEndpointRow[] = [
   },
 ];
 
-const isAuthed = computed(() => Boolean(token.value));
 const initializedLabel = computed(() => (initialized.value ? "已初始化" : "待初始化"));
 const activePage = computed(
   () => pages.find((page) => page.key === activeMenu.value) || dashboardPage
@@ -661,97 +631,6 @@ function toggleApiKeyScope(scope: string, checked: string | number | boolean): v
   keyForm.scopes = Array.from(scopes);
 }
 
-function clearAdminSession(message?: string): void {
-  const hadToken = Boolean(token.value);
-  token.value = "";
-  tokenExpiresAt.value = "";
-  localStorage.removeItem("mijia_admin_token");
-  localStorage.removeItem("mijia_admin_expires_at");
-  window.clearTimeout(adminRefreshTimer);
-  if (message && hadToken) {
-    ElMessage.warning(message);
-  }
-}
-
-function saveAdminSession(payload: AdminSessionPayload): void {
-  token.value = payload.token;
-  tokenExpiresAt.value = payload.expires_at;
-  localStorage.setItem("mijia_admin_token", payload.token);
-  localStorage.setItem("mijia_admin_expires_at", payload.expires_at);
-  scheduleAdminTokenRefresh(payload.expires_at);
-}
-
-function scheduleAdminTokenRefresh(expiresAt: string): void {
-  window.clearTimeout(adminRefreshTimer);
-  const expiresAtMs = new Date(expiresAt).getTime();
-  if (!Number.isFinite(expiresAtMs)) {
-    return;
-  }
-  const refreshAtMs = expiresAtMs - 5 * 60 * 1000;
-  const delayMs = Math.max(5000, refreshAtMs - Date.now());
-  adminRefreshTimer = window.setTimeout(() => {
-    void refreshAdminSession();
-  }, delayMs);
-}
-
-async function refreshAdminSession(): Promise<boolean> {
-  if (!token.value) {
-    return false;
-  }
-  try {
-    const payload = await request<AdminSessionPayload>(
-      "/api/admin/auth/refresh",
-      {
-        method: "POST",
-        body: "{}",
-      },
-      { skipAuthRedirect: true },
-    );
-    saveAdminSession(payload);
-    return true;
-  } catch (error) {
-    if (error instanceof ApiRequestError && error.status === 401) {
-      clearAdminSession("登录已过期，请重新登录");
-    } else if (token.value) {
-      adminRefreshTimer = window.setTimeout(() => {
-        void refreshAdminSession();
-      }, 60_000);
-    }
-    return false;
-  }
-}
-
-async function request<T>(
-  url: string,
-  options: RequestInit = {},
-  behavior: RequestBehavior = {},
-): Promise<T> {
-  const headers = new Headers(options.headers);
-  headers.set("Content-Type", "application/json");
-  if (token.value) {
-    headers.set("Authorization", `Bearer ${token.value}`);
-  }
-  const response = await fetch(url, { ...options, headers });
-  if (!response.ok) {
-    const payload = await response.json().catch(() => ({}));
-    const errorCode = payload?.error?.code;
-    const errorMessage = payload?.error?.message || `请求失败 ${response.status}`;
-    const requestError = new ApiRequestError(errorMessage, response.status, errorCode);
-    if (
-      response.status === 401 &&
-      errorCode === "ADMIN_AUTH_FAILED" &&
-      !behavior.skipAuthRedirect
-    ) {
-      clearAdminSession("登录已过期，请重新登录");
-    }
-    throw requestError;
-  }
-  if (response.status === 204) {
-    return undefined as T;
-  }
-  return (await response.json()) as T;
-}
-
 async function loadPublic(): Promise<void> {
   const bootstrapPayload = await request<{
     initialized: boolean;
@@ -885,11 +764,7 @@ async function createAdmin(): Promise<void> {
 
 async function login(): Promise<void> {
   try {
-    const payload = await request<AdminSessionPayload>("/api/admin/auth/login", {
-      method: "POST",
-      body: JSON.stringify(loginForm),
-    });
-    saveAdminSession(payload);
+    await loginAdminSession(loginForm);
     ElMessage.success("登录成功");
     await refreshAll();
   } catch (error) {
@@ -898,7 +773,7 @@ async function login(): Promise<void> {
 }
 
 function logout(): void {
-  clearAdminSession();
+  logoutAdminSession();
 }
 
 function openPasswordDialog(): void {
@@ -943,150 +818,6 @@ async function changePassword(): Promise<void> {
     ElMessage.error(error instanceof Error ? error.message : "修改密码失败");
   } finally {
     changingPassword.value = false;
-  }
-}
-
-async function startQrLogin(): Promise<void> {
-  qrJob.value = await request<Record<string, string>>("/api/admin/mijia/login/start", {
-    method: "POST",
-    body: "{}",
-  });
-  window.clearInterval(qrTimer);
-  qrTimer = window.setInterval(pollQrLogin, 2500);
-}
-
-async function deleteCredential(): Promise<void> {
-  try {
-    await request("/api/admin/mijia/credential", { method: "DELETE" });
-    ElMessage.success("账号已移除");
-    await refreshAll();
-  } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : "移除失败");
-  }
-}
-
-async function pollQrLogin(): Promise<void> {
-  if (!qrJob.value?.id) {
-    return;
-  }
-  qrJob.value = await request<Record<string, string>>(`/api/admin/mijia/login/${qrJob.value.id}`);
-  const status = String(qrJob.value.status);
-  if (status === "success") {
-    window.clearInterval(qrTimer);
-    await refreshAll();
-    ElMessage.success("米家登录成功");
-    qrJob.value = null;
-    return;
-  }
-  if (status === "failed") {
-    window.clearInterval(qrTimer);
-  }
-}
-
-function startSyncPolling(): void {
-  if (isSyncPolling.value) return;
-  isSyncPolling.value = true;
-  void scheduleSyncPoll(800);
-}
-
-function stopSyncPolling(): void {
-  if (syncPollTimer.value) {
-    window.clearTimeout(syncPollTimer.value);
-    syncPollTimer.value = null;
-  }
-  isSyncPolling.value = false;
-}
-
-function scheduleSyncPoll(delayMs: number): void {
-  if (!isSyncPolling.value) return;
-  syncPollTimer.value = window.setTimeout(() => {
-    void pollSyncProgress().then((nextDelay) => {
-      if (isSyncPolling.value) {
-        scheduleSyncPoll(nextDelay);
-      }
-    });
-  }, delayMs);
-}
-
-async function pollSyncProgress(): Promise<number> {
-  try {
-    const progress = await request<{
-      task_id: string;
-      status: string;
-      step: string;
-      progress: number;
-      current_home: string;
-      homes_total: number;
-      homes_processed: number;
-      devices_found: number;
-      scenes_found: number;
-      warnings: Array<{ kind: string; home_name: string; message: string }>;
-      started_at: string;
-      updated_at: string;
-      completed_at: string | null;
-      error: string | null;
-    }>("/api/admin/sync/progress");
-    // 如果后端返回 idle 但前端正在同步，保留前端的初始状态
-    if (progress.status === "idle" && syncing.value) {
-      return 1200;
-    }
-    syncProgress.value = progress;
-    if (progress.status === "completed" || progress.status === "failed") {
-      stopSyncPolling();
-      syncing.value = false;
-      if (progress.status === "completed") {
-        const warningText = progress.warnings?.length ? `，${progress.warnings.length} 个警告` : "";
-        ElMessage.success(
-          `同步完成：${progress.homes_total} 个家庭，${progress.devices_found} 个设备，${progress.scenes_found} 个场景${warningText}`
-        );
-        await refreshAll();
-      } else {
-        ElMessage.error(`同步失败：${progress.error}`);
-      }
-      return 800;
-    }
-    // 运行中稍密，其它状态放宽间隔，降低管理会话与 SQLite 压力
-    return progress.status === "running" ? 1000 : 2000;
-  } catch (error) {
-    console.error("获取同步进度失败:", error);
-    return 2000;
-  }
-}
-
-async function syncMijia(): Promise<void> {
-  if (syncing.value) {
-    ElMessage.warning("同步正在进行中，请稍候");
-    return;
-  }
-  syncing.value = true;
-  // 立即显示进度卡片，让用户知道同步已开始
-  syncProgress.value = {
-    task_id: "",
-    status: "running",
-    step: "准备同步...",
-    progress: 0,
-    current_home: "",
-    homes_total: 0,
-    homes_processed: 0,
-    devices_found: 0,
-    scenes_found: 0,
-    warnings: [],
-    started_at: "",
-    updated_at: "",
-    completed_at: null,
-    error: null,
-  };
-  // 先开始轮询，再发起同步请求（同步请求是阻塞的）
-  startSyncPolling();
-  try {
-    await request("/api/admin/sync", {
-      method: "POST",
-      body: "{}",
-    });
-  } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : "同步失败");
-    syncing.value = false;
-    stopSyncPolling();
   }
 }
 
@@ -1220,8 +951,8 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
-  window.clearInterval(qrTimer);
-  window.clearTimeout(adminRefreshTimer);
+  disposeMijiaLogin();
+  disposeAdminSession();
   stopSyncPolling();
 });
 </script>
