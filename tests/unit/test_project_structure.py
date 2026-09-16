@@ -3,6 +3,8 @@
 验证项目的基本结构和导入是否正常。
 """
 
+from pathlib import Path
+
 import pytest
 
 
@@ -82,6 +84,32 @@ def test_import_infrastructure() -> None:
     assert CredentialProvider is not None
     assert ICredentialStore is not None
     assert FileCredentialStore is not None
+
+
+def test_docker_build_context_includes_required_entrypoint() -> None:
+    """Ensure .dockerignore does not hide the Docker entrypoint."""
+    root = Path(__file__).resolve().parents[2]
+    ignored = {
+        line.strip().rstrip("/")
+        for line in (root / ".dockerignore").read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.lstrip().startswith("#") and not line.startswith("!")
+    }
+
+    assert "deploy" not in ignored
+    assert (root / "deploy" / "docker-entrypoint.sh").is_file()
+    assert "COPY deploy/docker-entrypoint.sh" in (
+        root / "deploy" / "Dockerfile"
+    ).read_text(encoding="utf-8")
+
+
+def test_docker_compose_defaults_to_loopback() -> None:
+    """Keep the one-click deployment private by default."""
+    root = Path(__file__).resolve().parents[2]
+    compose = (root / "deploy" / "docker-compose.yml").read_text(encoding="utf-8")
+
+    assert 'MIJIA_BIND_ADDRESS:-127.0.0.1' in compose
+    assert 'MIJIA_BOOTSTRAP_ALLOW_PRIVATE:-1' in compose
+    assert "stop_grace_period: 30s" in compose
 
 
 def test_import_core() -> None:

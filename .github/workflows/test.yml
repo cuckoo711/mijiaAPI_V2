@@ -33,3 +33,17 @@ jobs:
 
       - name: Run unit tests
         run: pytest tests/unit -q --tb=short
+
+  docker:
+    name: Docker build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Validate Compose file
+        run: docker compose -f deploy/docker-compose.yml config --quiet
+
+      - name: Build Docker image
+        run: docker build --file deploy/Dockerfile --tag mijia-server:ci .

@@ -5,20 +5,27 @@ services:
       dockerfile: deploy/Dockerfile
     image: mijia-server:latest
     container_name: mijia-server
+    init: true
     ports:
-      - "8123:8123"
+      # 默认只绑定本机；需要局域网访问时可通过 .env 覆盖。
+      - "${MIJIA_BIND_ADDRESS:-127.0.0.1}:${MIJIA_HOST_PORT:-8123}:8123"
     volumes:
       - mijia-data:/data
     environment:
-      MIJIA_SERVER_HOST: 0.0.0.0
-      MIJIA_SERVER_PORT: 8123
+      MIJIA_SERVER_HOST: "0.0.0.0"
+      MIJIA_SERVER_PORT: "8123"
       MIJIA_SERVER_DATA_DIR: /data
       MIJIA_SERVER_DATABASE_PATH: /data/server/server.sqlite3
       MIJIA_CREDENTIAL_PATH: /data/credential.json
       MIJIA_WEB_DIST_DIR: /app/web/dist
-      # 容器端口映射后来源多为 Docker 网桥私网 IP，允许首次本机建管理员
-      MIJIA_BOOTSTRAP_ALLOW_PRIVATE: "1"
+      MIJIA_SERVER_LOG_LEVEL: "${MIJIA_SERVER_LOG_LEVEL:-INFO}"
+      MIJIA_PUBLIC_BASE_URL: "${MIJIA_PUBLIC_BASE_URL:-}"
+      # 不设置时使用 /data/.credential_key 持久化密钥。
+      MIJIA_CREDENTIAL_SECRET: "${MIJIA_CREDENTIAL_SECRET:-}"
+      # 默认回环绑定下允许浏览器完成首次建管理员。
+      MIJIA_BOOTSTRAP_ALLOW_PRIVATE: "${MIJIA_BOOTSTRAP_ALLOW_PRIVATE:-1}"
     restart: unless-stopped
+    stop_grace_period: 30s
 
 volumes:
   mijia-data:

@@ -107,7 +107,7 @@ api.control_device(device_id=devices[0].did, siid=2, piid=1, value=True)
 | `MIJIA_SERVER_DATABASE_PATH` | `configs/server/server.sqlite3` | SQLite 路径 |
 | `MIJIA_CREDENTIAL_PATH` | `configs/credential.json` | 凭据文件（AES-GCM 加密） |
 | `MIJIA_WEB_DIST_DIR` | `web/dist` | 前端静态资源 |
-| `MIJIA_LOG_LEVEL` | `INFO` | 日志级别（支持 `DEBUG`） |
+| `MIJIA_SERVER_LOG_LEVEL` | `INFO` | 日志级别（支持 `DEBUG`） |
 | `MIJIA_BOOTSTRAP_ALLOW_PRIVATE` | 空 | `1` 时允许私网完成首次建管理员（Docker） |
 | `MIJIA_CREDENTIAL_SECRET` | 空 | 可选凭据加密密钥；不设则用 `.credential_key` |
 
@@ -128,19 +128,41 @@ uv run python -m server.cli write-config
 
 ## 部署
 
-### Docker
+### Docker Compose
+
+在仓库根目录执行即可构建并后台启动：
 
 ```bash
 docker compose -f deploy/docker-compose.yml up -d --build
 ```
 
-数据与凭据持久化在命名卷 `mijia-data`（可在 `deploy/docker-compose.yml` 中改为绑定 `./data:/data`）。首次启动后访问 `http://127.0.0.1:8123` 创建管理员。可选初始化：
+默认只绑定本机 `127.0.0.1:8123`，启动后访问 `http://127.0.0.1:8123`。数据、SQLite 数据库、米家凭据、加密密钥和缓存持久化在命名卷 `mijia-data` 中。
+
+首次创建管理员可以直接打开管理台，或执行：
 
 ```bash
 docker compose -f deploy/docker-compose.yml run --rm mijia-server mijia-server init --admin admin
 ```
 
-更多说明见 [`deploy/README.md`](deploy/README.md)。
+常用维护命令：
+
+```bash
+docker compose -f deploy/docker-compose.yml ps
+docker compose -f deploy/docker-compose.yml logs -f mijia-server
+docker compose -f deploy/docker-compose.yml down
+docker compose -f deploy/docker-compose.yml up -d --build
+```
+
+如需从局域网访问，在仓库根目录创建未提交的 `.env`，例如：
+
+```dotenv
+MIJIA_BIND_ADDRESS=0.0.0.0
+MIJIA_HOST_PORT=8123
+MIJIA_BOOTSTRAP_ALLOW_PRIVATE=0
+MIJIA_SERVER_LOG_LEVEL=INFO
+```
+
+改为非本机绑定后，建议使用容器内 `init --admin` 创建管理员，并在管理台按需开启局域网访问。更多说明见 [`deploy/README.md`](deploy/README.md)。
 
 ### systemd
 

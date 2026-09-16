@@ -1,5 +1,8 @@
 .git
 .gitignore
+.env
+.env.*
+!.env.example
 .github
 
 .venv
@@ -43,7 +46,9 @@ configs/mijiaAPI.toml
 tests
 examples
 docs
-deploy
+deploy/packaging/
+deploy/scripts/
+deploy/assets/
 build
 dist
 
