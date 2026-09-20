@@ -7,6 +7,7 @@
 ### 新增
 
 - Docker Compose 一键部署：仓库根目录执行 `docker compose -f deploy/docker-compose.yml up -d --build` 即可构建并后台启动，默认只绑定本机 `127.0.0.1:8123`，数据、SQLite、凭据、加密密钥与缓存持久化在命名卷 `mijia-data`。
+- 容器健康检查：镜像内置 `HEALTHCHECK`，用自带 Python 请求 `/healthz`（不额外安装 curl），30s 间隔、5s 超时、15s 启动宽限、3 次重试；配合 Compose 的 `stop_grace_period: 30s`。
 - CI 增加 Docker job：校验 Compose 配置解析并执行真实镜像构建，防止 `.dockerignore`、Compose 或 Dockerfile 回归导致构建失败。
 
 ### 修复
