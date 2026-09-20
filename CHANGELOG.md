@@ -2,6 +2,35 @@
 
 本项目遵循“面向部署和使用者可读”的更新记录。最新变化放在最前面。
 
+## v3.8.0 - 2026-09-20
+
+### 新增
+
+- Docker Compose 一键部署：仓库根目录执行 `docker compose -f deploy/docker-compose.yml up -d --build` 即可构建并后台启动，默认只绑定本机 `127.0.0.1:8123`，数据、SQLite、凭据、加密密钥与缓存持久化在命名卷 `mijia-data`。
+- CI 增加 Docker job：校验 Compose 配置解析并执行真实镜像构建，防止 `.dockerignore`、Compose 或 Dockerfile 回归导致构建失败。
+
+### 修复
+
+- Compose 显式声明 project name 与卷名。此前用 `-f deploy/docker-compose.yml` 启动时，Compose 会取 compose 文件所在目录名作项目名，卷实际叫 `deploy_mijia-data`，导致文档里的 `docker run -v mijia-data:/data` 备份命令挂到一个新建的空卷上，备份出来是空文件。
+- 修复 Docker 构建上下文：`.dockerignore` 不再排除 `deploy/Dockerfile` 所需的 `deploy/docker-entrypoint.sh`，此前会直接阻断镜像构建。
+- 孤儿缓存目录 `<data_dir>/server/cache` 改为按已解析的 `data_dir` 清理。此前只检查 cwd 相对的 `configs/`，而容器内工作目录是 `/app`、数据在 `/data`，该清理逻辑在 Docker 下永不触发。同时取消「仅当 `configs/cache` 也存在才删」的前提——磁盘缓存目录由 `CacheManager` 懒创建，全新安装时孤儿目录会永久残留。
+- API Key 缓存条目过期淘汰时增加身份判断，仅在条目未被其它线程替换时才移除，避免误删刚写入的新条目。
+
+### 安全
+
+- `.env` 与 `deploy/.env` 全面排除出版本库和镜像构建上下文：Compose 的 `.env` 可能携带 `MIJIA_CREDENTIAL_SECRET`。
+
+### 整理
+
+- `server/config.py` 的 v2→v3 迁移逻辑抽成独立函数；`server/store_api_keys.py` 的 `validate_api_key` 拆分为缓存快路径与数据库权威路径。
+- `deploy/scripts/clean.py` 重写：跨平台，跳过 `.git` / `.venv` / `node_modules`，构建产物只在仓库根匹配（默认保住 `web/dist`），支持 `--dry-run`，并兼容 GBK 控制台。`make clean` / `make clean-all` 改为委派该脚本。
+- Makefile 不再在命令行重复传递 lint 与测试参数，统一由 `pyproject.toml` 提供。此前 `make lint` 传 `--max-line-length=120`，与配置中的 100 并存为两套标准。
+- 全量应用 black + isort，`make lint` 归零（此前 SDK 侧有 107 项 flake8 告警）。
+
+### 文档
+
+- README 与 `deploy/README.md` 补齐 Docker 快速开始、命名卷的备份与恢复、通过 `.env` 覆盖端口与绑定地址，以及改为非回环绑定后的安全注意事项。
+
 ## v3.7.3 - 2026-07-21
 
 ### 修复

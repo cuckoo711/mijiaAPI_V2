@@ -231,11 +231,11 @@ class MijiaRuntime:
         credential = self.load_credential()
         if credential is None:
             return {"exists": False, "valid": False}
-        
+
         expires_in_seconds = credential.expires_in()
         expires_in_hours = expires_in_seconds / 3600
         expires_in_days = expires_in_hours / 24
-        
+
         # 判断状态：与定时刷新阈值对齐，避免 UI「即将过期」与后台刷新旋钮不一致
         refresh_before = self._settings.credential_refresh_before_seconds
         if not credential.is_valid():
@@ -247,7 +247,7 @@ class MijiaRuntime:
         else:
             status = "valid"
             status_text = f"有效（剩余 {expires_in_days:.1f} 天）"
-        
+
         return {
             "exists": True,
             "valid": credential.is_valid(),
@@ -388,12 +388,12 @@ class MijiaRuntime:
         try:
             # Step 1: Initialize
             self._update_progress(step="初始化同步任务", progress=0, status="running")
-            
+
             # Step 2: Get homes
             self._update_progress(step="获取家庭列表", progress=5)
             api = self._api()
             homes = api.get_homes()
-            
+
             # Step 3: Save homes
             self._update_progress(step="保存家庭数据", progress=10, homes_total=len(homes))
             home_dicts = [model_to_dict(home) for home in homes]
@@ -402,7 +402,7 @@ class MijiaRuntime:
             devices: list[dict[str, Any]] = []
             scenes: list[dict[str, Any]] = []
             warnings: list[dict[str, str]] = []
-            
+
             # Step 4-6: Process each home
             for i, home in enumerate(homes):
                 # Update progress
@@ -413,29 +413,29 @@ class MijiaRuntime:
                     current_home=str(home.name),
                     homes_processed=i,
                 )
-                
+
                 # Get devices
                 try:
                     devices.extend(self._device_dicts(api, home))
                     self._update_progress(devices_found=len(devices))
                 except Exception as exc:
                     warnings.append(self._sync_warning("devices", home, exc))
-                
+
                 # Get scenes
                 try:
                     scenes.extend(self._scene_dicts(api, home))
                     self._update_progress(scenes_found=len(scenes))
                 except Exception as exc:
                     warnings.append(self._sync_warning("scenes", home, exc))
-            
+
             # Step 7: Save devices
             self._update_progress(step="保存设备数据", progress=90)
             self._store.upsert_devices(devices)
-            
+
             # Step 8: Save scenes
             self._update_progress(step="保存场景数据", progress=95)
             self._store.upsert_scenes(scenes)
-            
+
             # Complete
             self._update_progress(
                 status="completed",
@@ -444,14 +444,14 @@ class MijiaRuntime:
                 completed_at=isoformat(utc_now()),
                 warnings=warnings,
             )
-            
+
             return {
                 "homes": len(home_dicts),
                 "devices": len(devices),
                 "scenes": len(scenes),
                 "warnings": warnings,
             }
-            
+
         except Exception as e:
             self._update_progress(
                 status="failed",
@@ -470,11 +470,11 @@ class MijiaRuntime:
         """Update sync progress."""
         if self._sync_progress is None:
             return
-        
+
         for key, value in kwargs.items():
             if hasattr(self._sync_progress, key):
                 setattr(self._sync_progress, key, value)
-        
+
         self._sync_progress.updated_at = isoformat(utc_now())
 
     def get_device_state(self, device_slug: str) -> list[dict[str, Any]]:

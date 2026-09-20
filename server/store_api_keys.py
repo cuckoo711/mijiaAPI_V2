@@ -101,32 +101,78 @@ class ApiKeyMixin:
 
         now = utc_now()
         now_mono = time.monotonic()
+
         cached = self._api_key_cache.get(key)
         if cached is not None:
-            record, cache_until, last_write = cached
-            if now_mono <= cache_until:
-                expires_at = record.get("expires_at_dt")
-                if expires_at and expires_at <= now:
-                    self._invalidate_api_key_cache(key=key)
-                    raise AuthenticationFailedError("API key expired")
-                if required_scope and required_scope not in record["scopes"]:
-                    raise AuthenticationFailedError("API key does not have required scope")
-                if now_mono - last_write >= API_KEY_CACHE_TTL:
-                    self._touch_api_key_usage(record["id"], source_ip, now)
-                    with self._api_key_cache_lock:
-                        current = self._api_key_cache.get(key)
-                        if current is not None:
-                            self._api_key_cache[key] = (current[0], current[1], now_mono)
-                return {
-                    "id": record["id"],
-                    "name": record["name"],
-                    "key_prefix": record["key_prefix"],
-                    "scopes": record["scopes"],
-                    "resource_policy": record["resource_policy"],
-                }
+            from_cache = self._validate_cached_api_key(
+                key, cached, required_scope, source_ip, now, now_mono
+            )
+            if from_cache is not None:
+                return from_cache
+
+        record = self._load_api_key_record(key, required_scope, source_ip, now)
+        with self._api_key_cache_lock:
+            self._api_key_cache[key] = (record, now_mono + API_KEY_CACHE_TTL, now_mono)
+        return self._api_key_public_view(record)
+
+    @staticmethod
+    def _api_key_public_view(record: dict[str, Any]) -> dict[str, Any]:
+        """对外暴露的字段投影，隐藏 ``expires_at_dt`` 等仅供内部判定的字段。"""
+
+        return {
+            "id": record["id"],
+            "name": record["name"],
+            "key_prefix": record["key_prefix"],
+            "scopes": record["scopes"],
+            "resource_policy": record["resource_policy"],
+        }
+
+    def _validate_cached_api_key(
+        self,
+        key: str,
+        cached: tuple[dict[str, Any], float, float],
+        required_scope: Optional[str],
+        source_ip: Optional[str],
+        now: datetime,
+        now_mono: float,
+    ) -> Optional[dict[str, Any]]:
+        """缓存快路径。
+
+        返回 ``None`` 表示缓存条目本身已过期、调用方需要回落到数据库权威路径。
+        key 过期或 scope 不足时抛 ``AuthenticationFailedError``，与查库路径一致。
+        """
+
+        record, cache_until, last_write = cached
+        if now_mono > cache_until:
+            # 条目过期：只在没被其它线程替换掉时才驱逐，避免误删新条目。
             with self._api_key_cache_lock:
                 if self._api_key_cache.get(key) is cached:
                     self._api_key_cache.pop(key, None)
+            return None
+
+        expires_at = record.get("expires_at_dt")
+        if expires_at and expires_at <= now:
+            self._invalidate_api_key_cache(key=key)
+            raise AuthenticationFailedError("API key expired")
+        if required_scope and required_scope not in record["scopes"]:
+            raise AuthenticationFailedError("API key does not have required scope")
+
+        if now_mono - last_write >= API_KEY_CACHE_TTL:
+            self._touch_api_key_usage(record["id"], source_ip, now)
+            with self._api_key_cache_lock:
+                current = self._api_key_cache.get(key)
+                if current is not None:
+                    self._api_key_cache[key] = (current[0], current[1], now_mono)
+        return self._api_key_public_view(record)
+
+    def _load_api_key_record(
+        self,
+        key: str,
+        required_scope: Optional[str],
+        source_ip: Optional[str],
+        now: datetime,
+    ) -> dict[str, Any]:
+        """数据库权威路径：校验 key、回写用量，返回含内部字段的完整记录。"""
 
         prefix = secret_prefix(key)
         with self._database.connect() as conn:
@@ -153,7 +199,7 @@ class ApiKeyMixin:
                 """,
                 (isoformat(now), source_ip, row["id"]),
             )
-            record = {
+            return {
                 "id": row["id"],
                 "name": row["name"],
                 "key_prefix": row["key_prefix"],
@@ -161,16 +207,6 @@ class ApiKeyMixin:
                 "resource_policy": json.loads(row["resource_policy_json"]),
                 "expires_at_dt": expires_at,
             }
-
-        with self._api_key_cache_lock:
-            self._api_key_cache[key] = (record, now_mono + API_KEY_CACHE_TTL, now_mono)
-        return {
-            "id": record["id"],
-            "name": record["name"],
-            "key_prefix": record["key_prefix"],
-            "scopes": record["scopes"],
-            "resource_policy": record["resource_policy"],
-        }
 
     def _touch_api_key_usage(
         self, key_id: str, source_ip: Optional[str], now: datetime

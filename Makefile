@@ -1,42 +1,35 @@
 .PHONY: help clean clean-all test test-cov format lint type-check install dev
 
+# 代码质量与测试的参数统一在 pyproject.toml 里配置
+# （[tool.flake8] / [tool.mypy] / [tool.pytest.ini_options]），
+# 这里不再重复传递，避免命令行参数覆盖配置导致两套标准。
+
 help:
 	@echo "可用命令："
 	@echo "  make clean        - 清理缓存和临时文件"
-	@echo "  make clean-all    - 清理所有生成文件（包括覆盖率报告）"
+	@echo "  make clean-all    - 清理所有生成文件（含覆盖率报告与构建产物）"
 	@echo "  make test         - 运行测试"
 	@echo "  make test-cov     - 运行测试并生成覆盖率报告"
 	@echo "  make format       - 格式化代码（black + isort）"
-	@echo "  make lint         - 代码质量检查（flake8 + pylint）"
+	@echo "  make lint         - 代码质量检查（flake8）"
 	@echo "  make type-check   - 类型检查（mypy）"
 	@echo "  make install      - 安装依赖"
 	@echo "  make dev          - 安装开发依赖"
 
 clean:
-	@echo "清理缓存和临时文件..."
-	@find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
-	@find . -type f -name "*.pyc" -delete 2>/dev/null || true
-	@find . -type f -name "*.pyo" -delete 2>/dev/null || true
-	@find . -type f -name "*.pyd" -delete 2>/dev/null || true
-	@rm -rf .mypy_cache/ .pytest_cache/ 2>/dev/null || true
-	@find . -type f -name "*.tmp" -delete 2>/dev/null || true
-	@find . -type f -name "*.log" -delete 2>/dev/null || true
-	@find . -type f -name ".DS_Store" -delete 2>/dev/null || true
-	@echo "✓ 清理完成"
+	@uv run python deploy/scripts/clean.py
 
-clean-all: clean
-	@echo "清理所有生成文件..."
-	@rm -rf .coverage .coverage.* htmlcov/ 2>/dev/null || true
-	@rm -rf dist/ build/ *.egg-info/ *.egg 2>/dev/null || true
-	@echo "✓ 清理完成"
+clean-all:
+	@uv run python deploy/scripts/clean.py --all
 
+# pyproject 的 addopts 默认开启覆盖率统计，所以快速测试显式关掉。
 test:
 	@echo "运行测试..."
-	@uv run pytest tests/ -v
+	@uv run pytest tests/ --no-cov
 
 test-cov:
 	@echo "运行测试并生成覆盖率报告..."
-	@uv run pytest tests/ -v --cov=mijiaAPI_V2 --cov-report=html --cov-report=term
+	@uv run pytest tests/
 	@echo "✓ 覆盖率报告已生成到 htmlcov/ 目录"
 
 format:
@@ -47,12 +40,12 @@ format:
 
 lint:
 	@echo "代码质量检查..."
-	@uv run flake8 mijiaAPI_V2/ server/ --max-line-length=120 --extend-ignore=E203,W503
+	@uv run flake8 mijiaAPI_V2/ server/
 	@echo "✓ flake8 检查通过"
 
 type-check:
 	@echo "类型检查..."
-	@uv run mypy mijiaAPI_V2/ server/ --ignore-missing-imports
+	@uv run mypy mijiaAPI_V2/ server/
 	@echo "✓ 类型检查通过"
 
 install:

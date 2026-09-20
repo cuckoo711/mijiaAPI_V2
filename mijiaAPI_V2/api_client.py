@@ -142,9 +142,7 @@ class MijiaAPI:
 
         return result
 
-    def _invalidate_device_cache(
-        self, device_id: str, home_id: Optional[str] = None
-    ) -> None:
+    def _invalidate_device_cache(self, device_id: str, home_id: Optional[str] = None) -> None:
         """失效指定设备（可选按家庭）的相关缓存。
 
         当 home_id 已知时直接按 home_id 精确失效；未知时才回退到 get_by_id 反查，
@@ -154,9 +152,7 @@ class MijiaAPI:
             return
 
         if home_id:
-            self._cache_manager.invalidate_pattern(
-                f"{self._credential.user_id}:devices:{home_id}"
-            )
+            self._cache_manager.invalidate_pattern(f"{self._credential.user_id}:devices:{home_id}")
             return
 
         device = self._device_service.get_device_by_id(device_id, self._credential)
@@ -241,9 +237,7 @@ class MijiaAPI:
             >>> results = api.batch_control_devices(requests, refresh_cache=False)
         """
         # 剥离仅用于本地失效缓存的辅助字段，避免透传到米家 API
-        forwarded = [
-            {k: v for k, v in request.items() if k != "home_id"} for request in requests
-        ]
+        forwarded = [{k: v for k, v in request.items() if k != "home_id"} for request in requests]
         results = self._device_service.batch_control_devices(forwarded, self._credential)
 
         # 批量控制成功后刷新缓存
@@ -273,9 +267,7 @@ class MijiaAPI:
                 known_home_ids.add(device.home_id)
 
         for home_id in known_home_ids:
-            self._cache_manager.invalidate_pattern(
-                f"{self._credential.user_id}:devices:{home_id}"
-            )
+            self._cache_manager.invalidate_pattern(f"{self._credential.user_id}:devices:{home_id}")
 
     def get_scenes(self, home_id: str, owner_uid: Optional[str] = None) -> List[Scene]:
         """获取智能列表
@@ -326,7 +318,7 @@ class MijiaAPI:
             raise RuntimeError("统计服务未初始化")
 
         return self._statistics_service.get_device_statistics(home_id, self._credential)
-    
+
     def get_device_spec(self, model: str) -> Optional[Any]:
         """获取设备规格
 
@@ -468,9 +460,8 @@ class AsyncMijiaAPI:
             raise RuntimeError("家庭仓储未初始化，请使用工厂函数创建API客户端")
 
         import asyncio
-        return await asyncio.to_thread(
-            self._home_repository.get_all, self._credential
-        )
+
+        return await asyncio.to_thread(self._home_repository.get_all, self._credential)
 
     async def get_devices(self, home_id: str) -> List[Device]:
         """异步获取设备列表
@@ -486,9 +477,8 @@ class AsyncMijiaAPI:
             NetworkError: 网络错误
         """
         import asyncio
-        return await asyncio.to_thread(
-            self._device_service.get_devices, home_id, self._credential
-        )
+
+        return await asyncio.to_thread(self._device_service.get_devices, home_id, self._credential)
 
     async def get_device(self, device_id: str) -> Optional[Device]:
         """异步获取单个设备
@@ -500,6 +490,7 @@ class AsyncMijiaAPI:
             设备对象，不存在返回None
         """
         import asyncio
+
         return await asyncio.to_thread(
             self._device_service.get_device_by_id, device_id, self._credential
         )
@@ -657,9 +648,7 @@ class AsyncMijiaAPI:
         import asyncio
 
         # 剥离仅用于本地失效缓存的辅助字段，避免透传到米家 API
-        forwarded = [
-            {k: v for k, v in request.items() if k != "home_id"} for request in requests
-        ]
+        forwarded = [{k: v for k, v in request.items() if k != "home_id"} for request in requests]
         results = await asyncio.to_thread(
             self._device_service.batch_control_devices, forwarded, self._credential
         )
@@ -702,6 +691,7 @@ class AsyncMijiaAPI:
             智能列表
         """
         import asyncio
+
         return await asyncio.to_thread(
             self._scene_service.get_scenes, home_id, self._credential, owner_uid
         )
@@ -717,6 +707,7 @@ class AsyncMijiaAPI:
             是否成功
         """
         import asyncio
+
         return await asyncio.to_thread(
             self._scene_service.execute_scene, scene_id, home_id, self._credential
         )
@@ -734,6 +725,7 @@ class AsyncMijiaAPI:
             raise RuntimeError("统计服务未初始化")
 
         import asyncio
+
         return await asyncio.to_thread(
             self._statistics_service.get_device_statistics, home_id, self._credential
         )
@@ -774,22 +766,20 @@ class AsyncMijiaAPI:
             return
 
         import asyncio
+
         if home_id:
             # 刷新特定家庭的缓存
             await asyncio.to_thread(
                 self._cache_manager.invalidate_pattern,
-                f"{self._credential.user_id}:devices:{home_id}"
+                f"{self._credential.user_id}:devices:{home_id}",
             )
             await asyncio.to_thread(
                 self._cache_manager.invalidate_pattern,
-                f"{self._credential.user_id}:scenes:{home_id}"
+                f"{self._credential.user_id}:scenes:{home_id}",
             )
         else:
             # 刷新当前用户的所有缓存
-            await asyncio.to_thread(
-                self._cache_manager.clear,
-                namespace=self._credential.user_id
-            )
+            await asyncio.to_thread(self._cache_manager.clear, namespace=self._credential.user_id)
 
     async def clear_all_cache(self) -> None:
         """异步清空所有缓存
@@ -801,4 +791,5 @@ class AsyncMijiaAPI:
         """
         if self._cache_manager:
             import asyncio
+
             await asyncio.to_thread(self._cache_manager.clear)

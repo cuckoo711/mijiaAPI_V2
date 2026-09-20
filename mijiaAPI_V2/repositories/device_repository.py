@@ -46,13 +46,13 @@ class DeviceRepositoryImpl(IDeviceRepository):
         # 从API获取（使用旧项目的端点和参数）
         # 首先需要获取home_owner（家庭所有者的UID）
         home_owner = self._get_home_owner(home_id, credential)
-        
+
         # 分页获取所有设备
         uri = "/home/home_device_list"
         start_did = ""
         has_more = True
         all_devices = []
-        
+
         while has_more:
             data = {
                 "home_owner": home_owner,
@@ -64,10 +64,10 @@ class DeviceRepositoryImpl(IDeviceRepository):
                 "get_cariot_device": True,
                 "get_third_device": True,
             }
-            
+
             response = self._http.post(uri, json=data, credential=credential)
             result = response.get("result", {})
-            
+
             # 获取设备列表
             device_info = result.get("device_info", [])
             if device_info:
@@ -99,24 +99,24 @@ class DeviceRepositoryImpl(IDeviceRepository):
         )
 
         return devices
-    
+
     def _get_home_owner(self, home_id: str, credential: Credential) -> int:
         """获取家庭所有者的UID
-        
+
         Args:
             home_id: 家庭ID
             credential: 用户凭据
-            
+
         Returns:
             家庭所有者的UID
-            
+
         Raises:
             ValueError: 如果找不到对应的家庭
         """
         # 从缓存或API获取家庭列表
         cache_key = "homes"
         cached = self._cache.get(cache_key, namespace=credential.user_id)
-        
+
         if cached:
             homes = cached
         else:
@@ -133,12 +133,12 @@ class DeviceRepositoryImpl(IDeviceRepository):
             }
             response = self._http.post(uri, json=data, credential=credential)
             homes = response.get("result", {}).get("homelist", [])
-        
+
         # 查找对应的家庭
         for home in homes:
             if str(home.get("id", "")) == str(home_id):
                 return int(home.get("uid", 0))
-        
+
         raise ValueError(f"未找到 home_id={home_id} 的家庭信息")
 
     def get_by_id(self, device_id: str, credential: Credential) -> Optional[Device]:
@@ -171,7 +171,7 @@ class DeviceRepositoryImpl(IDeviceRepository):
         }
         response = self._http.post(uri, json=data, credential=credential)
         homes = response.get("result", {}).get("homelist", [])
-        
+
         # 遍历每个家庭查找设备
         for home in homes:
             home_id = str(home.get("id", ""))
@@ -183,7 +183,7 @@ class DeviceRepositoryImpl(IDeviceRepository):
                         cache_key, device.model_dump(), ttl=300, namespace=credential.user_id
                     )
                     return device
-        
+
         return None
 
     def get_properties(self, device_id: str, credential: Credential) -> List[DeviceProperty]:
@@ -288,18 +288,14 @@ class DeviceRepositoryImpl(IDeviceRepository):
         # 如果 params 是空字典，则使用空列表
         # 如果 params 有值，则提取值列表
         param_values = list(params.values()) if params else []
-        
+
         # 构建请求参数（使用旧版本的格式）
-        request_data = {
-            "did": device_id,
-            "siid": siid,
-            "aiid": aiid
-        }
-        
+        request_data = {"did": device_id, "siid": siid, "aiid": aiid}
+
         # 只有当有参数时才添加 value 字段
         if param_values:
             request_data["value"] = param_values
-        
+
         # 调用API执行操作（使用 params 包装）
         response = self._http.post(
             "/miotspec/action",
@@ -326,9 +322,7 @@ class DeviceRepositoryImpl(IDeviceRepository):
         """
         # 调用批量获取API（使用旧项目的参数格式）
         response = self._http.post(
-            "/miotspec/prop/get", 
-            json={"params": requests, "datasource": 1}, 
-            credential=credential
+            "/miotspec/prop/get", json={"params": requests, "datasource": 1}, credential=credential
         )
 
         result: List[Dict[str, Any]] = response.get("result", [])
@@ -348,9 +342,7 @@ class DeviceRepositoryImpl(IDeviceRepository):
         """
         # 调用批量设置API（使用旧项目的参数格式）
         response = self._http.post(
-            "/miotspec/prop/set", 
-            json={"params": requests}, 
-            credential=credential
+            "/miotspec/prop/set", json={"params": requests}, credential=credential
         )
 
         # 失效所有相关设备的缓存

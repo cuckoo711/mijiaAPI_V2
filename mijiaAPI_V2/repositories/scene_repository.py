@@ -42,9 +42,9 @@ class SceneRepositoryImpl(ISceneRepository):
                 "app_version": 12,
                 "get_type": 2,
                 "home_id": str(home_id),
-                "owner_uid": owner_uid or credential.user_id
+                "owner_uid": owner_uid or credential.user_id,
             },
-            credential=credential
+            credential=credential,
         )
 
         # 解析智能列表
@@ -81,9 +81,9 @@ class SceneRepositoryImpl(ISceneRepository):
                 "scene_type": 2,
                 "phone_id": "null",
                 "home_id": str(home_id),
-                "owner_uid": credential.user_id
+                "owner_uid": credential.user_id,
             },
-            credential=credential
+            credential=credential,
         )
 
         # 检查结果

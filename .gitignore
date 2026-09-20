@@ -49,8 +49,16 @@ htmlcov/
 coverage.xml
 *.cover
 
+# ==================== 环境变量文件 ====================
+# Compose 的 .env 可能含 MIJIA_CREDENTIAL_SECRET，不能进版本库
+.env
+.env.*
+!.env.example
+deploy/.env
+deploy/.env.*
+!deploy/*.env.example
+
 # ==================== 米家API数据 ====================
-.mijia/
 credential.json
 *.credential.json
 

@@ -4,7 +4,7 @@
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Coroutine, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -125,7 +125,9 @@ class IAsyncDeviceRepository(ABC):
         pass
 
     @abstractmethod
-    async def get_by_id(self, device_id: str, home_id: str, credential: Credential) -> Optional[Device]:
+    async def get_by_id(
+        self, device_id: str, home_id: str, credential: Credential
+    ) -> Optional[Device]:
         """根据ID获取设备"""
         pass
 

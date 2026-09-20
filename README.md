@@ -138,6 +138,9 @@ docker compose -f deploy/docker-compose.yml up -d --build
 
 默认只绑定本机 `127.0.0.1:8123`，启动后访问 `http://127.0.0.1:8123`。数据、SQLite 数据库、米家凭据、加密密钥和缓存持久化在命名卷 `mijia-data` 中。
 
+> 从 v3.7.3 及更早版本升级的实例，旧卷名是 `deploy_mijia-data`，需要按
+> [`deploy/README.md`](deploy/README.md#从旧卷名迁移仅影响-v373-及更早已部署的实例) 搬迁一次，否则会挂到空卷。
+
 首次创建管理员可以直接打开管理台，或执行：
 
 ```bash
@@ -153,7 +156,7 @@ docker compose -f deploy/docker-compose.yml down
 docker compose -f deploy/docker-compose.yml up -d --build
 ```
 
-如需从局域网访问，在仓库根目录创建未提交的 `.env`，例如：
+如需从局域网访问，在 `deploy/` 目录（compose 文件旁边）创建未提交的 `.env`，例如：
 
 ```dotenv
 MIJIA_BIND_ADDRESS=0.0.0.0
@@ -255,8 +258,8 @@ uv run pyinstaller --clean --noconfirm deploy/packaging/mijia-server.spec
 推送版本标签后会自动触发 GitHub Actions 构建：
 
 ```bash
-git tag v3.7.3
-git push origin v3.7.3
+git tag v3.8.0
+git push origin v3.8.0
 ```
 
 ### 运行可执行文件

@@ -23,7 +23,9 @@ class SceneService:
         """
         self._scene_repo = scene_repo
 
-    def get_scenes(self, home_id: str, credential: Credential, owner_uid: str = None) -> List[Scene]:
+    def get_scenes(
+        self, home_id: str, credential: Credential, owner_uid: str = None
+    ) -> List[Scene]:
         """获取智能列表
 
         Args:

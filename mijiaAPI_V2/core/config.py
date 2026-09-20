@@ -96,7 +96,7 @@ class ConfigManager:
         try:
             with open(path, "rb") as f:
                 file_config = tomllib.load(f)
-            
+
             # 展平嵌套的配置结构
             # 例如：{"security": {"credential_path": "..."}} -> {"CREDENTIAL_PATH": "..."}
             flattened = self._flatten_config(file_config)
@@ -104,22 +104,22 @@ class ConfigManager:
         except Exception as e:
             # 配置文件加载失败不应该导致程序崩溃，只记录错误
             logger.warning(f"加载配置文件失败: {e}", extra={"path": str(path)})
-    
+
     def _flatten_config(self, config: Dict[str, Any], prefix: str = "") -> Dict[str, Any]:
         """展平嵌套的配置字典
-        
+
         将TOML文件中的嵌套结构转换为扁平的键值对。
         例如：{"api": {"base_url": "..."}} -> {"API_BASE_URL": "..."}
-        
+
         Args:
             config: 配置字典
             prefix: 键名前缀
-            
+
         Returns:
             展平后的配置字典
         """
         result = {}
-        
+
         for key, value in config.items():
             if isinstance(value, dict):
                 # 递归处理嵌套字典，累积前缀
@@ -128,7 +128,7 @@ class ConfigManager:
                 # 转换为大写并添加前缀
                 full_key = f"{prefix}{key}".upper()
                 result[full_key] = value
-        
+
         return result
 
     def _load_from_env(self) -> None:

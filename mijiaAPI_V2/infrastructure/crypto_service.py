@@ -88,12 +88,12 @@ class CryptoService:
         random_bytes = (int.from_bytes(os.urandom(8), "big") - 2**63).to_bytes(
             8, "big", signed=True
         )
-        
+
         # 时间戳（分钟）
         millis = int(time.time() * 1000)
         part2 = int(millis / 60000)
         timestamp_bytes = part2.to_bytes((part2.bit_length() + 7) // 8, "big")
-        
+
         nonce = random_bytes + timestamp_bytes
         return base64.b64encode(nonce).decode()
 
@@ -116,9 +116,7 @@ class CryptoService:
         return base64.b64encode(m.digest()).decode()
 
     @staticmethod
-    def generate_signature(
-        uri: str, method: str, signed_nonce: str, params: Dict[str, str]
-    ) -> str:
+    def generate_signature(uri: str, method: str, signed_nonce: str, params: Dict[str, str]) -> str:
         """生成请求签名
 
         使用SHA1算法生成请求签名。
@@ -134,26 +132,22 @@ class CryptoService:
         """
         # 构建签名参数列表
         signature_params = [method.upper(), uri]
-        
+
         # 添加所有参数（按key=value格式）
         for k, v in params.items():
             signature_params.append(f"{k}={v}")
-        
+
         # 添加签名nonce
         signature_params.append(signed_nonce)
-        
+
         # 用&连接所有参数
         signature_string = "&".join(signature_params)
-        
+
         # 生成SHA1签名
-        return base64.b64encode(
-            hashlib.sha1(signature_string.encode()).digest()
-        ).decode()
+        return base64.b64encode(hashlib.sha1(signature_string.encode()).digest()).decode()
 
     @staticmethod
-    def decrypt_response(
-        response_text: str, ssecurity: str, nonce: str
-    ) -> str:
+    def decrypt_response(response_text: str, ssecurity: str, nonce: str) -> str:
         """解密响应数据
 
         使用RC4解密响应，如果是GZIP压缩的则解压。
@@ -186,9 +180,7 @@ class CryptoService:
             return gzip.GzipFile(fileobj=compressed_file, mode="rb").read().decode("utf-8")
 
     @staticmethod
-    def encrypt_params(
-        uri: str, data: Dict[str, Any], ssecurity: str
-    ) -> Dict[str, str]:
+    def encrypt_params(uri: str, data: Dict[str, Any], ssecurity: str) -> Dict[str, str]:
         """加密请求参数
 
         按照米家API的要求加密请求参数。
@@ -227,13 +219,9 @@ class CryptoService:
             encrypted_params[k] = base64.b64encode(encrypted).decode()
 
         # 生成最终签名
-        signature = CryptoService.generate_signature(
-            uri, "POST", signed_nonce, encrypted_params
-        )
+        signature = CryptoService.generate_signature(uri, "POST", signed_nonce, encrypted_params)
 
         # 添加签名和其他参数
-        encrypted_params.update(
-            {"signature": signature, "ssecurity": ssecurity, "_nonce": nonce}
-        )
+        encrypted_params.update({"signature": signature, "ssecurity": ssecurity, "_nonce": nonce})
 
         return encrypted_params

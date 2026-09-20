@@ -61,7 +61,7 @@ def create_config_manager(config_path: Optional[Path] = None) -> ConfigManager:
     if config_path is None:
         # SDK包的配置文件路径（相对于当前文件）
         sdk_config = Path(__file__).parent.parent / "configs" / "mijiaAPI.toml"
-        
+
         # 尝试从默认位置加载配置（优先级从高到低）
         default_paths = [
             Path("configs/mijiaAPI.toml"),  # 项目根目录的configs目录
@@ -259,7 +259,7 @@ def create_auth_service(
         # 从配置读取凭据路径
         credential_path_str = config.get("CREDENTIAL_PATH", "configs/credential.json")
         credential_path = Path(credential_path_str)
-        
+
         # 如果是相对路径，相对于项目根目录
         if not credential_path.is_absolute() and not str(credential_path).startswith("~"):
             # 查找项目根目录
@@ -268,7 +268,7 @@ def create_auth_service(
         # 如果是用户目录路径，展开 ~
         elif str(credential_path).startswith("~"):
             credential_path = credential_path.expanduser()
-        
+
         credential_store = FileCredentialStore(default_path=credential_path)
 
     # 创建认证服务
@@ -369,12 +369,12 @@ def create_api_client_from_file(
     """
     # 创建配置管理器
     config = create_config_manager(config_path)
-    
+
     # 如果未指定凭据路径，从配置读取
     if credential_path is None:
         credential_path_str = config.get("CREDENTIAL_PATH", "configs/credential.json")
         credential_path = Path(credential_path_str)
-        
+
         # 如果是相对路径，相对于项目根目录
         if not credential_path.is_absolute() and not str(credential_path).startswith("~"):
             project_root = _find_project_root()
@@ -382,7 +382,7 @@ def create_api_client_from_file(
         # 如果是用户目录路径，展开 ~
         elif str(credential_path).startswith("~"):
             credential_path = credential_path.expanduser()
-    
+
     # 加载凭据
     store = FileCredentialStore(default_path=credential_path)
     credential = store.load()

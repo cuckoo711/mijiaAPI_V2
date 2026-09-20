@@ -83,6 +83,74 @@ def _toml_int(section: dict[str, Any], key: str, default: int) -> int:
         return default
 
 
+def _take_legacy_entry(src: Path, dst: Path, label: str, moved: list[str]) -> None:
+    """把旧布局里的一项搬到新位置；目标已存在则丢弃旧项。
+
+    目标存在说明 v3 侧已经是权威数据，旧项直接删掉，避免用陈旧数据覆盖。
+    """
+
+    if not src.exists():
+        return
+    if dst.exists():
+        if src.is_dir():
+            shutil.rmtree(src, ignore_errors=True)
+        else:
+            src.unlink(missing_ok=True)
+        return
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(src), str(dst))
+    moved.append(f"{label}: {src} -> {dst}")
+
+
+def _drain_legacy_mijia_dir(old_dir: Path, new_dir: Path) -> list[str]:
+    """把 ``.mijia`` 里需要的数据搬进 ``configs/``，然后删除整棵旧树。"""
+
+    moved: list[str] = []
+    if not old_dir.exists():
+        return moved
+
+    new_dir.mkdir(parents=True, exist_ok=True)
+    _take_legacy_entry(old_dir / "credential.json", new_dir / "credential.json", "凭据文件", moved)
+    _take_legacy_entry(old_dir / ".credential_key", new_dir / ".credential_key", "凭据密钥", moved)
+    _take_legacy_entry(old_dir / "server", new_dir / "server", "服务器数据", moved)
+    _take_legacy_entry(old_dir / "cache", new_dir / "cache", "缓存", moved)
+
+    # 不保留备份：搬完（或丢弃冲突项）后旧树一律删掉。
+    shutil.rmtree(old_dir, ignore_errors=True)
+    if old_dir.exists():
+        print(f"  警告: 无法删除旧目录 {old_dir}，请手动移除")
+    else:
+        moved.append(f"已删除旧目录: {old_dir}")
+    return moved
+
+
+def _drop_orphaned_config_cache(new_dir: Path) -> list[str]:
+    """删除 ``configs/server/cache``——任何版本里都不是合法的缓存位置。
+
+    不能以「规范目录 ``configs/cache`` 存在」为前提：后者由 ``CacheManager``
+    懒创建，全新安装从未实例化过它时，孤儿目录会被永久留下。
+    """
+
+    orphaned = new_dir / "server" / "cache"
+    if not orphaned.is_dir():
+        return []
+    shutil.rmtree(orphaned, ignore_errors=True)
+    return [] if orphaned.exists() else [f"已删除无用缓存目录: {orphaned}"]
+
+
+def _drop_legacy_backup_dirs() -> list[str]:
+    """清理早期迁移尝试留下的 ``.mijia_backup*`` 目录。"""
+
+    moved: list[str] = []
+    for backup in sorted(Path(".").glob(".mijia_backup*")):
+        if not backup.is_dir():
+            continue
+        shutil.rmtree(backup, ignore_errors=True)
+        if not backup.exists():
+            moved.append(f"已删除旧备份: {backup}")
+    return moved
+
+
 @dataclass
 class ServerSettings:
     """Settings used by the server shell around the core SDK."""
@@ -179,6 +247,25 @@ class ServerSettings:
 
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
+        self._remove_orphaned_cache_dir()
+
+    def _remove_orphaned_cache_dir(self) -> None:
+        """删除 ``<data_dir>/server/cache``——v3.6.7 之前布局留下的无用缓存目录。
+
+        ``_migrate_v2_to_v3_if_needed`` 只看仓库相对的 ``configs/``，够不到自定义
+        的 ``data_dir``：Docker 里工作目录是 ``/app`` 而数据在 ``/data``，那条清理
+        逻辑对容器完全无效。这里按已解析的 ``data_dir`` 再清一次。
+
+        规范的 SDK 磁盘缓存是 ``<data_dir>/cache``，``server/`` 下的同名目录在任何
+        版本里都不是合法位置，因此可以无条件删除；同级的 ``server.sqlite3`` 不受影响。
+        """
+
+        orphaned = self.data_dir / "server" / "cache"
+        if not orphaned.is_dir():
+            return
+        shutil.rmtree(orphaned, ignore_errors=True)
+        if not orphaned.exists():
+            print(f"已删除无用缓存目录: {orphaned}")
 
     def ensure_config_file(self) -> None:
         """确保配置文件存在，不存在则从模板创建"""
@@ -221,17 +308,17 @@ class ServerSettings:
             restart_required.append("server.port")
         if _toml_str(storage_section, "data_dir", str(self.data_dir)) != str(self.data_dir):
             restart_required.append("storage.data_dir")
-        if _toml_str(
-            storage_section, "database_path", str(self.database_path)
-        ) != str(self.database_path):
+        if _toml_str(storage_section, "database_path", str(self.database_path)) != str(
+            self.database_path
+        ):
             restart_required.append("storage.database_path")
-        if _toml_str(
-            storage_section, "credential_path", str(self.credential_path)
-        ) != str(self.credential_path):
+        if _toml_str(storage_section, "credential_path", str(self.credential_path)) != str(
+            self.credential_path
+        ):
             restart_required.append("storage.credential_path")
-        if _toml_str(
-            storage_section, "web_dist_dir", str(self.web_dist_dir)
-        ) != str(self.web_dist_dir):
+        if _toml_str(storage_section, "web_dist_dir", str(self.web_dist_dir)) != str(
+            self.web_dist_dir
+        ):
             restart_required.append("storage.web_dist_dir")
 
         log_level_changed = False
@@ -247,7 +334,7 @@ class ServerSettings:
     @staticmethod
     def _create_default_config(config_file: Path) -> None:
         """从模板创建默认配置文件"""
-        template_file = config_file.with_suffix('.toml.template')
+        template_file = config_file.with_suffix(".toml.template")
         if template_file.exists():
             config_file.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(template_file, config_file)
@@ -262,50 +349,12 @@ class ServerSettings:
         retention.
         """
 
-        old_dir = Path(".mijia")
         new_dir = Path("configs")
-        moved: list[str] = []
-
-        def _take(src: Path, dst: Path, label: str) -> None:
-            if not src.exists():
-                return
-            if dst.exists():
-                if src.is_dir():
-                    shutil.rmtree(src, ignore_errors=True)
-                else:
-                    src.unlink(missing_ok=True)
-                return
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(src), str(dst))
-            moved.append(f"{label}: {src} -> {dst}")
-
-        if old_dir.exists():
-            new_dir.mkdir(parents=True, exist_ok=True)
-            _take(old_dir / "credential.json", new_dir / "credential.json", "凭据文件")
-            _take(old_dir / ".credential_key", new_dir / ".credential_key", "凭据密钥")
-            _take(old_dir / "server", new_dir / "server", "服务器数据")
-            _take(old_dir / "cache", new_dir / "cache", "缓存")
-
-            # Always delete the old project-local tree after migration attempts.
-            if old_dir.exists():
-                shutil.rmtree(old_dir, ignore_errors=True)
-            if not old_dir.exists():
-                moved.append(f"已删除旧目录: {old_dir}")
-            else:
-                print(f"  警告: 无法删除旧目录 {old_dir}，请手动移除")
-
-        # Canonical SDK disk cache is ``configs/cache``.
-        orphaned_cache = new_dir / "server" / "cache"
-        canonical_cache = new_dir / "cache"
-        if orphaned_cache.is_dir() and canonical_cache.is_dir():
-            shutil.rmtree(orphaned_cache, ignore_errors=True)
-
-        # Remove leftover backup dirs from older migration attempts.
-        for backup in sorted(Path(".").glob(".mijia_backup*")):
-            if backup.is_dir():
-                shutil.rmtree(backup, ignore_errors=True)
-                if not backup.exists():
-                    moved.append(f"已删除旧备份: {backup}")
+        moved = [
+            *_drain_legacy_mijia_dir(Path(".mijia"), new_dir),
+            *_drop_orphaned_config_cache(new_dir),
+            *_drop_legacy_backup_dirs(),
+        ]
 
         if moved:
             print("检测到旧版本数据，正在迁移到 configs/ ...")

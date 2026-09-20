@@ -12,7 +12,7 @@ def test_import_main_package() -> None:
     """测试主包导入"""
     import mijiaAPI_V2
 
-    assert mijiaAPI_V2.__version__ == "3.7.3"
+    assert mijiaAPI_V2.__version__ == "3.8.0"
 
 
 def test_import_domain_models() -> None:

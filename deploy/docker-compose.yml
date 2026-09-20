@@ -1,3 +1,7 @@
+# 显式指定 project name：否则 Compose 会用 project directory 的目录名，
+# 而用 -f deploy/docker-compose.yml 启动时那个目录是 deploy/，项目就会叫 "deploy"。
+name: mijia-server
+
 services:
   mijia-server:
     build:
@@ -29,3 +33,7 @@ services:
 
 volumes:
   mijia-data:
+    # 显式命名，避免被加上 project 前缀。否则实际卷名是 <project>_mijia-data，
+    # 文档里的 `docker run -v mijia-data:/data` 备份命令会挂到一个新建的空卷上，
+    # 备份出来的是空文件。
+    name: mijia-data

@@ -2,15 +2,19 @@
 
 import os
 import sqlite3
+import time
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
 
 from server.config import ServerSettings
 from server.store import (
+    API_KEY_CACHE_TTL,
     AuthenticationFailedError,
     BootstrapAlreadyCompletedError,
     ServerStore,
+    utc_now,
 )
 
 
@@ -377,3 +381,99 @@ def test_clear_synced_registries_removes_homes_devices_scenes(tmp_path: Path) ->
     assert store.list_scenes(include_hidden=True) == []
     # 其他本地状态保留
     assert len(store.list_api_keys()) == 1
+
+
+# ---------------------------------------------------------------------------
+# validate_api_key 的分支覆盖
+#
+# 原有测试只覆盖「有效 key + scope」「错误 scope（走库）」「缓存命中」「停用后拒绝」。
+# 以下补齐过期判定、缓存陈旧回落和用量回写三条分支，作为该函数重构的安全网。
+# ---------------------------------------------------------------------------
+
+
+def _use_count(store: ServerStore, key_id: str) -> int:
+    return next(item["use_count"] for item in store.list_api_keys() if item["id"] == key_id)
+
+
+def test_api_key_rejects_expired_key_from_database(tmp_path: Path) -> None:
+    store = ServerStore(make_settings(tmp_path))
+    store.initialize()
+    created = store.create_api_key(
+        "expired", ["read:status"], expires_at=utc_now() - timedelta(minutes=1)
+    )
+
+    with pytest.raises(AuthenticationFailedError, match="expired"):
+        store.validate_api_key(created["key"], required_scope="read:status")
+
+    # 过期的 key 不允许进入正向缓存。
+    assert created["key"] not in store._api_key_cache
+
+
+def test_api_key_rejects_expired_key_from_cache_and_evicts(tmp_path: Path) -> None:
+    """模拟 key 在缓存仍有效的窗口内到期：必须拒绝并驱逐缓存条目。"""
+    store = ServerStore(make_settings(tmp_path))
+    store.initialize()
+    created = store.create_api_key("cached then expired", ["read:status"])
+    store.validate_api_key(created["key"], required_scope="read:status")
+    assert created["key"] in store._api_key_cache
+
+    record, cache_until, last_write = store._api_key_cache[created["key"]]
+    record["expires_at_dt"] = utc_now() - timedelta(seconds=1)
+    store._api_key_cache[created["key"]] = (record, cache_until, last_write)
+
+    with pytest.raises(AuthenticationFailedError, match="expired"):
+        store.validate_api_key(created["key"], required_scope="read:status")
+
+    assert created["key"] not in store._api_key_cache
+
+
+def test_api_key_scope_is_enforced_on_cache_hit(tmp_path: Path) -> None:
+    store = ServerStore(make_settings(tmp_path))
+    store.initialize()
+    created = store.create_api_key("scoped", ["read:status"])
+    store.validate_api_key(created["key"], required_scope="read:status")
+    assert created["key"] in store._api_key_cache
+
+    with pytest.raises(AuthenticationFailedError, match="scope"):
+        store.validate_api_key(created["key"], required_scope="write:devices")
+
+    # scope 不匹配说明调用方权限不够，key 本身仍有效，不应驱逐缓存。
+    assert created["key"] in store._api_key_cache
+
+
+def test_api_key_validation_falls_back_to_database_when_cache_is_stale(tmp_path: Path) -> None:
+    store = ServerStore(make_settings(tmp_path))
+    store.initialize()
+    created = store.create_api_key("stale cache", ["read:status"])
+    store.validate_api_key(created["key"], required_scope="read:status")
+
+    # 把缓存条目标记为已过有效期，迫使走数据库权威路径。
+    record, _, last_write = store._api_key_cache[created["key"]]
+    store._api_key_cache[created["key"]] = (record, time.monotonic() - 1, last_write)
+
+    verified = store.validate_api_key(created["key"], required_scope="read:status")
+
+    assert verified["id"] == created["id"]
+    # 重新查库后缓存应被刷新成未过期状态。
+    _, refreshed_until, _ = store._api_key_cache[created["key"]]
+    assert refreshed_until > time.monotonic()
+
+
+def test_api_key_cache_hit_writes_back_usage_after_ttl(tmp_path: Path) -> None:
+    """缓存仍在有效期内，但距上次回写已超过 TTL：应补写一次用量。"""
+    store = ServerStore(make_settings(tmp_path))
+    store.initialize()
+    created = store.create_api_key("usage", ["read:status"])
+    store.validate_api_key(created["key"], required_scope="read:status")
+    before = _use_count(store, created["id"])
+
+    record, cache_until, _ = store._api_key_cache[created["key"]]
+    store._api_key_cache[created["key"]] = (
+        record,
+        cache_until,
+        time.monotonic() - API_KEY_CACHE_TTL - 1,
+    )
+
+    store.validate_api_key(created["key"], required_scope="read:status")
+
+    assert _use_count(store, created["id"]) == before + 1

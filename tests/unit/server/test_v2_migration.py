@@ -63,9 +63,7 @@ def test_migrate_deletes_leftover_when_targets_already_exist(
     assert "迁移到 configs/" not in capsys.readouterr().out
 
 
-def test_migrate_removes_orphaned_server_cache_dir(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_migrate_removes_orphaned_server_cache_dir(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     new = tmp_path / "configs"
     (new / "cache").mkdir(parents=True)
@@ -77,3 +75,62 @@ def test_migrate_removes_orphaned_server_cache_dir(
 
     assert (new / "cache" / "keep").exists()
     assert not (new / "server" / "cache").exists()
+
+
+def test_migrate_removes_orphaned_server_cache_without_canonical_dir(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    """The orphan must go even when ``configs/cache`` has not been created yet.
+
+    ``CacheManager`` creates the canonical directory lazily, so a fresh install
+    that never instantiated it would otherwise keep ``configs/server/cache``
+    around forever.
+    """
+    monkeypatch.chdir(tmp_path)
+    new = tmp_path / "configs"
+    (new / "server" / "cache").mkdir(parents=True)
+    (new / "server" / "cache" / "stale").write_text("x", encoding="utf-8")
+    (new / "server" / "server.sqlite3").write_text("live", encoding="utf-8")
+
+    ServerSettings._migrate_v2_to_v3_if_needed()
+
+    assert not (new / "cache").exists(), "迁移不应凭空创建规范缓存目录"
+    assert not (new / "server" / "cache").exists()
+    # The sibling database must never be touched by cache cleanup.
+    assert (new / "server" / "server.sqlite3").read_text(encoding="utf-8") == "live"
+    assert "已删除无用缓存目录" in capsys.readouterr().out
+
+    # Idempotent: the orphan is gone, so the second call stays silent.
+    ServerSettings._migrate_v2_to_v3_if_needed()
+    assert capsys.readouterr().out == ""
+
+
+def test_ensure_directories_removes_orphaned_cache_under_custom_data_dir(
+    tmp_path: Path, capsys
+) -> None:
+    """复现 Docker 布局：data_dir 不在仓库内，相对路径的迁移逻辑够不到。
+
+    容器里 WORKDIR 是 /app 而数据在 /data，所以孤儿缓存只能靠
+    ``ensure_directories`` 按已解析的 data_dir 清理。
+    """
+    data_dir = tmp_path / "data"
+    orphaned = data_dir / "server" / "cache"
+    orphaned.mkdir(parents=True)
+    (orphaned / "stale").write_text("x", encoding="utf-8")
+    (data_dir / "server" / "server.sqlite3").write_text("live", encoding="utf-8")
+
+    settings = ServerSettings(
+        data_dir=data_dir,
+        database_path=data_dir / "server" / "server.sqlite3",
+        credential_path=data_dir / "credential.json",
+    )
+    settings.ensure_directories()
+
+    assert not orphaned.exists()
+    # 同级数据库必须完好无损。
+    assert (data_dir / "server" / "server.sqlite3").read_text(encoding="utf-8") == "live"
+    assert "已删除无用缓存目录" in capsys.readouterr().out
+
+    # 幂等：孤儿已清掉，再调用不应再输出。
+    settings.ensure_directories()
+    assert capsys.readouterr().out == ""

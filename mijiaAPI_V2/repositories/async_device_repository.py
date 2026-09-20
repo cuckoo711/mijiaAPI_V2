@@ -168,9 +168,7 @@ class AsyncDeviceRepositoryImpl(IAsyncDeviceRepository):
             结果列表
         """
         response = await self._http.post(
-            "/miotspec/prop/get_batch", 
-            {"params": requests}, 
-            credential
+            "/miotspec/prop/get_batch", {"params": requests}, credential
         )
         return response.get("result", [])
 
@@ -187,9 +185,7 @@ class AsyncDeviceRepositoryImpl(IAsyncDeviceRepository):
             结果列表
         """
         response = await self._http.post(
-            "/miotspec/prop/set_batch", 
-            {"params": requests}, 
-            credential
+            "/miotspec/prop/set_batch", {"params": requests}, credential
         )
 
         # 失效相关缓存

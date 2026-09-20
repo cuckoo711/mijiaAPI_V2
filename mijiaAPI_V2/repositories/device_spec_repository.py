@@ -10,7 +10,13 @@ import httpx
 
 from ..core.logging import get_logger
 from ..domain.exceptions import MijiaAPIException
-from ..domain.models import ActionParameter, DeviceAction, DeviceProperty, PropertyAccess, PropertyType
+from ..domain.models import (
+    ActionParameter,
+    DeviceAction,
+    DeviceProperty,
+    PropertyAccess,
+    PropertyType,
+)
 from ..infrastructure.cache_manager import CacheManager
 from ..infrastructure.http_client import HttpClient
 from .interfaces import DeviceSpec, IDeviceSpecRepository
@@ -165,8 +171,10 @@ class DeviceSpecRepositoryImpl(IDeviceSpecRepository):
 
             cache_key = "miot_spec:instances_model_map"
             cached = self._cache.get(cache_key, namespace="specs")
-            if isinstance(cached, dict) and cached and all(
-                isinstance(k, str) and isinstance(v, str) for k, v in cached.items()
+            if (
+                isinstance(cached, dict)
+                and cached
+                and all(isinstance(k, str) and isinstance(v, str) for k, v in cached.items())
             ):
                 logger.info(f"从缓存加载设备型号映射（{len(cached)} 条）")
                 DeviceSpecRepositoryImpl._model_type_map = cached
@@ -176,9 +184,7 @@ class DeviceSpecRepositoryImpl(IDeviceSpecRepository):
                 logger.warning("缓存的设备型号映射格式异常，忽略并重新获取")
 
             mapping = self._fetch_model_type_mapping_from_network()
-            self._cache.set(
-                cache_key, mapping, ttl=_INSTANCES_CACHE_TTL, namespace="specs"
-            )
+            self._cache.set(cache_key, mapping, ttl=_INSTANCES_CACHE_TTL, namespace="specs")
             DeviceSpecRepositoryImpl._model_type_map = mapping
             return mapping
 
@@ -204,7 +210,7 @@ class DeviceSpecRepositoryImpl(IDeviceSpecRepository):
         """清空进程内的 model→type 映射缓存（供测试或运维强制刷新使用）。"""
         with cls._model_type_map_lock:
             cls._model_type_map = None
-    
+
     def _parse_spec_standard(self, model: str, spec_data: dict) -> DeviceSpec:
         """解析设备规格数据（标准miot-spec格式）
 

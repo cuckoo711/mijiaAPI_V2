@@ -298,7 +298,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
-    
+
     # 如果没有提供子命令，默认执行 run
     if args.command is None:
         run_command(args)

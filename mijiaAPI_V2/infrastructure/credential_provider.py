@@ -48,7 +48,7 @@ class CredentialProvider:
         try:
             # Step 1: 从 serviceLogin 获取登录链接参数
             location_data = self._get_location()
-            
+
             # 如果已经有有效的token，直接返回
             if location_data.get("code") == 0 and location_data.get("message") == "刷新Token成功":
                 logger.info("Token仍然有效，无需重新登录")
@@ -67,7 +67,7 @@ class CredentialProvider:
             # Step 4: 访问callback获取cookies
             callback_url = login_result["location"]
             response = self._client.get(callback_url)
-            
+
             # 从cookies中提取serviceToken
             service_token = response.cookies.get("serviceToken")
             if not service_token:
@@ -200,6 +200,7 @@ class CredentialProvider:
 
             # 解析location中的参数
             from urllib import parse
+
             location_data = parse.parse_qs(parse.urlparse(location).query)
             return {k: v[0] for k, v in location_data.items()}
 
@@ -221,20 +222,22 @@ class CredentialProvider:
         """
         try:
             from urllib import parse
-            
+
             # 添加额外参数
-            location_data.update({
-                "theme": "",
-                "bizDeviceType": "",
-                "_hasLogo": "false",
-                "_qrsize": "240",
-                "_dc": str(int(time.time() * 1000)),
-            })
-            
+            location_data.update(
+                {
+                    "theme": "",
+                    "bizDeviceType": "",
+                    "_hasLogo": "false",
+                    "_qrsize": "240",
+                    "_dc": str(int(time.time() * 1000)),
+                }
+            )
+
             # 构建URL
             login_url = self._config.get("LOGIN_URL")
             url = f"{login_url}/longPolling/loginUrl?" + parse.urlencode(location_data)
-            
+
             response = self._client.get(url)
             response.raise_for_status()
 
@@ -437,7 +440,7 @@ class CredentialProvider:
 
     def _refresh_service_token(self, credential: Credential) -> Dict[str, Any]:
         """刷新service token
-        
+
         通过重新访问serviceLogin接口并携带现有的passToken来刷新凭据。
         这是小米账号系统支持的正确刷新方式。
 
@@ -453,7 +456,7 @@ class CredentialProvider:
         try:
             # 构建serviceLogin URL，使用sid=mijia（与米家APP一致）
             service_login_url = f"{self._config.get('LOGIN_URL')}/pass/serviceLogin?_json=true&sid=mijia&_locale=zh_CN"
-            
+
             # 构建请求头，携带现有的认证信息
             headers = {
                 "User-Agent": credential.user_agent,
@@ -461,51 +464,53 @@ class CredentialProvider:
                 "Accept-Encoding": "gzip",
                 "Content-Type": "application/x-www-form-urlencoded",
                 "Cookie": f"deviceId={credential.device_id};"
-                          f"passToken={credential.pass_token};"
-                          f"userId={credential.user_id};"
-                          f"cUserId={credential.c_user_id};"
+                f"passToken={credential.pass_token};"
+                f"userId={credential.user_id};"
+                f"cUserId={credential.c_user_id};",
             }
-            
+
             # 请求serviceLogin接口
             response = self._client.get(service_login_url, headers=headers)
             response.raise_for_status()
-            
+
             # 解析响应
             import json
+
             result = json.loads(response.text.replace("&&&START&&&", ""))
-            
+
             logger.debug(f"刷新响应: code={result.get('code')}, desc={result.get('desc')}")
-            
+
             # 检查响应状态
             if result.get("code") == 0:
                 # code=0表示token仍然有效，可以直接刷新
                 location = result.get("location")
                 if not location:
                     raise TokenExpiredError("刷新响应中缺少location字段")
-                
+
                 # 访问location URL完成刷新
-                location_response = self._client.get(location, headers={"User-Agent": credential.user_agent})
-                
+                location_response = self._client.get(
+                    location, headers={"User-Agent": credential.user_agent}
+                )
+
                 if location_response.status_code == 200:
                     # 从响应中提取新的serviceToken
                     new_service_token = location_response.cookies.get("serviceToken")
                     if not new_service_token:
                         # 如果没有新token，使用旧token
                         new_service_token = credential.service_token
-                    
+
                     # 提取新的ssecurity
                     new_ssecurity = result.get("ssecurity")
                     if not new_ssecurity:
                         raise TokenExpiredError("刷新响应中缺少ssecurity")
-                    
+
                     logger.info("Service token刷新成功")
-                    return {
-                        "serviceToken": new_service_token,
-                        "ssecurity": new_ssecurity
-                    }
+                    return {"serviceToken": new_service_token, "ssecurity": new_ssecurity}
                 else:
-                    raise TokenExpiredError(f"访问location失败: HTTP {location_response.status_code}")
-            
+                    raise TokenExpiredError(
+                        f"访问location失败: HTTP {location_response.status_code}"
+                    )
+
             # 如果code不为0，说明需要重新登录
             raise TokenExpiredError(f"凭据已失效，需要重新登录: {result.get('desc', '未知错误')}")
 
@@ -550,18 +555,58 @@ class CredentialProvider:
 
         # iOS版本列表（常见版本）
         ios_versions = [
-            "14.0", "14.1", "14.2", "14.3", "14.4", "14.5", "14.6", "14.7", "14.8",
-            "15.0", "15.1", "15.2", "15.3", "15.4", "15.5", "15.6", "15.7",
-            "16.0", "16.1", "16.2", "16.3", "16.4", "16.5", "16.6",
-            "17.0", "17.1", "17.2", "17.3", "17.4", "17.5", "17.6",
-            "18.0", "18.1"
+            "14.0",
+            "14.1",
+            "14.2",
+            "14.3",
+            "14.4",
+            "14.5",
+            "14.6",
+            "14.7",
+            "14.8",
+            "15.0",
+            "15.1",
+            "15.2",
+            "15.3",
+            "15.4",
+            "15.5",
+            "15.6",
+            "15.7",
+            "16.0",
+            "16.1",
+            "16.2",
+            "16.3",
+            "16.4",
+            "16.5",
+            "16.6",
+            "17.0",
+            "17.1",
+            "17.2",
+            "17.3",
+            "17.4",
+            "17.5",
+            "17.6",
+            "18.0",
+            "18.1",
         ]
 
         # 米家APP版本列表
         app_versions = [
-            "6.0.100", "6.0.101", "6.0.102", "6.0.103", "6.0.104", "6.0.105",
-            "7.0.100", "7.0.101", "7.0.102", "7.0.103", "7.0.104",
-            "8.0.100", "8.0.101", "8.0.102", "8.0.103"
+            "6.0.100",
+            "6.0.101",
+            "6.0.102",
+            "6.0.103",
+            "6.0.104",
+            "6.0.105",
+            "7.0.100",
+            "7.0.101",
+            "7.0.102",
+            "7.0.103",
+            "7.0.104",
+            "8.0.100",
+            "8.0.101",
+            "8.0.102",
+            "8.0.103",
         ]
 
         # iPhone设备型号列表
@@ -610,29 +655,35 @@ class CredentialProvider:
         import random
 
         # Android版本列表
-        android_versions = [
-            "11", "12", "13", "14", "15"
-        ]
+        android_versions = ["11", "12", "13", "14", "15"]
 
         # 米家APP版本列表
         app_versions = [
-            "6.0.701", "6.0.702", "6.0.703", "6.0.704",
-            "7.0.701", "7.0.702", "7.0.703", "7.0.704",
-            "8.0.701", "8.0.702", "8.0.703"
+            "6.0.701",
+            "6.0.702",
+            "6.0.703",
+            "6.0.704",
+            "7.0.701",
+            "7.0.702",
+            "7.0.703",
+            "7.0.704",
+            "8.0.701",
+            "8.0.702",
+            "8.0.703",
         ]
 
         # 小米设备型号列表
         xiaomi_models = [
             "23046RP50C",  # Xiaomi 13
-            "2211133C",    # Xiaomi 12S
+            "2211133C",  # Xiaomi 12S
             "2304FPN6DC",  # Xiaomi 14
             "23127PN0CC",  # Xiaomi 13 Ultra
-            "2211133G",    # Xiaomi 12S Ultra
-            "22041216C",   # Xiaomi 12 Pro
-            "2201123C",    # Xiaomi 12
-            "21091116C",   # Xiaomi 11
-            "M2102J2SC",   # Xiaomi 11 Pro
-            "2107113SG",   # Xiaomi 11 Ultra
+            "2211133G",  # Xiaomi 12S Ultra
+            "22041216C",  # Xiaomi 12 Pro
+            "2201123C",  # Xiaomi 12
+            "21091116C",  # Xiaomi 11
+            "M2102J2SC",  # Xiaomi 11 Pro
+            "2107113SG",  # Xiaomi 11 Ultra
             "24031PN0DC",  # Xiaomi 14 Pro
             "24053PY09C",  # Xiaomi 14 Ultra
         ]

@@ -122,9 +122,9 @@ class HttpClient:
             "miot-encrypt-algorithm": "ENCRYPT-RC4",
             "x-xiaomi-protocal-flag-cli": "PROTOCAL-HTTP2",
             "Cookie": f"cUserId={credential.c_user_id};"
-                     f"yetAnotherServiceToken={credential.service_token};"
-                     f"serviceToken={credential.service_token};"
-                     f"PassportDeviceId={credential.device_id};",
+            f"yetAnotherServiceToken={credential.service_token};"
+            f"serviceToken={credential.service_token};"
+            f"PassportDeviceId={credential.device_id};",
         }
 
         # 加密请求参数
@@ -342,20 +342,22 @@ class AsyncHttpClient:
 
         max_retries = 3
         last_exception: Exception = Exception("未知错误")
-        
+
         for attempt in range(max_retries):
             try:
-                response = await self._client.post(url, data=encrypted_params, headers=headers, **kwargs)
+                response = await self._client.post(
+                    url, data=encrypted_params, headers=headers, **kwargs
+                )
                 response.raise_for_status()
                 return response
             except (httpx.TimeoutException, httpx.ConnectError) as e:
                 last_exception = e
                 if attempt < max_retries - 1:
                     # 指数退避：1s, 2s, 4s
-                    wait_time = min(2 ** attempt, 10)
+                    wait_time = min(2**attempt, 10)
                     await asyncio.sleep(wait_time)
                     continue
-        
+
         # 所有重试都失败，抛出最后一个异常
         raise last_exception
 
@@ -393,9 +395,9 @@ class AsyncHttpClient:
             "miot-encrypt-algorithm": "ENCRYPT-RC4",
             "x-xiaomi-protocal-flag-cli": "PROTOCAL-HTTP2",
             "Cookie": f"cUserId={credential.c_user_id};"
-                     f"yetAnotherServiceToken={credential.service_token};"
-                     f"serviceToken={credential.service_token};"
-                     f"PassportDeviceId={credential.device_id};",
+            f"yetAnotherServiceToken={credential.service_token};"
+            f"serviceToken={credential.service_token};"
+            f"PassportDeviceId={credential.device_id};",
         }
 
         # 加密请求参数
