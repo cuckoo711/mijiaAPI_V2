@@ -2,6 +2,21 @@
 
 本项目遵循“面向部署和使用者可读”的更新记录。最新变化放在最前面。
 
+## v3.8.1 - 2026-09-20
+
+### 修复
+
+- 发布产物按真实架构构建。v3.8.0 的 Release 中 `mijia-server-linux-arm64` 实际是 ELF x86-64、`mijia-server-macos-x64` 实际是 Mach-O arm64：PyInstaller 无法交叉编译，只会为宿主架构产出二进制，而构建矩阵把 linux/arm64 放在 `ubuntu-latest`（x64）、macos/x64 放在 `macos-latest`（Apple Silicon）上，构建全绿因此没能暴露问题。现 linux/arm64 改用原生 `ubuntu-24.04-arm` 运行器。**在 ARM Linux 上使用 v3.8.0 产物的用户请更新到本版本。**
+- 构建后新增架构校验步骤：用 `file` 比对 `matrix.arch`，不符即让任务失败，避免「标签与实际架构不符」再次悄悄发布。
+
+### 变更
+
+- 不再发布 macOS Intel（x64）产物。标准运行器中最后一个 Intel macOS 镜像 `macos-13` 已于 2025 年 12 月停止支持，恢复该目标需改用付费的 `macos-*-large` 运行器。Intel Mac 用户请从源码运行，或在本机自行执行打包命令。
+
+### 文档
+
+- README 多平台构建表改为列出真实产物文件名，并移除「ZIP / TAR.GZ」——workflow 没有任何打包步骤，Release 挂的是裸可执行文件。
+
 ## v3.8.0 - 2026-09-20
 
 ### 新增
