@@ -247,13 +247,18 @@ uv run pyinstaller --clean --noconfirm deploy/packaging/mijia-server.spec
 
 项目支持以下平台的自动构建：
 
-| 平台 | 架构 | 输出格式 |
-|------|------|----------|
-| Windows | x64 | ZIP |
-| Linux | x64 | TAR.GZ |
-| Linux | ARM64 | TAR.GZ |
-| macOS | x64 | TAR.GZ |
-| macOS | ARM64 | TAR.GZ |
+| 平台 | 架构 | 产物 |
+|------|------|------|
+| Windows | x64 | `mijia-server-windows-x64.exe` |
+| Linux | x64 | `mijia-server-linux-x64` |
+| Linux | ARM64 | `mijia-server-linux-arm64` |
+| macOS | ARM64 | `mijia-server-macos-arm64` |
+
+产物是 PyInstaller 单文件可执行程序，直接挂在 Release 上，不额外打包成压缩包。
+
+> macOS Intel（x64）不再随版本发布：标准运行器里最后一个 Intel macOS 镜像
+> `macos-13` 已于 2025 年 12 月停止支持，而 PyInstaller 无法交叉编译。Intel Mac
+> 用户请用 `uv sync` 从源码运行，或自行在本机执行上面的打包命令。
 
 推送版本标签后会自动触发 GitHub Actions 构建：
 

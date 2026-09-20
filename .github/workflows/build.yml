@@ -15,15 +15,17 @@ jobs:
           - os: ubuntu-latest
             platform: linux
             arch: x64
-          - os: ubuntu-latest
+          # PyInstaller 无法交叉编译，只会为宿主架构产出二进制。arm64 必须跑在
+          # arm64 运行器上，否则产物是 x64 却被标成 arm64。
+          - os: ubuntu-24.04-arm
             platform: linux
             arch: arm64
           - os: windows-latest
             platform: windows
             arch: x64
-          - os: macos-latest
-            platform: macos
-            arch: x64
+          # macos-latest 是 Apple Silicon（arm64）。最后一个标准 Intel 运行器
+          # macos-13 已于 2025-12 停止支持，标准运行器已无 x64 macOS，因此不再
+          # 产出 macos-x64；需要恢复得改用付费的 macos-*-large 运行器。
           - os: macos-latest
             platform: macos
             arch: arm64
@@ -61,6 +63,24 @@ jobs:
 
       - name: Build executable
         run: pyinstaller --clean --noconfirm deploy/packaging/mijia-server.spec
+
+      # 防止「标签与实际架构不符」再次悄悄发布：v3.8.0 曾把 x64 产物标成
+      # linux-arm64、把 arm64 产物标成 macos-x64，构建全绿也没发现。
+      - name: Verify binary architecture (Linux/macOS)
+        if: matrix.platform != 'windows'
+        run: |
+          set -e
+          DESCRIPTION="$(file dist/mijia-server)"
+          echo "$DESCRIPTION"
+          case "${{ matrix.arch }}" in
+            x64)   EXPECTED='x86-64|x86_64' ;;
+            arm64) EXPECTED='aarch64|arm64' ;;
+            *)     echo "::error::未知的 matrix.arch: ${{ matrix.arch }}"; exit 1 ;;
+          esac
+          if ! printf '%s' "$DESCRIPTION" | grep -Eq "$EXPECTED"; then
+            echo "::error::架构不符，期望 ${{ matrix.arch }}，实际: $DESCRIPTION"
+            exit 1
+          fi
 
       - name: Rename executable (Linux/macOS)
         if: matrix.platform != 'windows'
