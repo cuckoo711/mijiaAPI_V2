@@ -12,6 +12,94 @@ from server.store import isoformat, utc_now
 class RegistryMixin:
     """Mixin providing synced home/device/scene registry helpers."""
 
+    def replace_synced_snapshot(
+        self,
+        homes: list[dict[str, Any]],
+        devices: list[dict[str, Any]],
+        scenes: list[dict[str, Any]],
+        *,
+        reconciled_device_home_ids: list[str],
+        reconciled_scene_home_ids: list[str],
+    ) -> None:
+        """Commit one sync snapshot atomically while preserving failed homes."""
+        now = isoformat(utc_now())
+        home_ids = [str(home["id"]) for home in homes]
+        with self._database.connect() as conn:
+            for home in homes:
+                conn.execute(
+                    """
+                    INSERT INTO home_registry(id, name, uid, rooms_json, last_synced_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(id) DO UPDATE SET
+                        name = excluded.name, uid = excluded.uid,
+                        rooms_json = excluded.rooms_json,
+                        last_synced_at = excluded.last_synced_at
+                    """,
+                    (str(home["id"]), str(home.get("name", "")), str(home.get("uid", "")),
+                     json.dumps(home.get("rooms", []), ensure_ascii=False), now),
+                )
+            if home_ids:
+                placeholders = ",".join("?" for _ in home_ids)
+                conn.execute(f"DELETE FROM home_registry WHERE id NOT IN ({placeholders})", home_ids)
+                conn.execute(f"DELETE FROM device_registry WHERE home_id NOT IN ({placeholders})", home_ids)
+                conn.execute(f"DELETE FROM scene_registry WHERE home_id NOT IN ({placeholders})", home_ids)
+            else:
+                conn.execute("DELETE FROM home_registry")
+                conn.execute("DELETE FROM device_registry")
+                conn.execute("DELETE FROM scene_registry")
+
+            for device in devices:
+                did = str(device["did"])
+                slug = self._unique_slug(
+                    conn,
+                    base=device.get("slug") or self._slugify(device.get("name") or did),
+                    current_did=did,
+                )
+                conn.execute(
+                    """
+                    INSERT INTO device_registry(
+                        id, miot_did, slug, name, alias, model, home_id, room_id,
+                        tags_json, group_name, hidden, access_mode, status,
+                        raw_json, spec_json, last_synced_at
+                    ) VALUES (?, ?, ?, ?, NULL, ?, ?, ?, '[]', NULL, 0, 'read', ?, ?, ?, ?)
+                    ON CONFLICT(miot_did) DO UPDATE SET
+                        name = excluded.name, model = excluded.model,
+                        home_id = excluded.home_id, room_id = excluded.room_id,
+                        status = excluded.status, raw_json = excluded.raw_json,
+                        spec_json = COALESCE(excluded.spec_json, device_registry.spec_json),
+                        last_synced_at = excluded.last_synced_at
+                    """,
+                    (str(device.get("id") or uuid.uuid4()), did, slug,
+                     str(device.get("name", "")), str(device.get("model", "")),
+                     str(device.get("home_id", "")), device.get("room_id"),
+                     str(device.get("status", "unknown")),
+                     json.dumps(device, ensure_ascii=False, default=str),
+                     json.dumps(device.get("spec"), ensure_ascii=False, default=str)
+                     if device.get("spec") is not None else None, now),
+                )
+            self._prune_registry_rows(conn, table="device_registry", id_column="miot_did",
+                                      home_ids=reconciled_device_home_ids,
+                                      seen_ids=[str(item["did"]) for item in devices])
+
+            for scene in scenes:
+                conn.execute(
+                    """
+                    INSERT INTO scene_registry(
+                        id, miot_scene_id, name, home_id, hidden, executable,
+                        raw_json, last_synced_at
+                    ) VALUES (?, ?, ?, ?, 0, 0, ?, ?)
+                    ON CONFLICT(miot_scene_id) DO UPDATE SET
+                        name = excluded.name, home_id = excluded.home_id,
+                        raw_json = excluded.raw_json, last_synced_at = excluded.last_synced_at
+                    """,
+                    (str(scene.get("id") or uuid.uuid4()), str(scene["scene_id"]),
+                     str(scene.get("name", "")), str(scene.get("home_id", "")),
+                     json.dumps(scene, ensure_ascii=False, default=str), now),
+                )
+            self._prune_registry_rows(conn, table="scene_registry", id_column="miot_scene_id",
+                                      home_ids=reconciled_scene_home_ids,
+                                      seen_ids=[str(item["scene_id"]) for item in scenes])
+
     def clear_synced_registries(self) -> dict[str, int]:
         """删除所有从米家同步来的家庭 / 设备 / 场景。
 
@@ -53,8 +141,31 @@ class RegistryMixin:
                         now,
                     ),
                 )
+            home_ids = [str(home["id"]) for home in homes]
+            if home_ids:
+                placeholders = ",".join("?" for _ in home_ids)
+                conn.execute(
+                    f"DELETE FROM home_registry WHERE id NOT IN ({placeholders})",
+                    home_ids,
+                )
+                conn.execute(
+                    f"DELETE FROM device_registry WHERE home_id NOT IN ({placeholders})",
+                    home_ids,
+                )
+                conn.execute(
+                    f"DELETE FROM scene_registry WHERE home_id NOT IN ({placeholders})",
+                    home_ids,
+                )
+            else:
+                conn.execute("DELETE FROM home_registry")
+                conn.execute("DELETE FROM device_registry")
+                conn.execute("DELETE FROM scene_registry")
 
-    def upsert_devices(self, devices: list[dict[str, Any]]) -> None:
+    def upsert_devices(
+        self,
+        devices: list[dict[str, Any]],
+        reconciled_home_ids: list[str] | None = None,
+    ) -> None:
         """Persist synced devices while preserving local aliases and permissions."""
 
         now = isoformat(utc_now())
@@ -103,8 +214,19 @@ class RegistryMixin:
                         now,
                     ),
                 )
+            self._prune_registry_rows(
+                conn,
+                table="device_registry",
+                id_column="miot_did",
+                home_ids=reconciled_home_ids,
+                seen_ids=[str(device["did"]) for device in devices],
+            )
 
-    def upsert_scenes(self, scenes: list[dict[str, Any]]) -> None:
+    def upsert_scenes(
+        self,
+        scenes: list[dict[str, Any]],
+        reconciled_home_ids: list[str] | None = None,
+    ) -> None:
         """Persist synced scenes while preserving local executable flags."""
 
         now = isoformat(utc_now())
@@ -133,6 +255,40 @@ class RegistryMixin:
                         now,
                     ),
                 )
+            self._prune_registry_rows(
+                conn,
+                table="scene_registry",
+                id_column="miot_scene_id",
+                home_ids=reconciled_home_ids,
+                seen_ids=[str(scene["scene_id"]) for scene in scenes],
+            )
+
+    @staticmethod
+    def _prune_registry_rows(
+        conn: Any,
+        *,
+        table: str,
+        id_column: str,
+        home_ids: list[str] | None,
+        seen_ids: list[str],
+    ) -> None:
+        """Reconcile only homes whose remote enumeration completed successfully."""
+        if home_ids is None:
+            return
+        if not home_ids:
+            return
+        home_placeholders = ",".join("?" for _ in home_ids)
+        params: list[Any] = list(home_ids)
+        if seen_ids:
+            seen_placeholders = ",".join("?" for _ in seen_ids)
+            params.extend(seen_ids)
+            predicate = f"AND {id_column} NOT IN ({seen_placeholders})"
+        else:
+            predicate = ""
+        conn.execute(
+            f"DELETE FROM {table} WHERE home_id IN ({home_placeholders}) {predicate}",
+            params,
+        )
 
     def list_homes(self) -> list[dict[str, Any]]:
         """List locally synced homes."""
@@ -210,6 +366,8 @@ class RegistryMixin:
         current = self.get_device(device_id)
         allowed = {"slug", "alias", "tags", "group_name", "hidden", "access_mode"}
         values = {key: value for key, value in updates.items() if key in allowed}
+        if "access_mode" in values and values["access_mode"] not in {"read", "write"}:
+            raise ValueError("access_mode must be 'read' or 'write'")
         if "tags" in values:
             values["tags_json"] = json.dumps(values.pop("tags"), ensure_ascii=False)
         if not values:

@@ -122,9 +122,10 @@ class DeviceService:
         except (PropertyReadOnlyError, ValidationError):
             # 验证错误需要抛出
             raise
-        except Exception:
-            # 规格获取失败不影响控制，跳过验证
-            pass
+        except Exception as exc:
+            # 规格不可用时不能证明该属性可写或值合法，拒绝执行，避免
+            # “校验失败但仍然写入”的半闭环行为。
+            raise RuntimeError(f"设备规格获取失败，未执行控制: {exc}") from exc
 
         # 5. 调用仓储层设置属性
         return self._device_repo.set_property(device_id, siid, piid, value, credential)

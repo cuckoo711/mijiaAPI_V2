@@ -353,8 +353,26 @@ class MijiaRuntime:
         """后台线程入口：执行同步逻辑并确保锁被释放。"""
         task_id: Optional[str] = None
         try:
-            self._sync_all_unlocked()
-        except Exception:
+            result = self._sync_all_unlocked()
+            try:
+                self._store.add_audit(
+                    "mijia.sync.completed",
+                    "warning" if result.get("warnings") else "success",
+                    actor_type="system",
+                    metadata=result,
+                )
+            except Exception:
+                logger.warning("failed to audit completed sync", exc_info=True)
+        except Exception as exc:
+            try:
+                self._store.add_audit(
+                    "mijia.sync.completed",
+                    "failed",
+                    actor_type="system",
+                    metadata={"error": str(exc)},
+                )
+            except Exception:
+                logger.warning("failed to audit failed sync", exc_info=True)
             logger.warning("sync background thread failed", exc_info=True)
         finally:
             task_id = self._sync_progress.task_id if self._sync_progress else None
@@ -397,11 +415,12 @@ class MijiaRuntime:
             # Step 3: Save homes
             self._update_progress(step="保存家庭数据", progress=10, homes_total=len(homes))
             home_dicts = [model_to_dict(home) for home in homes]
-            self._store.replace_home_registry(home_dicts)
 
             devices: list[dict[str, Any]] = []
             scenes: list[dict[str, Any]] = []
             warnings: list[dict[str, str]] = []
+            reconciled_device_homes: list[str] = []
+            reconciled_scene_homes: list[str] = []
 
             # Step 4-6: Process each home
             for i, home in enumerate(homes):
@@ -417,6 +436,7 @@ class MijiaRuntime:
                 # Get devices
                 try:
                     devices.extend(self._device_dicts(api, home))
+                    reconciled_device_homes.append(str(home.id))
                     self._update_progress(devices_found=len(devices))
                 except Exception as exc:
                     warnings.append(self._sync_warning("devices", home, exc))
@@ -424,17 +444,22 @@ class MijiaRuntime:
                 # Get scenes
                 try:
                     scenes.extend(self._scene_dicts(api, home))
+                    reconciled_scene_homes.append(str(home.id))
                     self._update_progress(scenes_found=len(scenes))
                 except Exception as exc:
                     warnings.append(self._sync_warning("scenes", home, exc))
 
             # Step 7: Save devices
             self._update_progress(step="保存设备数据", progress=90)
-            self._store.upsert_devices(devices)
-
-            # Step 8: Save scenes
-            self._update_progress(step="保存场景数据", progress=95)
-            self._store.upsert_scenes(scenes)
+            # Step 8: Commit the complete snapshot atomically.
+            self._update_progress(step="保存家庭、设备和场景数据", progress=95)
+            self._store.replace_synced_snapshot(
+                home_dicts,
+                devices,
+                scenes,
+                reconciled_device_home_ids=reconciled_device_homes,
+                reconciled_scene_home_ids=reconciled_scene_homes,
+            )
 
             # Complete
             self._update_progress(
@@ -511,7 +536,10 @@ class MijiaRuntime:
     def batch_set_properties(self, requests: list[dict[str, Any]]) -> dict[str, Any]:
         api_requests = []
         for request in requests:
-            device = self._store.get_device(str(request["device"]))
+            device_ref = request.get("device") or request.get("device_id")
+            if not device_ref:
+                raise ValueError("每项必须包含 device 或 device_id")
+            device = self._store.get_device(str(device_ref))
             if device["access_mode"] != "write":
                 raise PermissionError(f"设备未授权控制: {device['slug']}")
             api_requests.append(

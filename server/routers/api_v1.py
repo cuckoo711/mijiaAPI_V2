@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 import mijiaAPI_V2
@@ -196,11 +196,21 @@ def api_batch_set_properties(
     runtime: MijiaRuntime = Depends(get_runtime),
     current_store: ServerStore = Depends(get_store),
 ) -> dict[str, Any]:
+    normalized_items: list[dict[str, Any]] = []
     for item in payload.items:
-        device = current_store.get_device(str(item["device"]))
+        device_ref = item.get("device") or item.get("device_id")
+        if not device_ref:
+            raise HTTPException(
+                status_code=422,
+                detail={"code": "INVALID_BATCH_ITEM", "message": "每项必须包含 device 或 device_id"},
+            )
+        normalized = {**item, "device": str(device_ref)}
+        normalized.pop("device_id", None)
+        device = current_store.get_device(str(device_ref))
         if not _resource_allowed(api_key, "devices", device):
             raise PermissionError("API key cannot access one or more devices")
-    result = runtime.batch_set_properties(payload.items)
+        normalized_items.append(normalized)
+    result = runtime.batch_set_properties(normalized_items)
     current_store.add_audit(
         "device.property.batch_set",
         "success",

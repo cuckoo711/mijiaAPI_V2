@@ -46,7 +46,7 @@ class UpdateDeviceRequest(BaseModel):
     tags: Optional[list[str]] = None
     group_name: Optional[str] = None
     hidden: Optional[bool] = None
-    access_mode: Optional[str] = None
+    access_mode: Optional[str] = Field(default=None, pattern="^(read|write)$")
 
 
 class UpdateSceneRequest(BaseModel):
