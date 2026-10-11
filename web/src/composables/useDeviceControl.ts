@@ -11,6 +11,8 @@ type DeviceDraft = {
   actionValues: Record<string, Record<string, string>>;
 };
 
+type PropertyReadback = Readonly<{ siid: number; piid: number; value: unknown; readable: boolean }>;
+
 export function createDeviceControlMemory() {
   return reactive({
     busyIds: {} as Record<string, boolean>,
@@ -34,13 +36,14 @@ export function useDeviceControl(options: { request: AdminRequest; getDevice: (i
   const { busyIds, outcomes, verifiedUnknown, drafts } = options.memory ?? createDeviceControlMemory();
   let selectionGeneration = 0;
   let stateSequence = 0;
+  let readbackWait: { timer: number; resume: () => void } | null = null;
 
   const selected = computed(() => options.getDevice(selectedId.value));
   const draft = computed(() => drafts[selectedId.value]);
   const outcome = computed(() => outcomes[selectedId.value]);
   const controlBusy = computed(() => Boolean(busyIds[selectedId.value]));
   const requiresVerification = computed(() => outcome.value?.status === "unknown");
-  const canAcknowledge = computed(() => Boolean(verifiedUnknown[selectedId.value]));
+  const canAcknowledge = computed(() => Boolean(verifiedUnknown[selectedId.value] && !controlBusy.value));
   const writableProperties = computed(() => spec.value?.properties.filter((property) => ["write", "read_write"].includes(property.access)) ?? []);
   const selectedProperty = computed(() => writableProperties.value.find((property) => propertyKey(property) === draft.value?.property));
   const selectedAction = computed(() => spec.value?.actions.find((action) => actionKey(action) === draft.value?.action));
@@ -50,23 +53,93 @@ export function useDeviceControl(options: { request: AdminRequest; getDevice: (i
     return visible.value && selectedId.value === id && selectionGeneration === generation;
   }
 
-  async function refreshState(): Promise<void> {
+  async function refreshState(): Promise<DeviceState[] | null> {
     const id = selectedId.value;
-    if (!visible.value || !id) return;
+    if (!visible.value || !id) return null;
     const generation = selectionGeneration;
     const sequence = ++stateSequence;
     stateLoading.value = true;
     stateError.value = "";
     try {
       const payload = await options.request<{ items: DeviceState[] }>(`/api/admin/devices/${encodeURIComponent(id)}/state`);
-      if (!current(id, generation) || sequence !== stateSequence) return;
+      if (!current(id, generation) || sequence !== stateSequence) return null;
+      if (!Array.isArray(payload.items)) throw new Error("状态响应缺少属性列表");
       state.value = payload.items;
       stateUpdatedAt.value = new Date().toLocaleString();
       if (outcomes[id]?.status === "unknown") verifiedUnknown[id] = true;
+      return payload.items;
     } catch (error) {
       if (current(id, generation) && sequence === stateSequence) stateError.value = errorMessage(error, "状态读取失败，请重试");
     } finally {
       if (current(id, generation) && sequence === stateSequence) stateLoading.value = false;
+    }
+    return null;
+  }
+
+  function cancelReadbackWait(): void {
+    if (!readbackWait) return;
+    const waiting = readbackWait;
+    readbackWait = null;
+    window.clearTimeout(waiting.timer);
+    waiting.resume();
+  }
+
+  function waitForReadback(): Promise<void> {
+    return new Promise((resolve) => {
+      const waiting = { timer: 0, resume: () => {
+        if (readbackWait === waiting) readbackWait = null;
+        resolve();
+      } };
+      waiting.timer = window.setTimeout(waiting.resume, 1000);
+      readbackWait = waiting;
+    });
+  }
+
+  async function confirmPropertyReadback(id: string, generation: number, target: PropertyReadback): Promise<void> {
+    const unconfirmed = (message: string): void => {
+      outcomes[id] = { status: "unknown", message: `写入请求已被接受，但${message}。请核对状态与实际设备；不会重复发送写入` };
+    };
+    const stillSelected = (): boolean => {
+      if (current(id, generation)) return true;
+      unconfirmed("读回核对已停止（对话框已关闭或切换），目标值尚未确认");
+      return false;
+    };
+    if (!stillSelected()) return;
+    if (!target.readable) {
+      unconfirmed("该属性不可读，无法确认目标读值");
+      await refreshState();
+      return;
+    }
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      if (!stillSelected()) return;
+      const items = await refreshState();
+      if (!stillSelected()) return;
+      if (!items) {
+        unconfirmed("状态读取失败，目标读值尚未确认");
+        return;
+      }
+      const matching = items.filter((item) => item && item.siid === target.siid && item.piid === target.piid);
+      if (matching.length !== 1) {
+        unconfirmed("实时状态中没有唯一的目标属性，读回尚未确认");
+        return;
+      }
+      const item = matching[0];
+      if (item.code !== 0 || !Object.prototype.hasOwnProperty.call(item, "value") || item.value === undefined) {
+        unconfirmed(typeof item.code === "number" && item.code !== 0
+          ? `目标属性读取错误（错误码 ${item.code}），读回尚未确认`
+          : "目标属性读取缺少成功码或读值，读回尚未确认");
+        return;
+      }
+      if (item.value === target.value) {
+        verifiedUnknown[id] = false;
+        outcomes[id] = { status: "success", message: "写入请求已被接受，目标属性值已读回确认" };
+        return;
+      }
+      if (attempt === 4) {
+        unconfirmed("5 次读回均未匹配目标值，核对已超时");
+        return;
+      }
+      await waitForReadback();
     }
   }
 
@@ -89,6 +162,7 @@ export function useDeviceControl(options: { request: AdminRequest; getDevice: (i
   }
 
   async function openDevice(device: DeviceItem): Promise<void> {
+    cancelReadbackWait();
     selectionGeneration += 1;
     selectedId.value = device.id;
     visible.value = true;
@@ -104,6 +178,7 @@ export function useDeviceControl(options: { request: AdminRequest; getDevice: (i
   }
 
   function closeDevice(): void {
+    cancelReadbackWait();
     selectionGeneration += 1;
     visible.value = false;
   }
@@ -122,7 +197,7 @@ export function useDeviceControl(options: { request: AdminRequest; getDevice: (i
     }
   }
 
-  async function submit(kind: "properties" | "actions", body: object): Promise<void> {
+  async function submit(kind: "properties" | "actions", body: object, readback?: PropertyReadback): Promise<void> {
     if (!canControl.value) return;
     const id = selectedId.value;
     const generation = selectionGeneration;
@@ -139,6 +214,15 @@ export function useDeviceControl(options: { request: AdminRequest; getDevice: (i
     }
     // Keep an unresolved outcome with its original device, even if its dialog
     // was closed. It must not permit a blind replay when that device is reopened.
+    if (kind === "properties" && result.status === "success" && readback) {
+      outcomes[id] = { status: "unknown", message: "写入请求已被接受，正在核对最新读值；设备效果尚未确认" };
+      try {
+        await confirmPropertyReadback(id, generation, readback);
+      } finally {
+        busyIds[id] = false;
+      }
+      return;
+    }
     outcomes[id] = result;
     busyIds[id] = false;
     if (!current(id, generation)) return;
@@ -150,7 +234,9 @@ export function useDeviceControl(options: { request: AdminRequest; getDevice: (i
     const property = selectedProperty.value;
     try {
       const value = parseSpecValue(property, draft.value.propertyValues[propertyKey(property)]);
-      await submit("properties", { siid: property.siid, piid: property.piid, value });
+      const target = Object.freeze({ siid: property.siid, piid: property.piid, value,
+        readable: ["read", "read_write"].includes(property.access) });
+      await submit("properties", { siid: target.siid, piid: target.piid, value: target.value }, target);
     } catch (error) {
       outcomes[selectedId.value] = { status: "failed", message: errorMessage(error, "属性值无效") };
     }
