@@ -42,6 +42,8 @@ web/node_modules/
 web/dist/
 web/.vite/
 web/.tsbuildinfo
+web/output/
+.playwright-cli/
 
 # ==================== 测试覆盖率 ====================
 .coverage

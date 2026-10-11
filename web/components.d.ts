@@ -38,5 +38,6 @@ declare module 'vue' {
     ElTable: typeof import('element-plus/es')['ElTable']
     ElTableColumn: typeof import('element-plus/es')['ElTableColumn']
     ElTag: typeof import('element-plus/es')['ElTag']
+    SpecValueInput: typeof import('./src/components/SpecValueInput.vue')['default']
   }
 }

@@ -3,6 +3,7 @@ import {
   Connection,
   Cpu,
   Document,
+  Expand,
   House,
   Key,
   Lock,
@@ -63,6 +64,9 @@ const { isAuthed, loggingOut, request, refreshAdminSession, login: loginAdminSes
 const activeMenu = ref(
   window.location.hash.slice(1) || localStorage.getItem("mijia_active_menu") || "dashboard"
 );
+const navOpen = ref(false);
+const isCompact = ref(false);
+let compactQuery: MediaQueryList | null = null;
 const loading = ref(false);
 const health = ref<{ status: string; version: string } | null>(null);
 const initialized = ref(false);
@@ -675,6 +679,18 @@ function selectPage(index: string): void {
   activeMenu.value = index;
   window.location.hash = index;
   localStorage.setItem("mijia_active_menu", index);
+  navOpen.value = false;
+}
+
+function toggleNav(): void {
+  navOpen.value = !navOpen.value;
+}
+
+function syncCompactLayout(event?: MediaQueryListEvent | MediaQueryList): void {
+  isCompact.value = Boolean(event?.matches);
+  if (!isCompact.value) {
+    navOpen.value = false;
+  }
 }
 
 function dismissSyncProgress(): void {
@@ -686,12 +702,17 @@ onMounted(() => {
     const hash = window.location.hash.slice(1);
     if (hash && hash !== activeMenu.value) {
       activeMenu.value = hash;
+      navOpen.value = false;
     }
   });
+  compactQuery = window.matchMedia("(max-width: 960px)");
+  syncCompactLayout(compactQuery);
+  compactQuery.addEventListener("change", syncCompactLayout);
   void refreshAll();
 });
 
 onBeforeUnmount(() => {
+  compactQuery?.removeEventListener("change", syncCompactLayout);
   disposeMijiaLogin();
   disposeAdminSession();
   stopSyncPolling();
@@ -699,11 +720,12 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <el-container class="app-shell">
-    <el-aside class="sidebar" width="232px">
+  <el-container class="app-shell" :class="{ 'is-compact': isCompact, 'nav-open': navOpen }">
+    <div v-if="isCompact && navOpen" class="nav-backdrop" aria-hidden="true" @click="navOpen = false" />
+    <el-aside class="sidebar" width="232px" :class="{ 'is-open': navOpen }">
       <div class="brand">
         <div class="brand-mark">米</div>
-        <div>
+        <div class="brand-text">
           <div class="brand-title">米家 API Server</div>
           <div class="brand-subtitle">管理台</div>
         </div>
@@ -744,23 +766,35 @@ onBeforeUnmount(() => {
 
     <el-container>
       <el-header class="topbar">
-        <div>
-          <h1>{{ activePage.label }}</h1>
-          <p>
-            版本 {{ health?.version || "..." }}
-            <button
-              v-if="updateInfo?.update_available && updateInfo.latest"
-              type="button"
-              class="update-hint"
-              @click="openAboutDialog"
-            >
-              有新版本 {{ updateInfo.latest.latest_tag }} 可用
-            </button>
-            · {{ initializedLabel }}
-          </p>
+        <div class="topbar-heading">
+          <button
+            v-if="isCompact"
+            type="button"
+            class="nav-toggle"
+            :aria-expanded="navOpen"
+            aria-label="打开导航"
+            @click="toggleNav"
+          >
+            <el-icon :size="20"><Expand /></el-icon>
+          </button>
+          <div class="topbar-titles">
+            <h1>{{ activePage.label }}</h1>
+            <p>
+              版本 {{ health?.version || "..." }}
+              <button
+                v-if="updateInfo?.update_available && updateInfo.latest"
+                type="button"
+                class="update-hint"
+                @click="openAboutDialog"
+              >
+                有新版本 {{ updateInfo.latest.latest_tag }} 可用
+              </button>
+              · {{ initializedLabel }}
+            </p>
+          </div>
         </div>
         <div class="toolbar">
-          <el-button v-if="isAuthed" @click="openPasswordDialog">修改密码</el-button>
+          <el-button v-if="isAuthed" @click="openPasswordDialog">改密</el-button>
           <el-button v-if="isAuthed" :loading="loggingOut" :disabled="loggingOut" @click="logout">退出</el-button>
           <el-button :loading="loading" :icon="Cpu" @click="refreshAll">刷新</el-button>
         </div>
@@ -898,7 +932,7 @@ onBeforeUnmount(() => {
       </el-main>
     </el-container>
 
-    <el-dialog v-model="aboutDialogVisible" title="关于" width="480px" append-to-body>
+    <el-dialog v-model="aboutDialogVisible" title="关于" width="min(480px, 92vw)" append-to-body class="app-dialog">
       <div class="about-dialog">
         <div class="about-header">
           <div class="brand-mark about-mark">米</div>
@@ -997,8 +1031,9 @@ onBeforeUnmount(() => {
     <el-dialog
       v-model="passwordDialogVisible"
       title="修改密码"
-      width="420px"
+      width="min(420px, 92vw)"
       append-to-body
+      class="app-dialog"
       @closed="resetPasswordForm"
     >
       <el-form label-width="96px" @submit.prevent>

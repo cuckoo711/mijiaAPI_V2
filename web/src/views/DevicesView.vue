@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import type { DeviceItem, HomeItem } from "../types/admin";
 import type { AdminRequest, DeviceState } from "../types/control";
 import { useDeviceControl, type DeviceControlMemory } from "../composables/useDeviceControl";
@@ -22,7 +22,20 @@ const {
   openDevice, closeDevice, refreshSpec, refreshState, chooseAction, acknowledgeUnknown,
   writeProperty, callAction,
 } = useDeviceControl({ request: props.request, getDevice: (id) => props.devices.find((device) => device.id === id), memory: props.controlMemory });
-onBeforeUnmount(closeDevice);
+function syncCompactLayout(event?: MediaQueryListEvent | MediaQueryList): void {
+  isCompact.value = Boolean(event?.matches);
+}
+
+onMounted(() => {
+  compactQuery = window.matchMedia("(max-width: 640px)");
+  syncCompactLayout(compactQuery);
+  compactQuery.addEventListener("change", syncCompactLayout);
+});
+
+onBeforeUnmount(() => {
+  compactQuery?.removeEventListener("change", syncCompactLayout);
+  closeDevice();
+});
 
 function stateName(siid: number, piid: number): string {
   return spec.value?.properties.find((property) => property.siid === siid && property.piid === piid)?.name || `${siid}.${piid}`;
@@ -48,6 +61,8 @@ const emit = defineEmits<{
 
 const devicePage = ref(1);
 const devicePageSize = ref(20);
+const isCompact = ref(false);
+let compactQuery: MediaQueryList | null = null;
 const deviceFilters = reactive({
   home: "",
   status: "",
@@ -211,10 +226,10 @@ function deviceStatusTag(status: string): "success" | "danger" | "warning" | "in
         :page-sizes="[20, 50, 100]"
         :total="filteredDevices.length"
         background
-        layout="total, sizes, prev, pager, next"
+        :layout="isCompact ? 'total, prev, pager, next' : 'total, sizes, prev, pager, next'"
       />
     </div>
-    <el-dialog v-model="visible" :title="`${selected?.display_name || selected?.name || '设备'} · 状态与控制`" width="min(920px, 94vw)" @close="closeDevice">
+    <el-dialog v-model="visible" class="app-dialog" :title="`${selected?.display_name || selected?.name || '设备'} · 状态与控制`" width="min(920px, 94vw)" @close="closeDevice">
       <div v-if="selected" class="device-control-panel">
         <el-alert v-if="selected.access_mode !== 'write' || selected.hidden" type="info" :closable="false" :title="selected.hidden ? '设备已隐藏，仅可查看状态；请先取消隐藏并授予可控权限再控制' : '设备为只读，仅可查看状态；请先授予可控权限再控制'" />
         <el-alert v-if="outcome" :type="outcome.status === 'success' ? 'success' : outcome.status === 'unknown' ? 'warning' : 'error'" :title="outcome.message" :closable="false">
@@ -279,7 +294,28 @@ function deviceStatusTag(status: string): "success" | "danger" | "warning" | "in
 </template>
 
 <style scoped>
-.device-control-panel { display: flex; flex-direction: column; gap: 12px; }
-.control-section-header { display: flex; align-items: center; justify-content: space-between; margin-top: 12px; }
-.control-help { margin: 0; color: #6b7280; font-size: 13px; }
+.device-control-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.control-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+.control-help {
+  margin: 0;
+  color: var(--text-muted, #6b7280);
+  font-size: 13px;
+}
+@media (max-width: 640px) {
+  .control-section-header {
+    align-items: flex-start;
+  }
+}
+
 </style>

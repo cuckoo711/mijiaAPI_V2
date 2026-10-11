@@ -185,7 +185,7 @@ function onRotate(): void {
         </template>
       </el-table-column>
     </el-table>
-    <el-dialog :model-value="Boolean(rotateKey)" :close-on-click-modal="!busyKeyId" :close-on-press-escape="!busyKeyId" title="轮换 API Key" width="480px" @update:model-value="(visible: boolean) => { if (!visible && !busyKeyId) rotateKey = null; }">
+    <el-dialog :model-value="Boolean(rotateKey)" :close-on-click-modal="!busyKeyId" :close-on-press-escape="!busyKeyId" title="轮换 API Key" width="min(480px, 92vw)" class="app-dialog" @update:model-value="(visible: boolean) => { if (!visible && !busyKeyId) rotateKey = null; }">
       <p>为「{{ rotateKey?.name }}」生成新密钥并停用旧密钥。权限和资源范围继承，旧密钥在轮换成功后失效。</p>
       <el-select v-model="rotateExpiryMode">
         <el-option label="继承原过期时间" value="inherit" />
@@ -210,6 +210,13 @@ function onRotate(): void {
 .api-key-actions {
   display: flex;
   gap: 8px;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 640px) {
+  .permission-table {
+    font-size: 13px;
+  }
 }
 
 .api-key-actions :deep(.el-button + .el-button) {

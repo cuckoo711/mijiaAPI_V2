@@ -89,7 +89,7 @@ async function copySceneExecuteCurl(sceneId: string): Promise<void> {
         <template #default="{ row }"><el-button size="small" type="primary" :disabled="!row.executable || row.hidden || pendingIds.includes(row.id)" @click="openScene(row)">执行场景</el-button></template>
       </el-table-column>
     </el-table>
-    <el-dialog v-model="visible" title="手动执行场景" width="min(520px, 94vw)" @close="closeScene">
+    <el-dialog v-model="visible" class="app-dialog" title="手动执行场景" width="min(520px, 94vw)" @close="closeScene">
       <template v-if="selected">
         <p>场景：<strong>{{ selected.name }}</strong> · {{ homeName(selected.home_id) }}</p>
         <p>点击确认后将执行该场景中的设备操作。</p>
