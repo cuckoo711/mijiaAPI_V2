@@ -128,8 +128,11 @@ class TestGetAll:
         # 验证HTTP调用（应该调用两次：一次获取家庭列表，一次获取设备列表）
         assert mock_http_client.post.call_count == 2
 
-        # 验证缓存被设置
-        mock_cache_manager.set.assert_called_once()
+        # 验证已校验的家庭与完整设备清单均被缓存。
+        assert [call.args[0] for call in mock_cache_manager.set.call_args_list] == [
+            "homes",
+            "devices:1",
+        ]
 
 
 class TestSetProperty:

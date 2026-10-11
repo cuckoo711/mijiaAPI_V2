@@ -111,3 +111,17 @@ def require_status_api_key(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={"code": "API_KEY_FORBIDDEN", "message": str(exc)},
         ) from exc
+
+
+def require_valid_api_key(
+    request: Request,
+    authorization: Annotated[Optional[str], Header()] = None,
+    current_store: ServerStore = Depends(get_store),
+) -> dict[str, Any]:
+    key = extract_bearer_token(authorization)
+    try:
+        return current_store.validate_api_key(
+            key, source_ip=getattr(request.state, "source_ip", None)
+        )
+    except AuthenticationFailedError as exc:
+        raise HTTPException(403, detail={"code": "API_KEY_FORBIDDEN", "message": str(exc)}) from exc

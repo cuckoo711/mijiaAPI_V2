@@ -11,8 +11,56 @@ from ..domain.models import Credential, Device, DeviceProperty, DeviceStatus
 from ..infrastructure.cache_manager import CacheManager
 from ..infrastructure.http_client import HttpClient
 from .interfaces import IDeviceRepository
+from .home_repository import HomeRepositoryImpl, _inventory_identifier
 
 logger = get_logger(__name__)
+# Operational request budget, rather than an assumed Xiaomi inventory limit.
+MAX_DEVICE_PAGES = 1000
+
+
+def _device_from_payload(payload: Any, home_id: Optional[str] = None) -> Device:
+    if not isinstance(payload, dict):
+        raise MijiaAPIException("设备清单项必须为对象")
+    try:
+        did = _inventory_identifier(payload.get("did"), "device did")
+        actual_home = _inventory_identifier(payload.get("home_id"), "device home id")
+        if home_id is not None and actual_home != home_id:
+            raise MijiaAPIException("设备清单归属家庭与请求不符")
+        return Device.model_validate({**payload, "did": did, "home_id": actual_home})
+    except MijiaAPIException:
+        raise
+    except Exception as exc:
+        raise MijiaAPIException("设备清单项格式无效") from exc
+
+
+def _device_collection(payloads: Any, home_id: str) -> List[Device]:
+    if not isinstance(payloads, list):
+        raise MijiaAPIException("设备清单必须为列表")
+    devices = [_device_from_payload(payload, home_id) for payload in payloads]
+    if len({device.did for device in devices}) != len(devices):
+        raise MijiaAPIException("设备清单包含重复 did")
+    return devices
+
+
+def _device_page(response: Any, start_did: str, seen_cursors: set[str]) -> tuple[list, str, bool]:
+    if (
+        not isinstance(response, dict)
+        or type(response.get("code")) is not int
+        or response["code"] != 0
+    ):
+        raise MijiaAPIException("设备清单响应未明确成功")
+    result = response.get("result")
+    if not isinstance(result, dict) or not isinstance(result.get("device_info"), list):
+        raise MijiaAPIException("设备清单响应缺少有效 result/device_info")
+    more = result.get("has_more")
+    if type(more) not in (bool, int) or more not in (0, 1):
+        raise MijiaAPIException("设备清单缺少有效 has_more 完整性标记")
+    cursor = ""
+    if more:
+        cursor = _inventory_identifier(result.get("max_did"), "pagination max_did")
+        if not result["device_info"] or cursor == start_did or cursor in seen_cursors:
+            raise MijiaAPIException("设备分页未推进，清单未完整返回")
+    return result["device_info"], cursor, bool(more)
 
 
 def _unknown_ack() -> ExecutionUnknownError:
@@ -73,13 +121,20 @@ class DeviceRepositoryImpl(IDeviceRepository):
             credential: 用户凭据
 
         Returns:
-            设备列表
+            已确认分页完成的设备列表，明确空列表表示家庭没有设备
+
+        Raises:
+            MijiaAPIException: 清单缺失、身份不符或分页不完整，调用方应保留旧快照
         """
+        home_id = _inventory_identifier(home_id, "home id")
         # 检查缓存
         cache_key = f"devices:{home_id}"
         cached = self._cache.get(cache_key, namespace=credential.user_id)
-        if cached:
-            return [Device.model_validate(d) for d in cached]
+        if cached is not None:
+            try:
+                return _device_collection(cached, home_id)
+            except MijiaAPIException:
+                self._cache.invalidate(cache_key, namespace=credential.user_id)
 
         # 从API获取（使用旧项目的端点和参数）
         # 首先需要获取home_owner（家庭所有者的UID）
@@ -90,8 +145,12 @@ class DeviceRepositoryImpl(IDeviceRepository):
         start_did = ""
         has_more = True
         all_devices = []
+        seen_cursors: set[str] = set()
+        pages_read = 0
 
         while has_more:
+            if pages_read >= MAX_DEVICE_PAGES:
+                raise MijiaAPIException("设备清单分页未在读取预算内完成，未获取完整清单")
             data = {
                 "home_owner": home_owner,
                 "home_id": int(home_id),
@@ -104,32 +163,36 @@ class DeviceRepositoryImpl(IDeviceRepository):
             }
 
             response = self._http.post(uri, json=data, credential=credential)
-            result = response.get("result", {})
-
-            # 获取设备列表
-            device_info = result.get("device_info", [])
-            if device_info:
-                all_devices.extend(device_info)
-                start_did = result.get("max_did", "")
-                has_more = result.get("has_more", False) and start_did != ""
-            else:
-                has_more = False
+            pages_read += 1
+            device_info, cursor, has_more = _device_page(response, start_did, seen_cursors)
+            all_devices.extend(device_info)
+            if has_more:
+                seen_cursors.add(cursor)
+                start_did = cursor
 
         # 解析设备列表
-        devices = []
+        payloads = []
         for device_data in all_devices:
-            # 映射API字段到领域模型
-            device = Device(
-                did=device_data.get("did", ""),
-                name=device_data.get("name", ""),
-                model=device_data.get("model", ""),
-                home_id=home_id,
-                room_id=device_data.get("room_id"),
-                status=self._parse_device_status(device_data.get("isOnline")),
-                parent_id=device_data.get("parent_id"),
-                parent_model=device_data.get("parent_model"),
+            if not isinstance(device_data, dict):
+                raise MijiaAPIException("设备清单项必须为对象")
+            if (
+                "home_id" in device_data
+                and _inventory_identifier(device_data["home_id"], "device home id") != home_id
+            ):
+                raise MijiaAPIException("设备清单归属家庭与请求不符")
+            payloads.append(
+                {
+                    "did": device_data.get("did"),
+                    "name": device_data.get("name", ""),
+                    "model": device_data.get("model", ""),
+                    "home_id": home_id,
+                    "room_id": device_data.get("room_id"),
+                    "status": self._parse_device_status(device_data.get("isOnline")),
+                    "parent_id": device_data.get("parent_id"),
+                    "parent_model": device_data.get("parent_model"),
+                }
             )
-            devices.append(device)
+        devices = _device_collection(payloads, home_id)
 
         # 缓存结果（TTL=300秒）
         self._cache.set(
@@ -149,35 +212,15 @@ class DeviceRepositoryImpl(IDeviceRepository):
             家庭所有者的UID
 
         Raises:
-            ValueError: 如果找不到对应的家庭
+            MijiaAPIException: 家庭清单无效或找不到对应的家庭所有者
         """
-        # 从缓存或API获取家庭列表
-        cache_key = "homes"
-        cached = self._cache.get(cache_key, namespace=credential.user_id)
-
-        if cached:
-            homes = cached
-        else:
-            # 需要调用家庭列表API
-            uri = "/v2/homeroom/gethome_merged"
-            data = {
-                "fg": True,
-                "fetch_share": True,
-                "fetch_share_dev": True,
-                "fetch_cariot": True,
-                "limit": 300,
-                "app_ver": 7,
-                "plat_form": 0,
-            }
-            response = self._http.post(uri, json=data, credential=credential)
-            homes = response.get("result", {}).get("homelist", [])
-
-        # 查找对应的家庭
-        for home in homes:
-            if str(home.get("id", "")) == str(home_id):
-                return int(home.get("uid", 0))
-
-        raise ValueError(f"未找到 home_id={home_id} 的家庭信息")
+        for home in HomeRepositoryImpl(self._http, self._cache).get_all(credential):
+            if home.id == home_id:
+                try:
+                    return int(home.uid)
+                except ValueError as exc:
+                    raise MijiaAPIException("家庭所有者 uid 无效，未获取设备清单") from exc
+        raise MijiaAPIException("请求家庭不存在于已验证的家庭清单")
 
     def get_by_id(self, device_id: str, credential: Credential) -> Optional[Device]:
         """根据ID获取设备
@@ -189,31 +232,24 @@ class DeviceRepositoryImpl(IDeviceRepository):
         Returns:
             设备对象，不存在返回None
         """
+        device_id = _inventory_identifier(device_id, "device did")
         # 检查缓存
         cache_key = f"device:{device_id}"
         cached = self._cache.get(cache_key, namespace=credential.user_id)
-        if cached:
-            return Device.model_validate(cached)
+        if cached is not None:
+            try:
+                device = _device_from_payload(cached)
+                if device.did != device_id:
+                    raise MijiaAPIException("设备缓存 did 与请求不符")
+                return device
+            except MijiaAPIException:
+                self._cache.invalidate(cache_key, namespace=credential.user_id)
 
-        # 需要遍历所有家庭查找设备
-        # 首先获取家庭列表
-        uri = "/v2/homeroom/gethome_merged"
-        data = {
-            "fg": True,
-            "fetch_share": True,
-            "fetch_share_dev": True,
-            "fetch_cariot": True,
-            "limit": 300,
-            "app_ver": 7,
-            "plat_form": 0,
-        }
-        response = self._http.post(uri, json=data, credential=credential)
-        homes = response.get("result", {}).get("homelist", [])
+        homes = HomeRepositoryImpl(self._http, self._cache).get_all(credential)
 
         # 遍历每个家庭查找设备
         for home in homes:
-            home_id = str(home.get("id", ""))
-            devices = self.get_all(home_id, credential)
+            devices = self.get_all(home.id, credential)
             for device in devices:
                 if device.did == device_id:
                     # 缓存设备信息

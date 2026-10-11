@@ -251,7 +251,11 @@ class LoginJobManager:
                 if job.status == "canceled":
                     return
                 job.status = "canceled" if isinstance(exc, AccountChangedError) else "failed"
-                job.message = str(exc)
+                job.message = (
+                    "登录任务已取消，请重新扫码"
+                    if isinstance(exc, AccountChangedError)
+                    else "米家登录失败，请重新扫码或稍后重试"
+                )
                 job.completed_at = datetime.now(timezone.utc).isoformat()
         finally:
             provider._client.close()
@@ -454,8 +458,10 @@ class MijiaRuntime:
             threshold = self._settings.credential_refresh_before_seconds
             if credential.expires_in() < threshold:
                 self._refresh_credential(credential, generation)
-        except Exception:
-            logger.warning("credential refresh job failed", exc_info=True)
+        except Exception as exc:
+            logger.warning(
+                "credential refresh job failed", extra={"error_type": type(exc).__name__}
+            )
         finally:
             with self._refresh_timer_lock:
                 if (
@@ -517,11 +523,13 @@ class MijiaRuntime:
                     "mijia.sync.completed",
                     "failed",
                     actor_type="system",
-                    metadata={"error": str(exc)},
+                    metadata={"error_type": type(exc).__name__},
                 )
             except Exception:
                 logger.warning("failed to audit failed sync", exc_info=True)
-            logger.warning("sync background thread failed", exc_info=True)
+            logger.warning(
+                "sync background thread failed", extra={"error_type": type(exc).__name__}
+            )
         finally:
             task_id = self._sync_progress.task_id if self._sync_progress else None
             # 先释放锁，再安排延迟清理，避免前端已看到终态却仍无法立刻发起下一轮同步。
@@ -568,7 +576,7 @@ class MijiaRuntime:
 
             devices: list[dict[str, Any]] = []
             scenes: list[dict[str, Any]] = []
-            warnings: list[dict[str, str]] = []
+            warnings: list[dict[str, Any]] = []
             reconciled_device_homes: list[str] = []
             reconciled_scene_homes: list[str] = []
 
@@ -632,7 +640,11 @@ class MijiaRuntime:
         except Exception as e:
             self._update_progress(
                 status="failed",
-                error=str(e),
+                error=(
+                    "米家账号已移除或重新登录，旧同步结果已丢弃"
+                    if isinstance(e, AccountChangedError)
+                    else "同步失败，请检查账号或网络状态后重试"
+                ),
                 completed_at=isoformat(utc_now()),
             )
             raise
@@ -679,6 +691,8 @@ class MijiaRuntime:
         if not spec:
             fetched = api.get_device_spec(device["model"])
             spec = model_to_dict(fetched) if fetched is not None else None
+        if not spec:
+            raise RuntimeError("设备规格不可用，暂无法读取实时状态")
         requests = self._readable_property_requests(device["did"], spec)
         if not requests:
             return []
@@ -788,8 +802,17 @@ class MijiaRuntime:
             self._authorize_resource(scene, authorize)
             if not scene["executable"]:
                 raise PermissionError("场景未授权执行")
+            owner_uid = (scene.get("raw") or {}).get("owner_uid")
+            try:
+                home = self._store.get_home(scene["home_id"])
+                owner_uid = home.get("uid") or owner_uid
+            except KeyError:
+                pass
         api, _ = self._api_with_generation(generation)
-        success = api.execute_scene(scene["scene_id"], scene["home_id"])
+        if owner_uid is None:
+            success = api.execute_scene(scene["scene_id"], scene["home_id"])
+        else:
+            success = api.execute_scene(scene["scene_id"], scene["home_id"], owner_uid=owner_uid)
         return {"success": bool(success)}
 
     def refresh_cache(self, home_id: Optional[str] = None) -> None:
@@ -814,7 +837,7 @@ class MijiaRuntime:
                 credential = self._load_required_credential()
                 if credential.is_valid():
                     return credential
-            raise RuntimeError(f"米家凭据已过期且自动刷新失败：{exc}") from exc
+            raise RuntimeError("米家凭据已过期且自动刷新失败，请重新扫码登录") from exc
 
     def _load_required_credential(self) -> Credential:
         credential = self.load_credential()
@@ -866,7 +889,9 @@ class MijiaRuntime:
         for device in api.get_devices(home.id):
             payload = model_to_dict(device)
             payload["id"] = str(uuid.uuid4())
-            payload["status"] = str(payload.get("status", "unknown")).split(".")[-1]
+            status = payload.get("status", "unknown")
+            status = str(getattr(status, "value", status)).lower()
+            payload["status"] = status if status in {"online", "offline", "unknown"} else "unknown"
             payload["spec"] = self._safe_spec(api, device)
             devices.append(payload)
         return devices
@@ -876,15 +901,20 @@ class MijiaRuntime:
         for scene in api.get_scenes(home.id, owner_uid=home.uid):
             payload = model_to_dict(scene)
             payload["id"] = str(uuid.uuid4())
+            payload["owner_uid"] = home.uid or payload.get("owner_uid")
             scenes.append(payload)
         return scenes
 
-    def _sync_warning(self, kind: str, home: Home, exc: Exception) -> dict[str, str]:
+    def _sync_warning(self, kind: str, home: Home, exc: Exception) -> dict[str, Any]:
+        label = "设备" if kind == "devices" else "场景"
+        code = getattr(exc, "code", None)
         return {
             "kind": kind,
             "home_id": str(home.id),
             "home_name": str(home.name),
-            "message": str(exc),
+            "message": f"该家庭的{label}读取失败，已保留上次同步数据",
+            "error_type": type(exc).__name__,
+            **({"code": code} if type(code) is int else {}),
         }
 
     def _safe_spec(self, api: Any, device: Device) -> dict[str, Any] | None:
@@ -901,8 +931,12 @@ class MijiaRuntime:
             return []
         properties = spec.get("properties") or []
         requests = []
-        for prop in properties[:30]:
-            access = str(prop.get("access", ""))
-            if "read" in access:
+        for prop in properties:
+            access = prop.get("access", "")
+            access = getattr(access, "value", access)
+            readable = access in ("read", "read_write")
+            if isinstance(access, (list, tuple, set)):
+                readable = "read" in access
+            if readable:
                 requests.append({"did": did, "siid": prop["siid"], "piid": prop["piid"]})
         return requests

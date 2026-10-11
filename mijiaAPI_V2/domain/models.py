@@ -236,6 +236,7 @@ class Scene(BaseModel):
     name: str = Field(description="智能名称")
     home_id: str = Field(description="所属家庭ID")
     icon: Optional[str] = Field(default=None, description="智能图标")
+    owner_uid: Optional[str] = Field(default=None, description="家庭拥有者用户ID")
 
 
 class ConsumableItem(BaseModel):

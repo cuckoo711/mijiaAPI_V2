@@ -17,10 +17,14 @@ import { normalizeApiBaseUrl } from "./apiExamples";
 import { useAdminSession } from "./composables/useAdminSession";
 import { useMijiaLogin } from "./composables/useMijiaLogin";
 import { useSyncProgress } from "./composables/useSyncProgress";
+import { createDeviceControlMemory } from "./composables/useDeviceControl";
+import { createSceneControlMemory } from "./composables/useSceneControl";
 import type {
   ApiKeyItem,
   ApiList,
   AppInfo,
+  AuditQueueHealth,
+  AuditReplayResult,
   CheckItem,
   CreateApiKeyPayload,
   DeviceItem,
@@ -71,6 +75,12 @@ const scenes = ref<SceneItem[]>([]);
 const apiKeys = ref<ApiKeyItem[]>([]);
 const configs = ref<Array<Record<string, unknown>>>([]);
 const audits = ref<Array<Record<string, unknown>>>([]);
+const auditHealth = ref<AuditQueueHealth | null>(null);
+const auditLoading = ref(false);
+const auditReplaying = ref(false);
+const auditError = ref("");
+let auditGeneration = 0;
+let auditReadSequence = 0;
 const oneTimeApiKey = ref("");
 const proxyCidrs = ref("");
 const appInfo = ref<AppInfo | null>(null);
@@ -85,6 +95,8 @@ const pendingDeviceIds = ref<string[]>([]);
 const pendingSceneIds = ref<string[]>([]);
 const savingConfig = ref(false);
 const logoutError = ref("");
+const deviceControlMemory = ref(createDeviceControlMemory());
+const sceneControlMemory = ref(createSceneControlMemory());
 
 const { qrJob, qrError, qrStarting, removingCredential, pollQrLogin, startQrLogin, deleteCredential, disposeMijiaLogin } = useMijiaLogin({
   request,
@@ -97,6 +109,8 @@ const { syncing, syncProgress, syncError, resumeSyncProgress, stopSyncPolling, s
 watch(isAuthed, (active) => {
   if (active) return;
   logoutError.value = "";
+  deviceControlMemory.value = createDeviceControlMemory();
+  sceneControlMemory.value = createSceneControlMemory();
   stopSyncPolling();
   disposeMijiaLogin();
   qrJob.value = null;
@@ -111,6 +125,12 @@ watch(isAuthed, (active) => {
   checks.value = [];
   configs.value = [];
   audits.value = [];
+  auditGeneration += 1;
+  auditReadSequence += 1;
+  auditHealth.value = null;
+  auditLoading.value = false;
+  auditReplaying.value = false;
+  auditError.value = "";
 });
 
 const defaultTrustedProxyCidrs = "127.0.0.1/32\n::1/128";
@@ -214,6 +234,7 @@ async function loadAdmin(): Promise<void> {
     keyPayload,
     configPayload,
     auditPayload,
+    auditHealthPayload,
   ] = await Promise.all([
     request<{ checks: CheckItem[] }>("/api/admin/system/check"),
     request<Record<string, unknown>>("/api/admin/mijia/account"),
@@ -223,6 +244,10 @@ async function loadAdmin(): Promise<void> {
     request<ApiList<ApiKeyItem>>("/api/admin/api-keys"),
     request<ApiList<Record<string, unknown>>>("/api/admin/config"),
     request<ApiList<Record<string, unknown>>>("/api/admin/audit?limit=50"),
+    request<AuditQueueHealth>("/api/admin/audit/health").catch((error) => {
+      if (isAuthed.value) auditError.value = errorMessage(error, "审计队列状态读取失败，请刷新重试");
+      return null;
+    }),
   ]);
   if (!isAuthed.value) return;
   checks.value = checkPayload.checks;
@@ -233,6 +258,8 @@ async function loadAdmin(): Promise<void> {
   apiKeys.value = keyPayload.items;
   configs.value = configPayload.items;
   audits.value = auditPayload.items;
+  auditHealth.value = auditHealthPayload;
+  if (auditHealthPayload) auditError.value = "";
   syncProxyCidrsForm();
 }
 
@@ -397,10 +424,66 @@ async function refreshSavedData(): Promise<void> {
 
 async function refreshAuditData(): Promise<void> {
   try {
-    const payload = await request<ApiList<Record<string, unknown>>>("/api/admin/audit?limit=50");
-    if (isAuthed.value) audits.value = payload.items;
+    await fetchAuditData();
   } catch (error) {
     ElMessage.warning(`操作已成功，但审计刷新失败，请刷新重试：${errorMessage(error, "网络异常")}`);
+  }
+}
+
+async function fetchAuditData(): Promise<void> {
+  if (!isAuthed.value) return;
+  const sequence = ++auditReadSequence;
+  auditLoading.value = true;
+  try {
+    const [records, queue] = await Promise.all([
+      request<ApiList<Record<string, unknown>>>("/api/admin/audit?limit=50"),
+      request<AuditQueueHealth>("/api/admin/audit/health"),
+    ]);
+    if (!isAuthed.value || sequence !== auditReadSequence) return;
+    audits.value = records.items;
+    auditHealth.value = queue;
+    auditError.value = "";
+  } finally {
+    if (sequence === auditReadSequence) auditLoading.value = false;
+  }
+}
+
+async function refreshAuditPage(): Promise<void> {
+  if (auditLoading.value || auditReplaying.value) return;
+  auditError.value = "";
+  const generation = auditGeneration;
+  try { await fetchAuditData(); }
+  catch (error) {
+    if (generation !== auditGeneration || !isAuthed.value) return;
+    auditError.value = errorMessage(error, "审计刷新失败，请重试");
+    ElMessage.error(auditError.value);
+  }
+}
+
+async function replayAudit(): Promise<void> {
+  if (!isAuthed.value || auditReplaying.value || auditLoading.value) return;
+  const generation = auditGeneration;
+  auditReplaying.value = true;
+  auditError.value = "";
+  try {
+    const result = await request<AuditReplayResult>("/api/admin/audit/replay", { method: "POST", body: "{}" });
+    if (generation !== auditGeneration || !isAuthed.value) return;
+    auditHealth.value = { pending: result.pending, invalid: result.invalid, unavailable: result.unavailable };
+    const message = `已补写 ${result.delivered} 条审计，待补写 ${result.pending} 条，无效 ${result.invalid} 条，历史未能保存 ${result.unavailable} 条`;
+    if (result.pending || result.invalid || result.unavailable) ElMessage.warning(message);
+    else ElMessage.success(message);
+    try { await fetchAuditData(); }
+    catch (error) {
+      if (generation !== auditGeneration || !isAuthed.value) return;
+      auditError.value = `补写结果已返回，但审计刷新失败：${errorMessage(error, "请刷新重试")}`;
+      ElMessage.warning(auditError.value);
+    }
+  } catch (error) {
+    if (generation !== auditGeneration || !isAuthed.value) return;
+    auditError.value = errorMessage(error, "审计补写失败，请重试");
+    ElMessage.error(auditError.value);
+  } finally {
+    if (generation === auditGeneration) auditReplaying.value = false;
   }
 }
 
@@ -754,6 +837,8 @@ onBeforeUnmount(() => {
           :homes="homes"
           :syncing="syncing"
           :pending-ids="pendingDeviceIds"
+          :request="request"
+          :control-memory="deviceControlMemory"
           @sync="syncMijia"
           @update-device="updateDevice"
           @auto-save-access="autoSaveDeviceAccess"
@@ -766,6 +851,9 @@ onBeforeUnmount(() => {
           :api-base-url="apiBaseUrl"
           :one-time-api-key="oneTimeApiKey"
           :pending-ids="pendingSceneIds"
+          :request="request"
+          :control-memory="sceneControlMemory"
+          @check-devices="selectPage('devices')"
           @auto-save-executable="autoSaveSceneExecutable"
           @auto-save-hidden="autoSaveSceneHidden"
         />
@@ -803,7 +891,7 @@ onBeforeUnmount(() => {
           :saving="savingConfig"
           @set-config="setConfig"
         />
-        <AuditView v-else-if="activeMenu === 'audit'" :audits="audits" />
+        <AuditView v-else-if="activeMenu === 'audit'" :audits="audits" :health="auditHealth" :loading="auditLoading" :replaying="auditReplaying" :error="auditError" @refresh="refreshAuditPage" @replay="replayAudit" />
         <section v-else class="placeholder-panel">
           <el-empty description="暂未配置页面" />
         </section>

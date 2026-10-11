@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 from mijiaAPI_V2.domain.exceptions import (
     DeviceNotFoundError,
     ExecutionUnknownError,
+    MijiaAPIException,
     PropertyReadOnlyError,
     ValidationError,
 )
@@ -43,6 +44,42 @@ def normalize_property_requests(requests: List[Dict[str, Any]]) -> List[Dict[str
             }
         )
     return normalized
+
+
+def _read_property_identity(item: Dict[str, Any]) -> tuple[str, int, int]:
+    if not isinstance(item, dict):
+        raise ValidationError("属性读取请求必须为对象")
+    did = item.get("did", item.get("device_id"))
+    if "did" in item and "device_id" in item and str(item["did"]) != str(item["device_id"]):
+        raise ValidationError("did 与 device_id 不一致")
+    if type(did) not in (str, int) or not str(did).strip():
+        raise ValidationError("属性读取必须包含 did")
+    for field in ("siid", "piid"):
+        if type(item.get(field)) is not int or item[field] <= 0:
+            raise ValidationError(f"{field} 必须为正整数")
+    return str(did), item["siid"], item["piid"]
+
+
+def _confirmed_property_reads(
+    response: Any, identities: List[tuple[str, int, int]]
+) -> Dict[tuple[str, int, int], Dict[str, Any]]:
+    if not isinstance(response, list) or len(response) != len(identities):
+        raise MijiaAPIException("属性读取响应不完整，无法确认实时状态")
+    expected = set(identities)
+    confirmed: Dict[tuple[str, int, int], Dict[str, Any]] = {}
+    for item in response:
+        try:
+            identity = _read_property_identity(item)
+        except ValidationError as exc:
+            raise MijiaAPIException("属性读取响应缺少设备或属性身份") from exc
+        if identity not in expected or identity in confirmed:
+            raise MijiaAPIException("属性读取响应身份不匹配，无法确认实时状态")
+        if type(item.get("code")) is not int:
+            raise MijiaAPIException("属性读取响应缺少有效错误码")
+        if item["code"] == 0 and "value" not in item:
+            raise MijiaAPIException("属性读取成功响应缺少值，无法确认实时状态")
+        confirmed[identity] = {**item, "did": identity[0]}
+    return confirmed
 
 
 def _ordered_action_params(action: DeviceAction, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -294,4 +331,12 @@ class DeviceService:
         Returns:
             结果列表，每个结果包含 code、siid、piid、value
         """
-        return self._device_repo.batch_get_properties(requests, credential)
+        identities = [_read_property_identity(request) for request in requests]
+        unique = list(dict.fromkeys(identities))
+        results: Dict[tuple[str, int, int], Dict[str, Any]] = {}
+        for offset in range(0, len(unique), 50):
+            group = unique[offset : offset + 50]
+            batch = [{"did": did, "siid": siid, "piid": piid} for did, siid, piid in group]
+            response = self._device_repo.batch_get_properties(batch, credential)
+            results.update(_confirmed_property_reads(response, group))
+        return [dict(results[identity]) for identity in identities]

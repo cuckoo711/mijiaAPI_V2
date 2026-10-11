@@ -35,14 +35,25 @@ class RegistryMixin:
                         rooms_json = excluded.rooms_json,
                         last_synced_at = excluded.last_synced_at
                     """,
-                    (str(home["id"]), str(home.get("name", "")), str(home.get("uid", "")),
-                     json.dumps(home.get("rooms", []), ensure_ascii=False), now),
+                    (
+                        str(home["id"]),
+                        str(home.get("name", "")),
+                        str(home.get("uid", "")),
+                        json.dumps(home.get("rooms", []), ensure_ascii=False),
+                        now,
+                    ),
                 )
             if home_ids:
                 placeholders = ",".join("?" for _ in home_ids)
-                conn.execute(f"DELETE FROM home_registry WHERE id NOT IN ({placeholders})", home_ids)
-                conn.execute(f"DELETE FROM device_registry WHERE home_id NOT IN ({placeholders})", home_ids)
-                conn.execute(f"DELETE FROM scene_registry WHERE home_id NOT IN ({placeholders})", home_ids)
+                conn.execute(
+                    f"DELETE FROM home_registry WHERE id NOT IN ({placeholders})", home_ids
+                )
+                conn.execute(
+                    f"DELETE FROM device_registry WHERE home_id NOT IN ({placeholders})", home_ids
+                )
+                conn.execute(
+                    f"DELETE FROM scene_registry WHERE home_id NOT IN ({placeholders})", home_ids
+                )
             else:
                 conn.execute("DELETE FROM home_registry")
                 conn.execute("DELETE FROM device_registry")
@@ -69,17 +80,31 @@ class RegistryMixin:
                         spec_json = COALESCE(excluded.spec_json, device_registry.spec_json),
                         last_synced_at = excluded.last_synced_at
                     """,
-                    (str(device.get("id") or uuid.uuid4()), did, slug,
-                     str(device.get("name", "")), str(device.get("model", "")),
-                     str(device.get("home_id", "")), device.get("room_id"),
-                     str(device.get("status", "unknown")),
-                     json.dumps(device, ensure_ascii=False, default=str),
-                     json.dumps(device.get("spec"), ensure_ascii=False, default=str)
-                     if device.get("spec") is not None else None, now),
+                    (
+                        str(device.get("id") or uuid.uuid4()),
+                        did,
+                        slug,
+                        str(device.get("name", "")),
+                        str(device.get("model", "")),
+                        str(device.get("home_id", "")),
+                        device.get("room_id"),
+                        str(device.get("status", "unknown")),
+                        json.dumps(device, ensure_ascii=False, default=str),
+                        (
+                            json.dumps(device.get("spec"), ensure_ascii=False, default=str)
+                            if device.get("spec") is not None
+                            else None
+                        ),
+                        now,
+                    ),
                 )
-            self._prune_registry_rows(conn, table="device_registry", id_column="miot_did",
-                                      home_ids=reconciled_device_home_ids,
-                                      seen_ids=[str(item["did"]) for item in devices])
+            self._prune_registry_rows(
+                conn,
+                table="device_registry",
+                id_column="miot_did",
+                home_ids=reconciled_device_home_ids,
+                seen_ids=[str(item["did"]) for item in devices],
+            )
 
             for scene in scenes:
                 conn.execute(
@@ -92,13 +117,22 @@ class RegistryMixin:
                         name = excluded.name, home_id = excluded.home_id,
                         raw_json = excluded.raw_json, last_synced_at = excluded.last_synced_at
                     """,
-                    (str(scene.get("id") or uuid.uuid4()), str(scene["scene_id"]),
-                     str(scene.get("name", "")), str(scene.get("home_id", "")),
-                     json.dumps(scene, ensure_ascii=False, default=str), now),
+                    (
+                        str(scene.get("id") or uuid.uuid4()),
+                        str(scene["scene_id"]),
+                        str(scene.get("name", "")),
+                        str(scene.get("home_id", "")),
+                        json.dumps(scene, ensure_ascii=False, default=str),
+                        now,
+                    ),
                 )
-            self._prune_registry_rows(conn, table="scene_registry", id_column="miot_scene_id",
-                                      home_ids=reconciled_scene_home_ids,
-                                      seen_ids=[str(item["scene_id"]) for item in scenes])
+            self._prune_registry_rows(
+                conn,
+                table="scene_registry",
+                id_column="miot_scene_id",
+                home_ids=reconciled_scene_home_ids,
+                seen_ids=[str(item["scene_id"]) for item in scenes],
+            )
 
     def clear_synced_registries(self) -> dict[str, int]:
         """删除所有从米家同步来的家庭 / 设备 / 场景。
@@ -308,6 +342,24 @@ class RegistryMixin:
             for row in rows
         ]
 
+    def get_home(self, home_id: str) -> dict[str, Any]:
+        """Read the synced home owner, including for pre-owner scene rows."""
+
+        with self._database.connect() as conn:
+            row = conn.execute(
+                "SELECT id, name, uid, rooms_json, last_synced_at FROM home_registry WHERE id = ?",
+                (home_id,),
+            ).fetchone()
+        if row is None:
+            raise KeyError(f"Home not found: {home_id}")
+        return {
+            "id": row["id"],
+            "name": row["name"],
+            "uid": row["uid"],
+            "rooms": json.loads(row["rooms_json"]),
+            "last_synced_at": row["last_synced_at"],
+        }
+
     def list_devices(
         self,
         include_hidden: bool = False,
@@ -331,17 +383,13 @@ class RegistryMixin:
         if include_spec:
             columns += ", spec_json"
         with self._database.connect() as conn:
-            rows = conn.execute(
-                f"""
+            rows = conn.execute(f"""
                 SELECT {columns} FROM device_registry
                 {where}
                 ORDER BY home_id, group_name, COALESCE(alias, name), name
-                """
-            ).fetchall()
+                """).fetchall()
         return [
-            self._device_from_row(
-                row, include_spec=include_spec, include_raw=include_raw
-            )
+            self._device_from_row(row, include_spec=include_spec, include_raw=include_raw)
             for row in rows
         ]
 
@@ -349,8 +397,10 @@ class RegistryMixin:
         """Get a device by slug, internal id, or original did."""
 
         with self._database.connect() as conn:
-            query = "SELECT * FROM device_registry WHERE id = ?" if internal_only else (
-                "SELECT * FROM device_registry WHERE slug = ? OR id = ? OR miot_did = ?"
+            query = (
+                "SELECT * FROM device_registry WHERE id = ?"
+                if internal_only
+                else ("SELECT * FROM device_registry WHERE slug = ? OR id = ? OR miot_did = ?")
             )
             params = (device_slug_or_id,) if internal_only else (device_slug_or_id,) * 3
             row = conn.execute(query, params).fetchone()
@@ -403,8 +453,10 @@ class RegistryMixin:
         """Get a scene by internal id or original scene id."""
 
         with self._database.connect() as conn:
-            query = "SELECT * FROM scene_registry WHERE id = ?" if internal_only else (
-                "SELECT * FROM scene_registry WHERE id = ? OR miot_scene_id = ?"
+            query = (
+                "SELECT * FROM scene_registry WHERE id = ?"
+                if internal_only
+                else ("SELECT * FROM scene_registry WHERE id = ? OR miot_scene_id = ?")
             )
             params = (scene_id,) if internal_only else (scene_id,) * 2
             row = conn.execute(query, params).fetchone()
@@ -465,9 +517,7 @@ class RegistryMixin:
         if include_raw:
             payload["raw"] = json.loads(row["raw_json"]) if row["raw_json"] else {}
         if include_spec:
-            payload["spec"] = (
-                json.loads(row["spec_json"]) if row["spec_json"] else None
-            )
+            payload["spec"] = json.loads(row["spec_json"]) if row["spec_json"] else None
         return payload
 
     def _unique_slug(self, conn: Any, base: str, current_did: str) -> str:

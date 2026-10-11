@@ -302,12 +302,13 @@ class MijiaAPI:
         """
         return self._scene_service.get_scenes(home_id, self._credential, owner_uid)
 
-    def execute_scene(self, scene_id: str, home_id: str) -> bool:
+    def execute_scene(self, scene_id: str, home_id: str, owner_uid: Optional[str] = None) -> bool:
         """执行智能
 
         Args:
             scene_id: 智能ID
             home_id: 家庭ID
+            owner_uid: 共享家庭拥有者用户ID，省略时使用当前用户
 
         Returns:
             是否成功
@@ -316,7 +317,11 @@ class MijiaAPI:
             TokenExpiredError: 凭据已过期
             NetworkError: 网络错误
         """
-        return self._scene_service.execute_scene(scene_id, home_id, self._credential)
+        if owner_uid is None:
+            return self._scene_service.execute_scene(scene_id, home_id, self._credential)
+        return self._scene_service.execute_scene(
+            scene_id, home_id, self._credential, owner_uid=owner_uid
+        )
 
     def get_device_statistics(self, home_id: str) -> Dict[str, Any]:
         """获取设备统计信息
@@ -717,20 +722,39 @@ class AsyncMijiaAPI:
             self._scene_service.get_scenes, home_id, self._credential, owner_uid
         )
 
-    async def execute_scene(self, scene_id: str, home_id: str) -> bool:
+    async def execute_scene(
+        self, scene_id: str, home_id: str, owner_uid: Optional[str] = None
+    ) -> bool:
         """异步执行智能
 
         Args:
             scene_id: 智能ID
             home_id: 家庭ID
+            owner_uid: 共享家庭拥有者用户ID，省略时使用当前用户
 
         Returns:
             是否成功
         """
         import asyncio
 
+        if owner_uid is None:
+            return await asyncio.to_thread(
+                self._scene_service.execute_scene, scene_id, home_id, self._credential
+            )
         return await asyncio.to_thread(
-            self._scene_service.execute_scene, scene_id, home_id, self._credential
+            self._scene_service.execute_scene,
+            scene_id,
+            home_id,
+            self._credential,
+            owner_uid=owner_uid,
+        )
+
+    async def get_device_properties(self, requests: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """异步分组读取属性，并验证每项读结果所属设备和属性。"""
+        import asyncio
+
+        return await asyncio.to_thread(
+            self._device_service.batch_get_properties, requests, self._credential
         )
 
     async def get_device_statistics(self, home_id: str) -> Dict[str, Any]:

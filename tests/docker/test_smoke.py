@@ -374,3 +374,150 @@ def test_failed_run_still_records_phase_and_writes_report_without_secrets(monkey
     assert report["cleanup_errors"] == []
     assert "password" not in report_text and "synthetic-session" not in report_text
     assert "mk_live_" not in report_text
+
+
+def test_fixture_exec_requires_its_exact_owned_data_mount_and_app_uid(monkeypatch):
+    docker = smoke.DockerRun("synthetic-image")
+    commands = []
+    container, volume = f"{docker.prefix}-server", f"{docker.prefix}-data"
+    monkeypatch.setattr(
+        docker,
+        "owned",
+        lambda kind, name: {
+            "Mounts": [
+                {"Type": "volume", "Name": volume, "Destination": "/data"},
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        docker,
+        "command",
+        lambda *args: commands.append(args) or subprocess.CompletedProcess(args, 0, "fixture", ""),
+    )
+    assert docker.exec_python(container, volume, "print('fixture')") == "fixture"
+    assert commands[0][:5] == ("exec", "--user", "1000:1000", container, "python")
+    with pytest.raises(smoke.SmokeError, match="registered smoke data volume"):
+        docker.exec_python(container, "foreign-volume", "must never execute")
+    assert len(commands) == 1
+
+
+def test_audit_recovery_smoke_uses_real_permission_denials_sqlite_and_queue(monkeypatch, tmp_path):
+    from server.rate_limit import SlidingWindowRateLimiter
+    from server.routers import admin_auth
+    from tests.unit.server.test_app import make_client_with_store
+
+    monkeypatch.setattr(
+        admin_auth,
+        "ADMIN_AUTH_RATE_LIMITER",
+        SlidingWindowRateLimiter(max_requests=20, window_seconds=300),
+    )
+    client, store = make_client_with_store(tmp_path)
+    store.settings.web_dist_dir.mkdir()
+    (store.settings.web_dist_dir / "index.html").write_text('<div id="app"></div>')
+    store.create_initial_admin("smoke-admin", "strong-smoke-password")
+    assert (
+        client.post(
+            "/api/admin/auth/login",
+            json={
+                "username": "smoke-admin",
+                "password": "strong-smoke-password",
+            },
+        ).status_code
+        == 200
+    )
+    sdk_calls = []
+
+    def refuse_sdk(*args, **kwargs):
+        sdk_calls.append(True)
+        raise AssertionError("Smoke permission probes must never enter Xiaomi SDK")
+
+    monkeypatch.setattr(client.app.state.runtime, "_api_with_generation", refuse_sdk)
+
+    class LocalHttp(smoke.HttpClient):
+        def cookie(self, name):
+            return client.cookies.get(name, "")
+
+        def request(self, method, path, payload=None, headers=None):
+            response = client.request(method, path, json=payload, headers=headers)
+            return smoke.Response(response.status_code, response.json(), response.headers)
+
+    docker = smoke.DockerRun("synthetic-image")
+    container, volume = f"{docker.prefix}-server", f"{docker.prefix}-data"
+    metadata = {"Mounts": [{"Type": "volume", "Name": volume, "Destination": "/data"}]}
+    monkeypatch.setattr(docker, "owned", lambda kind, name: metadata)
+    executed = []
+
+    def local_fixture(*args):
+        assert args[:5] == ("exec", "--user", "1000:1000", container, "python")
+        script = args[-1]
+        executed.append(script)
+        script = (
+            script.replace(
+                "store = ServerStore(ServerSettings.from_env())",
+                "store = TEST_STORE",
+            )
+            .replace(
+                "'/data/server/server.sqlite3'",
+                repr(str(store.settings.database_path)),
+            )
+            .replace("'/data/credential.json'", repr(str(store.settings.credential_path)))
+        )
+        from contextlib import redirect_stdout
+        from io import StringIO
+
+        output = StringIO()
+        with redirect_stdout(output):
+            exec(script, {"TEST_STORE": store})
+        return subprocess.CompletedProcess(args, 0, output.getvalue(), "")
+
+    monkeypatch.setattr(docker, "command", local_fixture)
+    run = smoke.Smoke(docker)
+    run.audit_recovery(container, volume, LocalHttp("http://synthetic-local-asgi"))
+    assert sdk_calls == []
+    assert run.metadata["queued_refusal_receipts_recovered"] == 2
+    assert run.metadata["manual_audit_replay_delivered"] == 2
+    events = store.list_audit(action="device.property.set")
+    assert len(events) == 2 and all(row["result"] == "failed" for row in events)
+    assert store.audit_status() == {"pending": 0, "invalid": 0, "unavailable": 0}
+    assert client.get("/readyz").status_code == 200
+    assert smoke.BLOCK_AUDIT_INSERTS in executed and smoke.UNBLOCK_AUDIT_INSERTS in executed
+    assert not store.settings.credential_path.exists()
+
+
+def test_failed_audit_probe_always_removes_its_insert_trigger(monkeypatch):
+    docker = smoke.DockerRun("synthetic-image")
+    scripts = []
+    monkeypatch.setattr(docker, "exec_python", lambda name, volume, script: scripts.append(script))
+
+    class FailingHttp:
+        def expect(self, method, path, *args, **kwargs):
+            return {"status": "ready"}
+
+        def csrf_headers(self):
+            return {"X-CSRF-Token": "synthetic"}
+
+        def request(self, *args, **kwargs):
+            return smoke.Response(200, {"success": True}, {})
+
+    with pytest.raises(smoke.SmokeError, match="did not refuse control"):
+        smoke.Smoke(docker).audit_recovery("owned-container", "owned-volume", FailingHttp())
+    assert scripts[-1] == smoke.UNBLOCK_AUDIT_INSERTS
+
+
+@pytest.mark.skipif(
+    __import__("os").name != "posix",
+    reason="Packaged probe requires Linux-style symlinks and modes",
+)
+def test_packaged_journal_probe_checks_real_posix_boundaries_as_unprivileged_user(
+    monkeypatch, capsys
+):
+    import os
+    from server.audit_journal import logger
+
+    # The container smoke runs this script as uid 1000. Host unit tests verify
+    # the same physical filesystem operations without requiring that uid.
+    monkeypatch.setattr(os, "getuid", lambda: 1000)
+    monkeypatch.setattr(logger, "disabled", logger.disabled)
+    exec(smoke.CHECK_JOURNAL_POSIX, {})
+    report = json.loads(capsys.readouterr().out)
+    assert all(report.values()) and len(report) == 4

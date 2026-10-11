@@ -1,5 +1,7 @@
 # API客户端参考
 
+本文描述 Python SDK。HTTP 管理员手动控制、操作回执、Cookie/CSRF 和审计恢复接口见 [API Server 开发启动](../开发指南/05-API-Server-开发启动.md#管理员手动控制与操作回执)。控制遇到 `ExecutionUnknownError` 时须先核对状态，不能自动重发，见 [异常处理](03-异常处理.md#executionunknownerror)。
+
 ## MijiaAPI（同步）
 
 ### 类定义

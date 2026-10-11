@@ -31,6 +31,101 @@ OWNER_LABEL = "io.mijia.docker-smoke.run"
 FIXTURE_USER = "synthetic-docker-smoke-user"
 ADMIN_COOKIE = "mijia_admin_session"
 CSRF_COOKIE = "mijia_csrf"
+DENIED_DEVICE_ID = "00000000-0000-4000-8000-000000000012"
+
+SEED_DENIED_DEVICE = """
+from pathlib import Path
+from server.config import ServerSettings
+from server.store import ServerStore
+assert not Path('/data/credential.json').exists(), 'Denial probe requires a credential-free test volume'
+store = ServerStore(ServerSettings.from_env())
+store.initialize()
+store.upsert_devices([{
+    'id': '00000000-0000-4000-8000-000000000012',
+    'did': 'synthetic-smoke-denied-device', 'name': 'synthetic denied device',
+    'model': 'synthetic.smoke.invalid', 'home_id': 'synthetic-smoke-home',
+}])
+store.update_device('00000000-0000-4000-8000-000000000012',
+                    {'hidden': True, 'access_mode': 'read'})
+"""
+
+SHOW_READONLY_DEVICE = """
+from server.config import ServerSettings
+from server.store import ServerStore
+store = ServerStore(ServerSettings.from_env())
+store.update_device('00000000-0000-4000-8000-000000000012',
+                    {'hidden': False, 'access_mode': 'read'})
+"""
+
+BLOCK_AUDIT_INSERTS = """
+import sqlite3
+with sqlite3.connect('/data/server/server.sqlite3') as connection:
+    connection.execute('''CREATE TRIGGER smoke_block_audit BEFORE INSERT ON audit_log
+                          BEGIN SELECT RAISE(ABORT, 'synthetic audit insert failure'); END''')
+"""
+
+UNBLOCK_AUDIT_INSERTS = """
+import sqlite3
+with sqlite3.connect('/data/server/server.sqlite3') as connection:
+    connection.execute('DROP TRIGGER IF EXISTS smoke_block_audit')
+"""
+
+CHECK_JOURNAL_POSIX = """
+from pathlib import Path
+from tempfile import TemporaryDirectory
+import json, os, stat, uuid
+from server.audit_journal import AuditJournal, logger
+from server.store import isoformat, utc_now
+logger.disabled = True
+assert os.name == 'posix'
+assert os.getuid() == 1000
+with TemporaryDirectory(prefix='mijia-journal-smoke-') as temporary:
+    base = Path(temporary)
+    journal = AuditJournal(base / 'real-data')
+    event = {
+        'id': str(uuid.uuid4()), 'occurred_at': isoformat(utc_now()),
+        'actor_type': 'system', 'actor_id': None, 'action': 'smoke.private-journal',
+        'source_ip': None, 'request_path': None, 'request_id': None,
+        'result': 'success', 'duration_ms': None, 'metadata': {},
+    }
+    journal.save(event)
+    assert stat.S_IMODE(journal.path.stat().st_mode) == 0o700
+    assert stat.S_IMODE((journal.path / (event['id'] + '.json')).stat().st_mode) == 0o600
+    outside = base / 'outside.txt'
+    outside.write_text('synthetic outside content')
+    linked_id = str(uuid.uuid4())
+    (journal.path / (linked_id + '.json')).symlink_to(outside)
+    try:
+        journal.save({**event, 'id': linked_id})
+    except OSError:
+        pass
+    else:
+        raise AssertionError('Audit file symlink was writable')
+    assert journal.get(linked_id) is None
+    assert outside.read_text() == 'synthetic outside content'
+    replayed = []
+    assert journal.replay(replayed.append)['delivered'] == 1
+    assert replayed == [event]
+    target = base / 'target'
+    target.mkdir()
+    alias = base / 'alias'
+    alias.symlink_to(target, target_is_directory=True)
+    queue_parent = base / 'queue-parent'
+    queue_parent.mkdir()
+    (queue_parent / 'audit-pending').symlink_to(target, target_is_directory=True)
+    for unsafe in (AuditJournal(alias), AuditJournal(queue_parent)):
+        try:
+            unsafe.save(event)
+        except OSError:
+            pass
+        else:
+            raise AssertionError('Audit directory symlink was writable')
+        assert unsafe.status()['invalid'] == 1
+        assert unsafe.replay(replayed.append)['delivered'] == 0
+    assert not any(target.iterdir())
+print(json.dumps({'private_modes': True, 'file_symlink_rejected': True,
+                  'queue_symlink_rejected': True, 'parent_symlink_rejected': True}))
+"""
 
 SEED_CREDENTIAL = """
 from datetime import datetime, timedelta
@@ -375,6 +470,21 @@ class DockerRun:
             )
         return self.command(*arguments, self.image_id, "-c", script).stdout
 
+    def exec_python(self, name: str, volume: str, script: str) -> str:
+        """Run a fixture as the app user only in this run's container and volume."""
+        info = self.owned("container", name)
+        self.owned("volume", volume)
+        require(
+            any(
+                mount.get("Type") == "volume"
+                and mount.get("Name") == volume
+                and mount.get("Destination") == "/data"
+                for mount in info.get("Mounts", [])
+            ),
+            "Fixture container is not using its registered smoke data volume",
+        )
+        return self.command("exec", "--user", "1000:1000", name, "python", "-c", script).stdout
+
     def private_request(
         self, name: str, volume: str, path: str, method: str = "GET", payload: Any = None
     ) -> Response:
@@ -680,6 +790,83 @@ class Smoke:
         self.status(client, revoked["key"], accepted=False)
         return replacement, [old["key"], revoked["key"]]
 
+    def audit_recovery(self, container: str, volume: str, client: HttpClient) -> None:
+        """Verify recovery using requests refused before any SDK operation."""
+        ready = client.expect("GET", "/readyz")
+        require(ready.get("status") == "ready", "Fresh smoke server is not dependency-ready")
+        self.docker.exec_python(container, volume, SEED_DENIED_DEVICE)
+        self.docker.exec_python(container, volume, BLOCK_AUDIT_INSERTS)
+        operation_ids = []
+        try:
+            for hidden in (True, False):
+                if not hidden:
+                    self.docker.exec_python(container, volume, SHOW_READONLY_DEVICE)
+                path = f"/api/admin/devices/{DENIED_DEVICE_ID}/properties"
+                response = client.request(
+                    "POST", path, {"siid": 2, "piid": 1, "value": False}, client.csrf_headers()
+                )
+                require(
+                    response.status == 403
+                    and (response.body.get("error") or {}).get("code") == "FORBIDDEN",
+                    "Synthetic hidden/readonly device did not refuse control before SDK dispatch",
+                )
+                require(
+                    response.headers.get("X-Audit-Delivery") == "queued",
+                    "Refusal audit was not durably queued",
+                )
+                operation_id = response.headers.get("X-Operation-ID", "")
+                require(bool(operation_id), "Refused operation has no receipt id")
+                uuid.UUID(operation_id)
+                operation_ids.append(operation_id)
+                receipt = client.expect("GET", f"/api/admin/operations/{operation_id}")
+                require(
+                    receipt.get("delivery") == "queued"
+                    and receipt.get("result") == "failed"
+                    and receipt.get("metadata", {}).get("device_id") == DENIED_DEVICE_ID,
+                    "Queued receipt did not preserve the refused operation",
+                )
+            degraded = client.expect("GET", "/readyz", 503)
+            require(
+                degraded.get("checks", {}).get("audit") is False,
+                "Pending audit did not degrade readiness",
+            )
+            client.expect("GET", "/healthz")
+            health = client.expect("GET", "/api/admin/audit/health")
+            require(
+                health.get("pending", 0) >= 2 and health.get("unavailable") == 0,
+                "Audit queue is not durable",
+            )
+        finally:
+            self.docker.exec_python(container, volume, UNBLOCK_AUDIT_INSERTS)
+        replayed = client.expect("POST", "/api/admin/audit/replay", headers=client.csrf_headers())
+        require(
+            replayed.get("pending") == 0
+            and replayed.get("invalid") == 0
+            and replayed.get("unavailable") == 0,
+            "Audit replay did not recover a clean queue",
+        )
+        for operation_id in operation_ids:
+            receipt = client.expect("GET", f"/api/admin/operations/{operation_id}")
+            require(
+                receipt.get("delivery") == "stored" and receipt.get("result") == "failed",
+                "Recovered receipt changed outcome",
+            )
+        duplicate_probe = (
+            "import json, sqlite3\n"
+            f"ids={operation_ids!r}\n"
+            "with sqlite3.connect('/data/server/server.sqlite3') as connection:\n"
+            "    counts=[connection.execute('SELECT COUNT(*) FROM audit_log WHERE id = ?', (event_id,)).fetchone()[0] for event_id in ids]\n"
+            "print(json.dumps(counts))\n"
+        )
+        counts = json.loads(self.docker.exec_python(container, volume, duplicate_probe))
+        require(counts == [1, 1], "Audit replay duplicated or lost a refused operation")
+        require(
+            client.expect("GET", "/readyz").get("status") == "ready", "Readiness did not recover"
+        )
+        self.metadata["queued_refusal_receipts_recovered"] = len(operation_ids)
+        # The 10-second background recovery may win the race after trigger removal.
+        self.metadata["manual_audit_replay_delivered"] = replayed.get("delivered", 0)
+
     def execute(self) -> None:
         with self.phase("image-and-engine"):
             self.docker.prepare()
@@ -693,6 +880,21 @@ class Smoke:
         with self.phase("api-key-lifecycle"):
             key, rejected = self.key_lifecycle(client)
             self.check_persisted(client, key, rejected)
+        with self.phase("queued-audit-replay-and-readiness"):
+            self.audit_recovery(container, volume, client)
+        with self.phase("packaged-audit-journal-posix-boundaries"):
+            verified = json.loads(self.docker.exec_python(container, volume, CHECK_JOURNAL_POSIX))
+            require(
+                verified
+                == {
+                    "private_modes": True,
+                    "file_symlink_rejected": True,
+                    "queue_symlink_rejected": True,
+                    "parent_symlink_rejected": True,
+                },
+                "Packaged journal failed POSIX private recovery boundaries",
+            )
+            self.metadata["packaged_journal_posix_boundaries"] = verified
         with self.phase("encrypted-credential-fixture"):
             self.docker.command(
                 "exec", "--user", "1000:1000", container, "python", "-c", SEED_CREDENTIAL

@@ -13,6 +13,7 @@ from typing import Any, Optional
 
 from server.config import ServerSettings
 from server.db import ServerDatabase
+from server.audit_journal import AuditJournal, prepare_audit_event
 
 DEFAULT_API_KEY_POLICY: dict[str, list[str]] = {
     "homes": [],
@@ -21,6 +22,10 @@ DEFAULT_API_KEY_POLICY: dict[str, list[str]] = {
 }
 
 SYSTEM_CHECK_METADATA: dict[str, dict[str, str]] = {
+    "audit_storage": {
+        "label": "审计存储",
+        "description": "确认审计已写入数据库，故障期间的持久队列已完成补写。",
+    },
     "server": {
         "label": "服务进程",
         "description": "确认 FastAPI 服务进程正在运行并能响应管理台请求。",
@@ -139,6 +144,7 @@ class ServerStore(AdminAuthMixin, ApiKeyMixin, RegistryMixin):
     def __init__(self, settings: ServerSettings):
         self._settings = settings
         self._database = ServerDatabase(settings)
+        self._audit_journal = AuditJournal(settings.data_dir)
         self._config_map_cache: Optional[dict[str, Any]] = None
         self._config_map_cache_at: float = 0.0
         self._config_map_lock = threading.Lock()
@@ -161,6 +167,7 @@ class ServerStore(AdminAuthMixin, ApiKeyMixin, RegistryMixin):
         """Initialize persistent storage."""
 
         self._database.initialize()
+        self.flush_pending_audit()
         self.purge_expired_sessions()
         try:
             self.purge_expired_audit()
@@ -273,11 +280,12 @@ class ServerStore(AdminAuthMixin, ApiKeyMixin, RegistryMixin):
         request_id: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None,
         duration_ms: Optional[int] = None,
+        event_id: Optional[str] = None,
     ) -> dict[str, Any]:
         """Write an audit event."""
 
         event = {
-            "id": str(uuid.uuid4()),
+            "id": str(uuid.UUID(event_id)) if event_id else str(uuid.uuid4()),
             "occurred_at": isoformat(utc_now()),
             "actor_type": actor_type,
             "actor_id": actor_id,
@@ -289,10 +297,35 @@ class ServerStore(AdminAuthMixin, ApiKeyMixin, RegistryMixin):
             "request_id": request_id,
             "metadata": metadata or {},
         }
+        try:
+            event = prepare_audit_event(event)
+            self._persist_audit_event(event)
+        except Exception as exc:
+            from server.logging_utils import get_server_logger
+
+            logger = get_server_logger(__name__)
+            try:
+                self._audit_journal.save(event)
+                logger.warning(
+                    "audit event %s queued for recovery (%s)", event["id"], type(exc).__name__
+                )
+                event["delivery"] = "queued"
+            except Exception as journal_error:
+                self._audit_journal.record_unavailable()
+                logger.error(
+                    "audit event %s storage and recovery unavailable (%s, %s)",
+                    event["id"],
+                    type(exc).__name__,
+                    type(journal_error).__name__,
+                )
+                event["delivery"] = "unavailable"
+        return event
+
+    def _persist_audit_event(self, event: dict[str, Any]) -> None:
         with self._database.connect() as conn:
             conn.execute(
                 """
-                INSERT INTO audit_log(
+                INSERT OR IGNORE INTO audit_log(
                     id, occurred_at, actor_type, actor_id, action, source_ip,
                     request_path, result, duration_ms, request_id, metadata_json
                 )
@@ -312,7 +345,49 @@ class ServerStore(AdminAuthMixin, ApiKeyMixin, RegistryMixin):
                     json.dumps(event["metadata"], ensure_ascii=False, default=str),
                 ),
             )
-        return event
+
+    def flush_pending_audit(self) -> dict[str, int]:
+        try:
+            return self._audit_journal.replay(self._persist_audit_event)
+        except Exception as exc:
+            from server.logging_utils import get_server_logger
+
+            get_server_logger(__name__).warning(
+                "audit recovery unavailable (%s)", type(exc).__name__
+            )
+            status = self.audit_status()
+            return {"delivered": 0, **status, "invalid": max(1, status["invalid"])}
+
+    def audit_status(self) -> dict[str, int]:
+        try:
+            return self._audit_journal.status()
+        except Exception as exc:
+            from server.logging_utils import get_server_logger
+
+            get_server_logger(__name__).warning("audit status unavailable (%s)", type(exc).__name__)
+            return {
+                "pending": 0,
+                "invalid": 1,
+                "unavailable": self._audit_journal.unavailable_count,
+            }
+
+    def get_audit_event(self, event_id: str) -> dict[str, Any]:
+        database_error = None
+        try:
+            with self._database.connect() as conn:
+                row = conn.execute("SELECT * FROM audit_log WHERE id = ?", (event_id,)).fetchone()
+            if row is not None:
+                result = dict(row)
+                result["metadata"] = json.loads(result.pop("metadata_json"))
+                return {**result, "delivery": "stored"}
+        except Exception as exc:
+            database_error = exc
+        pending = self._audit_journal.get(event_id)
+        if pending is None:
+            if database_error is not None:
+                raise database_error
+            raise KeyError("Operation not found")
+        return {**pending, "delivery": "queued"}
 
     def list_audit(self, limit: int = 100, action: Optional[str] = None) -> list[dict[str, Any]]:
         """List recent audit events."""
@@ -381,6 +456,14 @@ class ServerStore(AdminAuthMixin, ApiKeyMixin, RegistryMixin):
         )
         checks.append(self._check_path_writable("data_dir", self._settings.data_dir))
         checks.append(self._check_sqlite())
+        audit = self.audit_status()
+        checks.append(
+            {
+                "key": "audit_storage",
+                "status": "warn" if any(audit.values()) else "pass",
+                "message": f"待补写 {audit['pending']}，异常记录 {audit['invalid']}，存储不可用 {audit['unavailable']}",
+            }
+        )
         checks.append(
             {
                 "key": "admin_configured",
@@ -411,9 +494,7 @@ class ServerStore(AdminAuthMixin, ApiKeyMixin, RegistryMixin):
                 "key": "api_key_exists",
                 "status": "pass" if api_keys else "warn",
                 "message": (
-                    "At least one API key exists"
-                    if api_keys
-                    else "No API key has been created"
+                    "At least one API key exists" if api_keys else "No API key has been created"
                 ),
             }
         )

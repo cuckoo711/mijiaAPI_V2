@@ -1,5 +1,8 @@
 export type ApiList<T> = { items: T[] };
 
+export type AuditQueueHealth = { pending: number; invalid: number; unavailable: number };
+export type AuditReplayResult = AuditQueueHealth & { delivered: number };
+
 export type CheckItem = {
   key: string;
   label: string;

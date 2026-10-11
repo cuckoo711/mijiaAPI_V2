@@ -166,7 +166,8 @@ def test_sync_continues_when_one_home_scene_sync_fails(tmp_path: Path, monkeypat
             "kind": "scenes",
             "home_id": "home-bad",
             "home_name": "异常家庭",
-            "message": "homeId is not home",
+            "message": "该家庭的场景读取失败，已保留上次同步数据",
+            "error_type": "RuntimeError",
         }
     ]
 

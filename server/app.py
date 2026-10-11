@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
+import asyncio
+import sqlite3
+import uuid
+import re
 from datetime import datetime, timezone
 from ipaddress import ip_address, ip_network
 from pathlib import Path
@@ -33,13 +37,14 @@ from server.admin_csrf import (
 )
 from server.admin_session_cookie import ADMIN_SESSION_COOKIE_NAME, optional_bearer_token
 from server.config import ServerSettings
+from server.logging_utils import get_server_logger
 from server.mijia_runtime import (
     AccountChangedError,
     LoginJobManager,
     MijiaRuntime,
     SyncInProgressError,
 )
-from server.routers import admin_auth, admin_mijia, admin_resources, api_v1
+from server.routers import admin_auth, admin_controls, admin_mijia, admin_resources, api_v1
 from server.store import AuthenticationFailedError, ServerStore
 from server.updater import UpdateChecker
 
@@ -50,6 +55,25 @@ OPENAPI_JSON_ROUTE = "/api/v1/openapi.json"
 _ASSETS_CACHE_CONTROL = "public, max-age=31536000, immutable"
 # index.html must revalidate so deploys pick up new hashed asset references.
 _INDEX_CACHE_CONTROL = "no-cache"
+logger = get_server_logger(__name__)
+
+
+def _database_ready(store: ServerStore) -> bool:
+    """Verify writes with a rolled-back probe, without adding configuration."""
+    try:
+        with store._database.connect() as connection:
+            connection.execute("SAVEPOINT readiness_probe")
+            try:
+                connection.execute(
+                    "INSERT INTO runtime_config(key, value, source, updated_at) VALUES (?, 'null', 'readiness', ?)",
+                    (f"__ready_{uuid.uuid4().hex}", datetime.now(timezone.utc).isoformat()),
+                )
+            finally:
+                connection.execute("ROLLBACK TO readiness_probe")
+                connection.execute("RELEASE readiness_probe")
+        return True
+    except sqlite3.Error:
+        return False
 
 
 class CachedAssetsStaticFiles(StaticFiles):
@@ -76,6 +100,7 @@ def _json_error(
 ) -> JSONResponse:
     return JSONResponse(
         status_code=status_code,
+        headers={"X-Request-ID": request_id},
         content={
             "error": {
                 "code": code,
@@ -253,6 +278,16 @@ def create_app(  # noqa: C901
         runtime: MijiaRuntime = app.state.runtime
         runtime.start_credential_refresh_timer()
 
+        async def replay_audit() -> None:
+            while True:
+                await asyncio.sleep(10)
+                try:
+                    await asyncio.to_thread(resolved_store.flush_pending_audit)
+                except Exception as exc:
+                    logger.warning("audit recovery task failed (%s)", type(exc).__name__)
+
+        audit_replay = asyncio.create_task(replay_audit())
+
         # 监控 configs/server.toml：仅日志级别可以安全热更新，host/port/存储路径
         # 等字段已经用于监听端口和已打开的数据库连接，修改后必须重启进程。
         from server.config_watcher import ConfigWatcher
@@ -270,6 +305,9 @@ def create_app(  # noqa: C901
         try:
             yield
         finally:
+            audit_replay.cancel()
+            with suppress(asyncio.CancelledError):
+                await audit_replay
             runtime.stop_credential_refresh_timer()
             if hasattr(app.state, "config_watcher"):
                 app.state.config_watcher.stop()
@@ -293,14 +331,17 @@ def create_app(  # noqa: C901
     async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
         request_id = getattr(request.state, "request_id", "")
         if isinstance(exc.detail, dict) and "code" in exc.detail:
-            return _json_error(
+            response = _json_error(
                 exc.status_code,
                 str(exc.detail["code"]),
                 str(exc.detail["message"]),
                 request_id,
                 exc.detail.get("details"),
             )
-        return _json_error(exc.status_code, "HTTP_ERROR", str(exc.detail), request_id)
+        else:
+            response = _json_error(exc.status_code, "HTTP_ERROR", str(exc.detail), request_id)
+        response.headers.update(exc.headers or {})
+        return response
 
     @app.exception_handler(RequestValidationError)
     async def validation_error_handler(
@@ -353,6 +394,12 @@ def create_app(  # noqa: C901
         request_id = getattr(request.state, "request_id", "")
         return _json_error(status.HTTP_404_NOT_FOUND, "NOT_FOUND", str(exc), request_id)
 
+    @app.exception_handler(sqlite3.Error)
+    async def storage_error_handler(request: Request, exc: sqlite3.Error) -> JSONResponse:
+        return _json_error(
+            503, "STORAGE_UNAVAILABLE", "数据存储暂不可用", getattr(request.state, "request_id", "")
+        )
+
     @app.exception_handler(PermissionError)
     async def permission_error_handler(request: Request, exc: PermissionError) -> JSONResponse:
         request_id = getattr(request.state, "request_id", "")
@@ -388,9 +435,17 @@ def create_app(  # noqa: C901
 
     @app.middleware("http")
     async def request_id_middleware(request: Request, call_next: Any) -> Any:
-        request_id = request.headers.get("X-Request-ID") or f"req_{id(request)}"
+        supplied_id = request.headers.get("X-Request-ID", "")
+        request_id = (
+            supplied_id
+            if re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", supplied_id)
+            else f"req_{uuid.uuid4().hex}"
+        )
         setattr(request.state, "request_id", request_id)
-        config_map = resolved_store.get_config_map()
+        try:
+            config_map = resolved_store.get_config_map()
+        except sqlite3.Error:
+            return _json_error(503, "STORAGE_UNAVAILABLE", "数据存储暂不可用", request_id)
         source_host = _request_source_host(request, config_map)
         setattr(request.state, "source_ip", source_host)
         if _docs_route_disabled(request.url.path, config_map):
@@ -431,6 +486,9 @@ def create_app(  # noqa: C901
                 )
         response = await call_next(request)
         response.headers["X-Request-ID"] = request_id
+        if getattr(request.state, "operation_id", None):
+            response.headers["X-Operation-ID"] = request.state.operation_id
+            response.headers["X-Audit-Delivery"] = request.state.audit_delivery
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("X-Frame-Options", "DENY")
         response.headers.setdefault("Referrer-Policy", "no-referrer")
@@ -444,7 +502,22 @@ def create_app(  # noqa: C901
     def healthz() -> dict[str, Any]:
         return {"status": "ok", "version": mijiaAPI_V2.__version__}
 
+    @app.get("/readyz")
+    def readyz() -> JSONResponse:
+        audit = resolved_store.audit_status()
+        checks = {
+            "sqlite": _database_ready(resolved_store),
+            "frontend": (resolved_settings.web_dist_dir / "index.html").is_file(),
+            "audit": not any(audit.values()),
+        }
+        ready = all(checks.values())
+        return JSONResponse(
+            status_code=200 if ready else 503,
+            content={"status": "ready" if ready else "degraded", "checks": checks},
+        )
+
     app.include_router(admin_auth.router)
+    app.include_router(admin_controls.router)
     app.include_router(admin_mijia.router)
     app.include_router(admin_resources.router)
     app.include_router(api_v1.router)

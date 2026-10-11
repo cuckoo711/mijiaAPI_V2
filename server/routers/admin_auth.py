@@ -159,11 +159,20 @@ def create_initial_admin(
             headers={"Retry-After": str(limit.retry_after_seconds)},
         )
     try:
-        return current_store.create_initial_admin(
+        admin = current_store.create_initial_admin(
             payload.username,
             payload.password,
             allow_private_requests=_bootstrap_enables_private_requests(source_ip),
         )
+        current_store.add_audit(
+            "admin.bootstrap",
+            "success",
+            actor_type="admin",
+            actor_id=admin["id"],
+            source_ip=source_ip,
+            request_id=getattr(request.state, "request_id", None),
+        )
+        return admin
     except BootstrapAlreadyCompletedError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -192,11 +201,27 @@ def admin_login(
     try:
         session = current_store.authenticate_admin(payload.username, payload.password)
     except AuthenticationFailedError as exc:
+        current_store.add_audit(
+            "admin.login",
+            "failed",
+            actor_type="admin",
+            source_ip=source_ip,
+            request_id=getattr(request.state, "request_id", None),
+            metadata={"error_type": type(exc).__name__},
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={"code": "ADMIN_AUTH_FAILED", "message": str(exc)},
         ) from exc
     _attach_admin_session_cookie(request, response, current_store, session)
+    current_store.add_audit(
+        "admin.login",
+        "success",
+        actor_type="admin",
+        actor_id=session["admin"]["id"],
+        source_ip=source_ip,
+        request_id=getattr(request.state, "request_id", None),
+    )
     return session
 
 
@@ -227,9 +252,17 @@ def admin_logout(
     current_store: ServerStore = Depends(get_store),
 ) -> dict[str, Any]:
     token = read_admin_session_token(request, authorization)
+    revoked = False
     if token:
-        current_store.revoke_admin_session(token)
+        revoked = current_store.revoke_admin_session(token)
     _clear_admin_cookies(request, response, current_store)
+    current_store.add_audit(
+        "admin.logout",
+        "success",
+        actor_type="admin",
+        metadata={"revoked": revoked},
+        request_id=getattr(request.state, "request_id", None),
+    )
     return {"status": "ok"}
 
 

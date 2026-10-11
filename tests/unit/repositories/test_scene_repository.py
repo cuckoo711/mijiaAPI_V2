@@ -6,6 +6,7 @@ from unittest.mock import Mock
 import pytest
 
 from mijiaAPI_V2.domain.models import Credential
+from mijiaAPI_V2.domain.exceptions import MijiaAPIException
 from mijiaAPI_V2.infrastructure.http_client import HttpClient
 from mijiaAPI_V2.repositories.scene_repository import SceneRepositoryImpl
 
@@ -157,12 +158,8 @@ class TestGetAll:
         mock_http_client.post.return_value = api_response
 
         # 调用方法
-        scenes = scene_repository.get_all("home1", test_credential)
-
-        # 验证结果
-        assert len(scenes) == 1
-        assert scenes[0].scene_id == ""  # 默认值
-        assert scenes[0].name == "回家模式"
+        with pytest.raises(MijiaAPIException, match="ID"):
+            scene_repository.get_all("home1", test_credential)
 
     def test_get_all_missing_name(self, scene_repository, mock_http_client, test_credential):
         """测试API响应缺少name字段的情况"""

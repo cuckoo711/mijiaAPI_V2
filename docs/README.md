@@ -28,9 +28,9 @@
 
 完整的API文档：
 
-- [API参考/01-API客户端.md](API参考/01-API客户端.md) - MijiaAPI、AsyncMijiaAPI、工厂函数的完整参考
+- [API参考/01-API客户端.md](API参考/01-API客户端.md) - MijiaAPI、AsyncMijiaAPI、工厂函数参考与 HTTP 管理接口索引
 - [API参考/02-领域模型.md](API参考/02-领域模型.md) - Credential、Device、Home等领域模型详解
-- [API参考/03-异常处理.md](API参考/03-异常处理.md) - 所有异常类型、处理方法和最佳实践
+- [API参考/03-异常处理.md](API参考/03-异常处理.md) - 异常类型、ExecutionUnknownError 核查与禁止自动重发
 - [API参考/04-配置选项.md](API参考/04-配置选项.md) - 完整的配置选项说明和使用示例
 
 ## 💻 开发指南
@@ -41,12 +41,12 @@
 - [开发指南/02-代码规范.md](开发指南/02-代码规范.md) - Python代码规范、命名约定、最佳实践
 - [开发指南/03-测试指南.md](开发指南/03-测试指南.md) - 测试框架、编写测试、覆盖率
 - [开发指南/04-测试覆盖率报告.md](开发指南/04-测试覆盖率报告.md) - 当前测试覆盖率详情、改进建议
-- [开发指南/05-API-Server-开发启动.md](开发指南/05-API-Server-开发启动.md) - API Server / 管理台启动、CLI、Cookie+CSRF、部署与接口摘要
+- [开发指南/05-API-Server-开发启动.md](开发指南/05-API-Server-开发启动.md) - 启动、Cookie+CSRF、管理员手动控制、操作回执、审计补写、就绪与验收边界
 
 ## 🛠️ 工具文档
 
 - [../deploy/scripts/README.md](../deploy/scripts/README.md) - 项目脚本使用说明（清理、设备规格等）
-- [../deploy/README.md](../deploy/README.md) - Docker / systemd / 打包
+- [../deploy/README.md](../deploy/README.md) - Docker / systemd / 打包、依赖就绪、审计队列恢复与运维排查
 - [故障排查指南.md](故障排查指南.md) - 常见问题诊断和解决方案
 
 ## 📦 归档文档

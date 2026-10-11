@@ -5,17 +5,19 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Callable, Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
 
 import mijiaAPI_V2
-from mijiaAPI_V2.domain.exceptions import ExecutionUnknownError
+from server.control_operations import control_audit_status
+from server.control_operations import run_audited_control
 from server.deps import (
     get_runtime,
     get_started_at,
     get_store,
     require_api_key_scope,
     require_status_api_key,
+    require_valid_api_key,
 )
 from server.logging_utils import get_server_logger
 from server.mijia_runtime import MijiaRuntime
@@ -68,22 +70,7 @@ class BatchPropertyRequest(BaseModel):
 
 
 def _control_audit_status(result: dict[str, Any], expected_count: Optional[int]) -> str:
-    """Require explicit SDK success; incomplete batches must not look successful."""
-
-    def miot_succeeded(item: Any) -> bool:
-        return isinstance(item, dict) and type(item.get("code")) is int and item["code"] == 0
-
-    if expected_count is not None:
-        items = result.get("items")
-        if not isinstance(items, list):
-            return "failed"
-        succeeded = sum(miot_succeeded(item) for item in items)
-        if expected_count > 0 and len(items) == expected_count and succeeded == expected_count:
-            return "success"
-        return "warning" if succeeded else "failed"
-    if "success" in result:
-        return "success" if result["success"] is True else "failed"
-    return "success" if miot_succeeded(result.get("result")) else "failed"
+    return control_audit_status(result, expected_count)
 
 
 def _run_audited_control(
@@ -94,38 +81,19 @@ def _run_audited_control(
     metadata: dict[str, Any],
     operation: Callable[[], dict[str, Any]],
     expected_count: Optional[int] = None,
+    request: Optional[Request] = None,
 ) -> dict[str, Any]:
-    """Record the control outcome without masking it if audit storage fails."""
-
-    def record(status: str, details: dict[str, Any]) -> None:
-        try:
-            current_store.add_audit(
-                action,
-                status,
-                actor_type="api_key",
-                actor_id=api_key["key_prefix"],
-                metadata=details,
-            )
-        except Exception as exc:
-            # The command may already have executed; do not turn a logging
-            # failure into an apparent control failure that invites a retry.
-            logger.warning("failed to audit control action %s (%s)", action, type(exc).__name__)
-
-    try:
-        result = operation()
-    except ExecutionUnknownError as exc:
-        details = {**metadata, "error_type": type(exc).__name__, "retry_safe": False}
-        completed_count = exc.context.get("completed_count")
-        if type(completed_count) is int and completed_count >= 0:
-            details["completed_count"] = completed_count
-        record("unknown", details)
-        raise
-    except Exception as exc:
-        # Exception messages may contain upstream credentials or payloads.
-        record("failed", {**metadata, "error_type": type(exc).__name__})
-        raise
-    record(_control_audit_status(result, expected_count), metadata)
-    return result
+    return run_audited_control(
+        current_store,
+        actor_type="api_key",
+        actor_id=api_key["key_prefix"],
+        action=action,
+        metadata={**metadata, "api_key_id": api_key["id"]},
+        operation=operation,
+        expected_count=expected_count,
+        request=request,
+        audit_logger=logger,
+    )
 
 
 def _resource_allowed(api_key: dict[str, Any], kind: str, resource: dict[str, Any]) -> bool:
@@ -242,6 +210,7 @@ def api_device_spec(
 
 @router.post("/api/v1/devices/{device_slug}/properties")
 def api_set_device_property(
+    request: Request,
     device_slug: str,
     payload: SetPropertyRequest,
     api_key: dict[str, Any] = Depends(require_api_key_scope("write:devices")),
@@ -254,6 +223,7 @@ def api_set_device_property(
     return _run_audited_control(
         current_store,
         api_key,
+        request=request,
         action="device.property.set",
         metadata={"device": device_slug, "siid": payload.siid, "piid": payload.piid},
         operation=lambda: runtime.set_device_property(
@@ -269,6 +239,7 @@ def api_set_device_property(
 
 @router.post("/api/v1/devices/{device_slug}/actions")
 def api_call_device_action(
+    request: Request,
     device_slug: str,
     payload: CallActionRequest,
     api_key: dict[str, Any] = Depends(require_api_key_scope("write:devices")),
@@ -281,6 +252,7 @@ def api_call_device_action(
     return _run_audited_control(
         current_store,
         api_key,
+        request=request,
         action="device.action.call",
         metadata={"device": device_slug, "siid": payload.siid, "aiid": payload.aiid},
         operation=lambda: runtime.call_device_action(
@@ -296,6 +268,7 @@ def api_call_device_action(
 
 @router.post("/api/v1/batch/devices/properties")
 def api_batch_set_properties(
+    request: Request,
     payload: BatchPropertyRequest,
     api_key: dict[str, Any] = Depends(require_api_key_scope("write:devices")),
     runtime: MijiaRuntime = Depends(get_runtime),
@@ -312,6 +285,7 @@ def api_batch_set_properties(
     return _run_audited_control(
         current_store,
         api_key,
+        request=request,
         action="device.property.batch_set",
         metadata={"count": len(payload.items)},
         operation=lambda: runtime.batch_set_properties(
@@ -334,6 +308,7 @@ def api_scenes(
 
 @router.post("/api/v1/scenes/{scene_id}/execute")
 def api_execute_scene(
+    request: Request,
     scene_id: str,
     api_key: dict[str, Any] = Depends(require_api_key_scope("write:scenes")),
     runtime: MijiaRuntime = Depends(get_runtime),
@@ -345,6 +320,7 @@ def api_execute_scene(
     return _run_audited_control(
         current_store,
         api_key,
+        request=request,
         action="scene.execute",
         metadata={"scene": scene_id},
         operation=lambda: runtime.execute_scene(
@@ -353,6 +329,21 @@ def api_execute_scene(
             authorize=lambda resource: _resource_allowed(api_key, "scenes", resource),
         ),
     )
+
+
+@router.get("/api/v1/operations/{operation_id}")
+def api_operation_receipt(
+    operation_id: str,
+    api_key: dict[str, Any] = Depends(require_valid_api_key),
+    current_store: ServerStore = Depends(get_store),
+) -> dict[str, Any]:
+    event = current_store.get_audit_event(operation_id)
+    if event["actor_type"] != "api_key" or event["metadata"].get("api_key_id") != api_key["id"]:
+        raise KeyError("Operation not found")
+    return {
+        name: event[name]
+        for name in ("id", "occurred_at", "action", "result", "request_id", "metadata", "delivery")
+    }
 
 
 @router.post("/api/v1/cache/refresh")

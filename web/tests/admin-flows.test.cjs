@@ -336,3 +336,387 @@ test("QR account removal ignores a late success poll and clears the task", async
   assert.equal(h.timers.size, 0);
   assert.ok(!h.messages.some((message) => message.message === "米家登录成功"));
 });
+
+function deviceFixture(id = "device-1", overrides = {}) {
+  return vue.reactive({ id, name: id, display_name: id, model: "test-model", home_id: "home-1", access_mode: "write", hidden: false, ...overrides });
+}
+
+function controlSpec() {
+  return {
+    model: "test-model", name: "Test device",
+    properties: [
+      { siid: 2, piid: 1, name: "power", type: "bool", access: "read_write" },
+      { siid: 2, piid: 2, name: "level", type: "uint", access: "write", value_range: [0, 10, 2] },
+    ],
+    actions: [{ siid: 2, aiid: 1, name: "set level", parameters: [
+      { piid: 2, name: "level", type: "uint", required: true, value_range: [0, 10, 2] },
+      { piid: 3, name: "enabled", type: "bool", required: true },
+    ] }],
+  };
+}
+
+function controlReply(url) {
+  if (url.endsWith("/spec")) return reply({ spec: controlSpec() });
+  if (url.endsWith("/state")) return reply({ items: [{ siid: 2, piid: 1, value: false, code: 0 }] });
+  if (url.endsWith("/actions")) return reply({ result: { code: 0 } });
+  return reply({ success: true });
+}
+
+function deviceView(h, devices = [deviceFixture()]) {
+  const request = h.load("src/composables/useAdminSession.ts").useAdminSession().request;
+  return h.component("src/views/DevicesView.vue", { devices, homes: [], syncing: false, pendingIds: [], request }).setup;
+}
+
+test("device view reads state/spec on open and writes false only after explicit confirmation with CSRF", async () => {
+  const h = harness(async (url) => controlReply(url));
+  const device = deviceFixture();
+  const view = deviceView(h, [device]);
+  await view.openDevice(device);
+  assert.equal(h.calls.filter((call) => call.options.method === "POST").length, 0);
+  assert.equal(view.state.value[0].value, false);
+  view.draft.value.property = "2.1";
+  view.draft.value.propertyValues["2.1"] = "false";
+  await view.writeProperty();
+  const writes = h.calls.filter((call) => call.options.method === "POST");
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].url, "/api/admin/devices/device-1/properties");
+  assert.deepEqual(JSON.parse(writes[0].options.body), { siid: 2, piid: 1, value: false });
+  assert.equal(writes[0].options.headers.get("X-CSRF-Token"), "test-csrf");
+  assert.equal(view.outcome.value.status, "success");
+});
+
+test("state feedback distinguishes acknowledged false/null values from missing values and read errors", () => {
+  const h = harness(async (url) => controlReply(url));
+  const view = deviceView(h);
+  assert.equal(view.stateReadLabel({ code: 0, value: false }), "已读取");
+  assert.equal(view.stateReadLabel({ code: 0, value: null }), "已读取");
+  assert.equal(view.stateReadLabel({ code: 0 }), "结果未确认");
+  assert.equal(view.stateReadLabel({ value: false }), "结果未确认");
+  assert.equal(view.stateReadLabel({ code: -1 }), "错误 -1");
+  assert.equal(view.displayValue(undefined), "未返回值");
+});
+
+test("device forms reject invalid ranges and missing action parameters before any POST", async () => {
+  const h = harness(async (url) => controlReply(url));
+  const device = deviceFixture();
+  const view = deviceView(h, [device]);
+  await view.openDevice(device);
+  view.draft.value.property = "2.2";
+  view.draft.value.propertyValues["2.2"] = "3";
+  await view.writeProperty();
+  assert.match(view.outcome.value.message, /步长/);
+  assert.equal(view.draft.value.propertyValues["2.2"], "3");
+  view.chooseAction("2.1");
+  view.draft.value.actionValues["2.1"]["2"] = "4";
+  await view.callAction();
+  assert.match(view.outcome.value.message, /enabled/);
+  assert.equal(h.calls.filter((call) => call.options.method === "POST").length, 0);
+});
+
+test("action form sends declared numeric parameter keys and typed values, keeps inputs on failed result", async () => {
+  const h = harness(async (url) => url.endsWith("/actions") ? reply({ result: { code: -1 } }) : controlReply(url));
+  const device = deviceFixture();
+  const view = deviceView(h, [device]);
+  await view.openDevice(device);
+  view.chooseAction("2.1");
+  view.draft.value.actionValues["2.1"] = { "3": "false", "2": "4" };
+  await view.callAction();
+  const call = h.calls.find((item) => item.options.method === "POST");
+  assert.deepEqual(JSON.parse(call.options.body), { siid: 2, aiid: 1, params: { "2": 4, "3": false } });
+  assert.equal(view.outcome.value.status, "failed");
+  assert.equal(view.draft.value.actionValues["2.1"]["2"], "4");
+});
+
+test("read-only, hidden, and revoked device permissions cannot dispatch from the script", async () => {
+  for (const override of [{ access_mode: "read" }, { hidden: true }, {}]) {
+    const h = harness(async (url) => controlReply(url));
+    const device = deviceFixture("device-1", override);
+    const view = deviceView(h, [device]);
+    await view.openDevice(device);
+    view.draft.value.property = "2.1";
+    view.draft.value.propertyValues["2.1"] = "true";
+    if (!Object.keys(override).length) device.access_mode = "read";
+    await view.writeProperty();
+    assert.equal(h.calls.filter((call) => call.options.method === "POST").length, 0);
+  }
+});
+
+test("late state and spec responses for a previous device cannot replace the current selection", async () => {
+  const h = harness();
+  const waitingState = deferred();
+  const waitingSpec = deferred();
+  const first = deviceFixture("first"), second = deviceFixture("second");
+  const control = h.load("src/composables/useDeviceControl.ts").useDeviceControl({
+    getDevice: (id) => [first, second].find((device) => device.id === id),
+    request: async (url) => url.includes("/first/")
+      ? url.endsWith("/spec") ? waitingSpec.promise : waitingState.promise
+      : url.endsWith("/spec") ? { spec: { ...controlSpec(), name: "Second spec" } } : { items: [{ siid: 2, piid: 1, value: "second" }] },
+  });
+  const openingFirst = control.openDevice(first);
+  await control.openDevice(second);
+  waitingSpec.resolve({ spec: { ...controlSpec(), name: "First spec" } });
+  waitingState.resolve({ items: [{ siid: 2, piid: 1, value: "first" }] });
+  await openingFirst;
+  assert.equal(control.selectedId.value, "second");
+  assert.equal(control.spec.value.name, "Second spec");
+  assert.equal(control.state.value[0].value, "second");
+});
+
+test("cancel and reopen keep property/action drafts without causing a control request", async () => {
+  const h = harness(async (url) => controlReply(url));
+  const device = deviceFixture();
+  const view = deviceView(h, [device]);
+  await view.openDevice(device);
+  view.draft.value.property = "2.2";
+  view.draft.value.propertyValues["2.2"] = "8";
+  view.chooseAction("2.1");
+  view.draft.value.actionValues["2.1"] = { "2": "6", "3": "true" };
+  view.closeDevice();
+  await view.openDevice(device);
+  assert.equal(view.draft.value.propertyValues["2.2"], "8");
+  assert.equal(view.draft.value.actionValues["2.1"]["2"], "6");
+  assert.equal(h.calls.filter((call) => call.options.method === "POST").length, 0);
+});
+
+test("unknown property outcome queries state, keeps draft, and blocks replay until explicit acknowledgement", async () => {
+  const h = harness(async (url) => url.endsWith("/properties")
+    ? reply({ error: { code: "EXECUTION_UNKNOWN", message: "请求可能已执行，请先核对状态", details: { retry_safe: false } } }, 409)
+    : controlReply(url));
+  const device = deviceFixture();
+  const view = deviceView(h, [device]);
+  await view.openDevice(device);
+  view.draft.value.property = "2.1";
+  view.draft.value.propertyValues["2.1"] = "true";
+  await view.writeProperty();
+  assert.equal(view.outcome.value.status, "unknown");
+  assert.equal(view.canAcknowledge.value, true);
+  assert.equal(h.calls.at(-1).url, "/api/admin/devices/device-1/state");
+  await view.writeProperty();
+  assert.equal(h.calls.filter((call) => call.options.method === "POST").length, 1);
+  assert.equal(view.draft.value.propertyValues["2.1"], "true");
+  view.acknowledgeUnknown();
+  assert.equal(view.canControl.value, true);
+  assert.equal(h.calls.filter((call) => call.options.method === "POST").length, 1);
+});
+
+test("a lost browser control response is unknown, while a 422 validation response remains a failure", async () => {
+  for (const lost of [true, false]) {
+    const h = harness(async (url) => {
+      if (!url.endsWith("/properties")) return controlReply(url);
+      if (lost) throw new Error("connection lost");
+      return reply({ error: { code: "INVALID_CONTROL_PARAMETERS", message: "属性值无效" } }, 422);
+    });
+    const device = deviceFixture();
+    const view = deviceView(h, [device]);
+    await view.openDevice(device);
+    view.draft.value.property = "2.1";
+    view.draft.value.propertyValues["2.1"] = "false";
+    await view.writeProperty();
+    assert.equal(view.outcome.value.status, lost ? "unknown" : "failed");
+    assert.equal(view.draft.value.propertyValues["2.1"], "false");
+    assert.equal(h.calls.filter((call) => call.options.method === "POST").length, 1);
+  }
+});
+
+test("a pending write stays locked after dialog cancel/reopen and its result does not affect another device", async () => {
+  const h = harness();
+  const waiting = deferred();
+  const first = deviceFixture("first"), second = deviceFixture("second");
+  let writes = 0;
+  const control = h.load("src/composables/useDeviceControl.ts").useDeviceControl({
+    getDevice: (id) => [first, second].find((device) => device.id === id),
+    request: async (url, options) => {
+      if (options?.method === "POST") { writes += 1; return waiting.promise; }
+      return url.endsWith("/spec") ? { spec: controlSpec() } : { items: [] };
+    },
+  });
+  await control.openDevice(first);
+  control.draft.value.property = "2.1";
+  control.draft.value.propertyValues["2.1"] = "true";
+  const writing = control.writeProperty();
+  control.closeDevice();
+  await control.openDevice(first);
+  assert.equal(control.controlBusy.value, true);
+  await control.writeProperty();
+  assert.equal(writes, 1);
+  await control.openDevice(second);
+  waiting.resolve({ success: false });
+  await writing;
+  assert.equal(control.outcome.value, undefined);
+  assert.equal(control.selectedId.value, "second");
+});
+
+test("device load failures expose a retry path and never dispatch a write without spec", async () => {
+  const h = harness();
+  let offline = true;
+  const device = deviceFixture();
+  const control = h.load("src/composables/useDeviceControl.ts").useDeviceControl({ getDevice: () => device, request: async (url) => {
+    if (offline) throw new Error("offline");
+    return url.endsWith("/spec") ? { spec: controlSpec() } : { items: [] };
+  } });
+  await control.openDevice(device);
+  assert.match(control.loadError.value, /offline/);
+  assert.match(control.stateError.value, /offline/);
+  assert.equal(control.canControl.value, false);
+  offline = false;
+  await Promise.all([control.refreshSpec(), control.refreshState()]);
+  assert.equal(control.loadError.value, "");
+  assert.equal(control.stateError.value, "");
+  assert.equal(control.canControl.value, true);
+});
+
+test("scene view requires an explicit execute click and retains unknown results without automatic replays", async () => {
+  const h = harness(async () => reply({ error: { code: "EXECUTION_UNKNOWN", message: "场景结果未知，请先核对状态" } }, 409));
+  const scene = vue.reactive({ id: "scene-1", scene_id: "remote-1", name: "Evening", home_id: "home-1", executable: true, hidden: false });
+  const request = h.load("src/composables/useAdminSession.ts").useAdminSession().request;
+  const view = h.component("src/views/ScenesView.vue", { scenes: [scene], homes: [], apiBaseUrl: "", oneTimeApiKey: "", pendingIds: [], request }).setup;
+  view.openScene(scene);
+  assert.equal(h.calls.length, 0);
+  await view.executeScene();
+  assert.equal(h.calls[0].url, "/api/admin/scenes/scene-1/execute");
+  assert.equal(view.outcome.value.status, "unknown");
+  await view.executeScene();
+  view.closeScene();
+  view.openScene(scene);
+  await view.executeScene();
+  assert.equal(h.calls.length, 1);
+  view.acknowledgeUnknown();
+  assert.equal(h.calls.length, 1);
+  assert.equal(view.canExecute.value, true);
+});
+
+test("scene authorization is rechecked and late execution results stay with their original scene", async () => {
+  const h = harness();
+  const waiting = deferred();
+  const first = vue.reactive({ id: "first", executable: true, hidden: false });
+  const second = vue.reactive({ id: "second", executable: false, hidden: false });
+  let calls = 0;
+  const control = h.load("src/composables/useSceneControl.ts").useSceneControl({ getScene: (id) => [first, second].find((scene) => scene.id === id), request: async () => { calls += 1; return waiting.promise; } });
+  control.openScene(first);
+  const running = control.executeScene();
+  control.openScene(second);
+  await control.executeScene();
+  waiting.resolve({ success: true });
+  await running;
+  assert.equal(calls, 1);
+  assert.equal(control.outcome.value, undefined);
+  control.openScene(first);
+  assert.equal(control.outcome.value.status, "success");
+  first.executable = false;
+  await control.executeScene();
+  assert.equal(calls, 1);
+});
+
+test("navigation memory preserves unresolved results and drafts across recreated views", async () => {
+  const h = harness();
+  const { useDeviceControl, createDeviceControlMemory } = h.load("src/composables/useDeviceControl.ts");
+  const memory = createDeviceControlMemory();
+  const device = deviceFixture();
+  const request = async (url, options) => options?.method === "POST" ? {} : url.endsWith("/spec") ? { spec: controlSpec() } : { items: [] };
+  const original = useDeviceControl({ request, getDevice: () => device, memory });
+  await original.openDevice(device);
+  original.draft.value.property = "2.1";
+  original.draft.value.propertyValues["2.1"] = "true";
+  await original.writeProperty();
+  original.closeDevice();
+  const recreated = useDeviceControl({ request, getDevice: () => device, memory });
+  await recreated.openDevice(device);
+  assert.equal(recreated.draft.value.propertyValues["2.1"], "true");
+  assert.equal(recreated.outcome.value.status, "unknown");
+  assert.equal(recreated.canControl.value, false);
+});
+
+test("audit view distinguishes unknown/warning results and keeps metadata as inert text until expansion", () => {
+  const h = harness();
+  const view = h.component("src/views/AuditView.vue", { audits: [], health: { pending: 1, invalid: 0, unavailable: 0 }, loading: false, replaying: false, error: "" }).setup;
+  assert.equal(view.resultLabel("success"), "成功");
+  assert.equal(view.resultLabel("failed"), "失败");
+  assert.equal(view.resultLabel("unknown"), "结果未知");
+  assert.equal(view.resultType("unknown"), "warning");
+  assert.equal(view.resultType("failed"), "danger");
+  assert.match(view.resultLabel("warning"), /警告/);
+  const metadata = { operation_id: "op-1", payload: '<img src=x onerror="bad()">' };
+  const text = view.metadataText(metadata);
+  assert.deepEqual(JSON.parse(text), metadata);
+  assert.equal(h.calls.length, 0);
+});
+
+test("audit replay requires an explicit call, sends CSRF, prevents duplicate clicks, and refreshes queue health", async () => {
+  const waiting = deferred();
+  const h = harness(async (url) => {
+    if (url.endsWith("/replay")) return waiting.promise;
+    if (url.endsWith("/health")) return reply({ pending: 0, invalid: 0, unavailable: 0 });
+    return reply({ items: [{ id: "audit-1", result: "unknown", request_id: "request-1" }] });
+  });
+  const app = h.component("src/App.vue").setup;
+  assert.equal(h.calls.length, 0);
+  const replay = app.replayAudit();
+  await settle();
+  await app.replayAudit();
+  assert.equal(h.calls.filter((call) => call.options.method === "POST").length, 1);
+  assert.equal(h.calls[0].options.headers.get("X-CSRF-Token"), "test-csrf");
+  waiting.resolve(reply({ delivered: 2, pending: 0, invalid: 0, unavailable: 0 }));
+  await replay;
+  assert.equal(app.auditReplaying.value, false);
+  assert.equal(app.auditHealth.value.pending, 0);
+  assert.equal(app.audits.value[0].request_id, "request-1");
+  assert.ok(h.messages.some((message) => message.kind === "success" && message.message.includes("已补写 2 条")));
+});
+
+test("audit replay failure is visible and can be explicitly retried without an automatic POST", async () => {
+  let offline = true;
+  const h = harness(async (url) => {
+    if (url.endsWith("/replay")) {
+      if (offline) throw new Error("offline");
+      return reply({ delivered: 1, pending: 0, invalid: 0, unavailable: 0 });
+    }
+    return url.endsWith("/health") ? reply({ pending: 0, invalid: 0, unavailable: 0 }) : reply({ items: [] });
+  });
+  const app = h.component("src/App.vue").setup;
+  await app.replayAudit();
+  assert.match(app.auditError.value, /offline/);
+  assert.equal(app.auditReplaying.value, false);
+  assert.equal(h.calls.length, 1);
+  offline = false;
+  await app.replayAudit();
+  assert.equal(app.auditError.value, "");
+  assert.equal(h.calls.filter((call) => call.options.method === "POST").length, 2);
+});
+
+test("historical unavailable audit events do not prevent replay of existing pending records", async () => {
+  let deliveries = 0;
+  const h = harness(async (url) => {
+    if (url.endsWith("/replay")) { deliveries += 1; return reply({ delivered: 1, pending: 0, invalid: 0, unavailable: 2 }); }
+    if (url.endsWith("/health")) return reply({ pending: 0, invalid: 0, unavailable: 2 });
+    return reply({ items: [] });
+  });
+  const app = h.component("src/App.vue").setup;
+  app.auditHealth.value = { pending: 1, invalid: 0, unavailable: 2 };
+  await app.replayAudit();
+  assert.equal(app.auditError.value, "");
+  assert.equal(app.auditHealth.value.unavailable, 2);
+  assert.equal(app.auditHealth.value.pending, 0);
+  assert.ok(h.messages.some((message) => message.kind === "warning" && message.message.includes("历史未能保存 2 条")));
+  assert.ok(!h.messages.some((message) => message.kind === "success"));
+  await app.replayAudit();
+  assert.equal(deliveries, 2);
+});
+
+test("logout clears audit queue state and a late audit read cannot repopulate it", async () => {
+  const records = deferred(), queue = deferred();
+  const h = harness(async (url) => url.endsWith("/logout") ? reply({ status: "ok" }) : url.endsWith("/health") ? queue.promise : records.promise);
+  const app = h.component("src/App.vue").setup;
+  app.auditHealth.value = { pending: 2, invalid: 1, unavailable: 0 };
+  app.auditError.value = "previous error";
+  const refresh = app.refreshAuditPage();
+  await settle();
+  await app.logout();
+  await vue.nextTick();
+  records.resolve(reply({ items: [{ id: "old-audit" }] }));
+  queue.resolve(reply({ pending: 2, invalid: 1, unavailable: 0 }));
+  await refresh;
+  assert.equal(app.auditHealth.value, null);
+  assert.equal(app.auditError.value, "");
+  assert.equal(app.audits.value.length, 0);
+  assert.equal(app.auditLoading.value, false);
+});

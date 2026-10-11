@@ -92,12 +92,20 @@ class ISceneRepository(ABC):
     """智能仓储接口"""
 
     @abstractmethod
-    def get_all(self, home_id: str, credential: Credential) -> List[Scene]:
+    def get_all(
+        self, home_id: str, credential: Credential, owner_uid: Optional[str] = None
+    ) -> List[Scene]:
         """获取家庭下所有智能"""
         pass
 
     @abstractmethod
-    def execute(self, scene_id: str, home_id: str, credential: Credential) -> bool:
+    def execute(
+        self,
+        scene_id: str,
+        home_id: str,
+        credential: Credential,
+        owner_uid: Optional[str] = None,
+    ) -> bool:
         """执行智能"""
         pass
 

@@ -169,7 +169,8 @@ class TestGetAll:
                     {
                         "id": 123456,
                         "name": "我的家",
-                        # 缺少 uid 和 roomlist
+                        "uid": 789012,
+                        # 可选 roomlist 未返回
                     }
                 ]
             },
@@ -183,7 +184,7 @@ class TestGetAll:
         assert len(homes) == 1
         assert homes[0].id == "123456"
         assert homes[0].name == "我的家"
-        assert homes[0].uid == ""  # 默认值
+        assert homes[0].uid == "789012"
         assert homes[0].rooms == []  # 默认值
 
 

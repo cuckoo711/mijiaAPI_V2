@@ -18,8 +18,11 @@ docker compose -f deploy/docker-compose.yml up -d --build
 - `/data/credential.json`：米家凭据
 - `/data/.credential_key`：凭据加密密钥（未设置 `MIJIA_CREDENTIAL_SECRET` 时自动生成）
 - `/data/cache/`：SDK 磁盘缓存
+- `/data/audit-pending/`：审计补写队列及异常记录；整卷备份时一并保留
 
 `deploy/Dockerfile` 内置健康检查，容器状态可用以下命令查看：
+
+该检查访问 `/healthz`，用于 HTTP 存活；不单独验证依赖就绪。业务就绪应另外检查 `/readyz`，见下方运维说明。
 
 ```bash
 docker compose -f deploy/docker-compose.yml ps
@@ -158,4 +161,39 @@ python deploy/packaging/build.py
 ## 运维脚本
 
 见 [`scripts/`](scripts/)：`clean`、`extract_release_notes`、`show_device_spec`。
+
+## 依赖就绪与审计恢复
+
+从允许的来源分别检查存活与依赖就绪（两者仍受全站网络 ACL 约束）：
+
+```bash
+curl -i http://127.0.0.1:8123/healthz
+curl -i http://127.0.0.1:8123/readyz
+```
+
+`/healthz` 正常返回 200、`{"status":"ok","version":"..."}`。`/readyz` 检查 SQLite 的回滚写入探测、前端 `web_dist_dir/index.html` 存在和审计状态；全部通过返回 200、`status=ready`，否则返回 503、`status=degraded`，`checks.sqlite/frontend/audit` 指出对应依赖。若读取存储配置即失败，503 响应会是标准 `STORAGE_UNAVAILABLE` 错误对象。它不连接米家云验证授权，也不检查真实设备在线或动作效果。Docker 当前使用存活检查；容器 `healthy` 不等同于业务就绪或物理设备验收。
+
+控制响应的 `X-Operation-ID` 对应一次操作的审计事件；`X-Audit-Delivery` 为 `stored`（已写 SQLite）、`queued`（已存文件队列）、`unavailable`（两处都未能保存）。审计失败不会把已经返回的控制结果改成失败，也不能通过重新执行设备操作来补日志。回执可从管理员 `GET /api/admin/operations/{operation_id}` 查询；API Key 可从 `GET /api/v1/operations/{operation_id}` 查询自己发起的操作，须使用仍有效的同一个 Key。回执缺失不证明控制没有执行。
+
+审计文件队列在 `<data_dir>/audit-pending/`（Docker 为 `/data/audit-pending/`）；数据库不可写但队列保存成功时，事件仍可恢复。启动时尝试补写，运行中约每 10 秒自动尝试，每轮默认最多成功补写 100 条。管理员可在「日志与审计」点「补写审计」，或使用带 Cookie 与 `X-CSRF-Token` 的 `POST /api/admin/audit/replay`。补写仅写审计数据库，保持事件 ID 并去重，绝不重新执行属性、动作或场景。
+
+`GET /api/admin/audit/health` 返回三个整数计数；补写响应另含 `delivered`：
+
+| 字段 | 运维含义与处理 |
+|------|----------------|
+| `pending` | 可待补写的 `.json` 文件数量；修复存储后可等待自动补写或显式补写 |
+| `invalid` | 异常/隔离 `.invalid` 记录数量；队列检查失败也报告异常，需检查日志与队列文件 |
+| `unavailable` | **本进程未能保存的事件历史计数**；这些完全未保存事件不能补写，须排查日志、权限、磁盘和 SQLite/队列存储 |
+
+`unavailable` 不表示当前目录必然不可访问，不阻止已有 `pending` 的补写，也不会随成功补写清零。即使存储已恢复，`/readyz` 仍会因该历史计数返回 503。应先保留并核对操作 ID、响应头、日志和队列证据，处理存储故障与异常记录；确认排查完成后再重启服务重置进程计数，例如：
+
+```bash
+docker compose -f deploy/docker-compose.yml restart mijia-server
+```
+
+重启不会恢复丢失的审计事件，也不证明设备执行成功；重启后需再次检查 `/readyz` 与管理员审计健康接口。备份/恢复应保留整个数据目录及原凭据密钥，不能只备份 SQLite 而遗漏仍待补写的事件。
+
+控制出现 `409 EXECUTION_UNKNOWN`（`retry_safe=false`）或客户端丢失写入响应时，不得自动重试。先查询最新属性、查操作回执并核对实际设备/场景效果，再明确决定新的请求。审计自动补写只重试记录保存，不重试设备操作；读取请求和确认尚未发送控制的连接失败仍可按 SDK 策略重试。
+
+本项目的单元测试、模拟浏览器和隔离 Docker smoke 不连接真实米家设备；它们验证软件接口与部署生命周期，不替代目标环境的授权、具体规格、共享家庭 owner、实时状态和物理执行效果验收。管理员手动操作接口与参数见 [API Server 开发启动](../docs/开发指南/05-API-Server-开发启动.md#管理员手动控制与操作回执)。
 
