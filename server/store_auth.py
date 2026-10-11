@@ -44,6 +44,9 @@ class AdminAuthMixin:
         now = isoformat(utc_now())
         admin_id = str(uuid.uuid4())
         with self._database.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if conn.execute("SELECT 1 FROM admin_users LIMIT 1").fetchone() is not None:
+                raise BootstrapAlreadyCompletedError("Administrator already exists")
             conn.execute(
                 """
                 INSERT INTO admin_users(
@@ -60,6 +63,7 @@ class AdminAuthMixin:
 
         now = utc_now()
         with self._database.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
                 "SELECT * FROM admin_users WHERE username = ?",
                 (username,),
@@ -73,6 +77,8 @@ class AdminAuthMixin:
 
             if not verify_secret(password, row["password_hash"]):
                 self._record_admin_auth_failure(conn, row, now)
+                # Authentication fails, but the failure counter must survive.
+                conn.commit()
                 raise AuthenticationFailedError("Invalid administrator credentials")
 
             conn.execute(
@@ -193,6 +199,7 @@ class AdminAuthMixin:
 
         now = utc_now()
         with self._database.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
                 "SELECT * FROM admin_users WHERE id = ?",
                 (admin_id,),
@@ -206,6 +213,7 @@ class AdminAuthMixin:
 
             if not verify_secret(current_password, row["password_hash"]):
                 self._record_admin_auth_failure(conn, row, now)
+                conn.commit()
                 raise InvalidCurrentPasswordError("Invalid current password")
 
             updated_at = isoformat(now)
@@ -288,53 +296,90 @@ class AdminAuthMixin:
         缓存条目仍会检查 session 的 ``expires_at``，过期立即淘汰。
         """
 
-        now_epoch = utc_now().timestamp()
-        now_mono = time.monotonic()
-
-        cached = self._admin_session_cache.get(token)
-        if cached is not None:
-            admin, session_expires_at, cache_until = cached
-            if now_epoch <= session_expires_at and now_mono <= cache_until:
-                return admin
-            # 缓存过期或 session 到期：主动清理
+        for _ in range(3):
+            now = utc_now()
+            now_mono = time.monotonic()
             with self._admin_session_cache_lock:
-                if self._admin_session_cache.get(token) is cached:
-                    self._admin_session_cache.pop(token, None)
+                generation = self._admin_session_generation
+                cached = self._admin_session_cache.get(token)
+            admin = self._validate_cached_admin_session(token, cached, now, now_mono)
+            if admin is not None:
+                with self._admin_session_cache_lock:
+                    if generation == self._admin_session_generation:
+                        return admin
+                continue
 
-        prefix = secret_prefix(token)
-        now = utc_now()
-        with self._database.connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT s.token_hash, s.expires_at, s.revoked_at, u.id, u.username
-                FROM admin_sessions s
-                JOIN admin_users u ON u.id = s.admin_id
-                WHERE s.token_prefix = ? AND s.revoked_at IS NULL
-                """,
-                (prefix,),
-            ).fetchall()
+            with self._database.connect() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT s.token_hash, s.expires_at, u.id, u.username
+                    FROM admin_sessions s
+                    JOIN admin_users u ON u.id = s.admin_id
+                    WHERE s.token_prefix = ? AND s.revoked_at IS NULL
+                    """,
+                    (secret_prefix(token),),
+                ).fetchall()
 
             for row in rows:
                 if not verify_secret(token, row["token_hash"]):
                     continue
-                expires_at = parse_datetime(row["expires_at"])
-                if expires_at is None or expires_at <= now:
-                    raise AuthenticationFailedError("Administrator session expired")
+                # Re-read after PBKDF2: logout/password reset may have committed
+                # while verification was running, including in another process.
+                expires_at = self._require_active_admin_session(row["token_hash"])
                 admin = {"id": row["id"], "username": row["username"]}
-                cache_until = time.monotonic() + ADMIN_SESSION_CACHE_TTL
                 with self._admin_session_cache_lock:
+                    if generation != self._admin_session_generation:
+                        break
                     self._admin_session_cache[token] = (
                         admin,
                         expires_at.timestamp(),
-                        cache_until,
+                        time.monotonic() + ADMIN_SESSION_CACHE_TTL,
+                        row["token_hash"],
                     )
-                return admin
+                    return admin
+            else:
+                raise AuthenticationFailedError("Invalid administrator session")
+        raise AuthenticationFailedError("Administrator session changed during validation")
 
-        raise AuthenticationFailedError("Invalid administrator session")
+    def _validate_cached_admin_session(
+        self,
+        token: str,
+        cached: Optional[tuple[dict[str, Any], float, float, str]],
+        now: datetime,
+        now_mono: float,
+    ) -> Optional[dict[str, Any]]:
+        """Validate cache lifetime and the authoritative session revocation state."""
+
+        if cached is None:
+            return None
+        admin, session_expires_at, cache_until, token_hash = cached
+        if now.timestamp() >= session_expires_at or now_mono > cache_until:
+            with self._admin_session_cache_lock:
+                if self._admin_session_cache.get(token) is cached:
+                    self._admin_session_cache.pop(token, None)
+            return None
+        try:
+            self._require_active_admin_session(token_hash)
+        except AuthenticationFailedError:
+            self._invalidate_admin_session_cache(token)
+            raise
+        return admin
+
+    def _require_active_admin_session(self, token_hash: str) -> datetime:
+        with self._database.connect() as conn:
+            row = conn.execute(
+                "SELECT expires_at FROM admin_sessions WHERE token_hash = ? AND revoked_at IS NULL",
+                (token_hash,),
+            ).fetchone()
+        expires_at = parse_datetime(row["expires_at"]) if row is not None else None
+        if expires_at is None or expires_at <= utc_now():
+            raise AuthenticationFailedError("Administrator session revoked or expired")
+        return expires_at
 
     def _invalidate_admin_session_cache(self, token: Optional[str] = None) -> None:
         """使 admin session 缓存条目失效。``token=None`` 清空全部。"""
         with self._admin_session_cache_lock:
+            self._admin_session_generation += 1
             if token is None:
                 self._admin_session_cache.clear()
             else:
@@ -343,9 +388,9 @@ class AdminAuthMixin:
     def revoke_admin_session(self, token: str) -> bool:
         """Revoke a single administrator session token. Returns True if found."""
 
-        self._invalidate_admin_session_cache(token)
         prefix = secret_prefix(token)
         revoked_at = isoformat(utc_now())
+        found = False
         with self._database.connect() as conn:
             rows = conn.execute(
                 """
@@ -362,8 +407,12 @@ class AdminAuthMixin:
                     "UPDATE admin_sessions SET revoked_at = ? WHERE token_hash = ?",
                     (revoked_at, row["token_hash"]),
                 )
-                return True
-        return False
+                found = True
+                break
+        # Invalidation follows the database commit so an older validation cannot
+        # refill the cache after logout has returned.
+        self._invalidate_admin_session_cache(token)
+        return found
 
     def refresh_admin_session(self, token: str) -> dict[str, Any]:
         """Extend a valid administrator session and return its new expiry."""

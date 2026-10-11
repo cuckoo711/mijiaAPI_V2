@@ -107,7 +107,7 @@ class TestDeviceSpecRepositoryImpl:
         assert spec.model == "xiaomi.light.ceiling1"
         assert spec.name == "米家智能灯"
         mock_cache_manager.get.assert_called_once_with(
-            "device_spec:xiaomi.light.ceiling1", namespace="specs"
+            "device_spec:v2:xiaomi.light.ceiling1", namespace="specs"
         )
 
     @patch("httpx.get")
@@ -132,7 +132,7 @@ class TestDeviceSpecRepositoryImpl:
 
         # 验证设备规格被缓存
         mock_cache_manager.set.assert_any_call(
-            "device_spec:xiaomi.light.ceiling1",
+            "device_spec:v2:xiaomi.light.ceiling1",
             spec.model_dump(),
             ttl=365 * 24 * 3600,
             namespace="specs",
@@ -219,7 +219,7 @@ class TestDeviceSpecRepositoryImpl:
         # 验证缓存被调用
         mock_cache_manager.set.assert_called_once()
         call_args = mock_cache_manager.set.call_args
-        assert call_args[0][0] == "device_spec:xiaomi.light.ceiling1"
+        assert call_args[0][0] == "device_spec:v2:xiaomi.light.ceiling1"
         assert call_args[1]["namespace"] == "specs"
         assert call_args[1]["ttl"] == 365 * 24 * 3600  # 1年
 
@@ -234,8 +234,7 @@ class TestDeviceSpecRepositoryImpl:
     def test_parse_property_access_variations(self, device_spec_repo):
         """测试各种访问权限的解析"""
         assert (
-            device_spec_repo._parse_property_access(["read", "write"])
-            == PropertyAccess.READ_WRITE
+            device_spec_repo._parse_property_access(["read", "write"]) == PropertyAccess.READ_WRITE
         )
         assert device_spec_repo._parse_property_access(["read"]) == PropertyAccess.READ_ONLY
         assert device_spec_repo._parse_property_access(["write"]) == PropertyAccess.WRITE_ONLY
@@ -298,7 +297,7 @@ class TestDeviceSpecRepositoryImpl:
 
             # 验证缓存被清除
             mock_cache_manager.invalidate.assert_any_call(
-                "device_spec:test.device.v1", namespace="specs"
+                "device_spec:v2:test.device.v1", namespace="specs"
             )
 
             # 验证从网络获取成功
@@ -327,12 +326,12 @@ class TestDeviceSpecRepositoryImpl:
                             "format": "uint8",
                             "access": ["read", "write", "notify"],
                             "unit": "celsius",
-                            "value-range": [30, 100, 1]  # 列表格式: [min, max, step]
+                            "value-range": [30, 100, 1],  # 列表格式: [min, max, step]
                         }
                     ],
-                    "actions": []
+                    "actions": [],
                 }
-            ]
+            ],
         }
         mock_httpx_get.return_value = spec_response
 
@@ -358,12 +357,18 @@ class TestDeviceSpecRepositoryImpl:
         instances_response = Mock()
         instances_response.json.return_value = {
             "instances": [
-                {"model": "xiaomi.light.ceiling1",
-                 "type": "urn:miot-spec-v2:device:light:0000A001:xiaomi-ceiling1:1"},
-                {"model": "xiaomi.light.ceiling2",
-                 "type": "urn:miot-spec-v2:device:light:0000A001:xiaomi-ceiling2:1"},
-                {"model": "xiaomi.light.ceiling3",
-                 "type": "urn:miot-spec-v2:device:light:0000A001:xiaomi-ceiling3:1"},
+                {
+                    "model": "xiaomi.light.ceiling1",
+                    "type": "urn:miot-spec-v2:device:light:0000A001:xiaomi-ceiling1:1",
+                },
+                {
+                    "model": "xiaomi.light.ceiling2",
+                    "type": "urn:miot-spec-v2:device:light:0000A001:xiaomi-ceiling2:1",
+                },
+                {
+                    "model": "xiaomi.light.ceiling3",
+                    "type": "urn:miot-spec-v2:device:light:0000A001:xiaomi-ceiling3:1",
+                },
             ]
         }
         spec_response = Mock()
@@ -385,4 +390,3 @@ class TestDeviceSpecRepositoryImpl:
 
         # 3 台设备 + 1 次映射拉取 = 4 次 HTTP GET，而不是 3 * 2 = 6 次
         assert mock_httpx_get.call_count == 4
-

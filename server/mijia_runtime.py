@@ -9,7 +9,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import qrcode
 from mijiaAPI_V2 import create_api_client, create_auth_service
@@ -44,7 +44,12 @@ def render_qr_data_url(content: str, *, box_size: int = 6, border: int = 2) -> s
     Generating the QR locally from ``loginUrl`` matches the CLI path and stays same-origin.
     """
 
-    qr = qrcode.QRCode(version=None, error_correction=qrcode.constants.ERROR_CORRECT_M, box_size=box_size, border=border)
+    qr = qrcode.QRCode(
+        version=None,
+        error_correction=qrcode.constants.ERROR_CORRECT_M,
+        box_size=box_size,
+        border=border,
+    )
     qr.add_data(content)
     qr.make(fit=True)
     image = qr.make_image(fill_color="black", back_color="white")
@@ -68,6 +73,7 @@ class LoginJob:
     created_at: str = field(default_factory=lambda: isoformat(utc_now()))
     completed_at: Optional[str] = None
     user_id: Optional[str] = None
+    attempt: tuple[int, int] = (0, 0)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -125,37 +131,73 @@ class SyncProgress:
         }
 
 
+class AccountChangedError(RuntimeError):
+    """An operation belongs to a removed or superseded account session."""
+
+
 class LoginJobManager:
     """Create and track QR login sessions for the web UI."""
 
-    def __init__(self, settings: ServerSettings):
+    def __init__(self, settings: ServerSettings, runtime: MijiaRuntime):
         self._settings = settings
+        self._runtime = runtime
         self._jobs: dict[str, LoginJob] = {}
         self._lock = threading.Lock()
+        runtime.register_login_canceller(self.cancel_pending)
+
+    def cancel_pending(self) -> None:
+        with self._lock:
+            for job in self._jobs.values():
+                if job.status in {"pending", "scanning"}:
+                    job.status = "canceled"
+                    job.message = "登录任务已取消，请重新扫码"
+                    job.completed_at = isoformat(utc_now())
 
     def start(self) -> dict[str, Any]:
+        attempt = self._runtime.begin_login_attempt()
         provider = CredentialProvider(ConfigManager())
-        location_data = provider._get_location()
-        if location_data.get("code") == 0:
-            raise RuntimeError("已有有效登录态，请加载已保存凭据")
-        qr_data = provider._get_qrcode_data(location_data)
-        login_url = str(qr_data["loginUrl"])
-        job = LoginJob(
-            id=str(uuid.uuid4()),
-            qr_url=str(qr_data["qr"]),
-            login_url=login_url,
-            poll_url=str(qr_data["lp"]),
-            qr_image=render_qr_data_url(login_url),
-        )
+        try:
+            location_data = provider._get_location()
+            if location_data.get("code") == 0:
+                raise RuntimeError("已有有效登录态，请加载已保存凭据")
+            qr_data = provider._get_qrcode_data(location_data)
+            login_url = str(qr_data["loginUrl"])
+            job = LoginJob(
+                id=str(uuid.uuid4()),
+                qr_url=str(qr_data["qr"]),
+                login_url=login_url,
+                poll_url=str(qr_data["lp"]),
+                qr_image=render_qr_data_url(login_url),
+                attempt=attempt,
+            )
+        except Exception:
+            provider._client.close()
+            raise
         with self._lock:
             self._jobs[job.id] = job
+
+        if not self._runtime.is_current_login_attempt(attempt):
+            with self._lock:
+                job.status = "canceled"
+                job.message = "登录任务已取消，请重新扫码"
+                job.completed_at = isoformat(utc_now())
+            provider._client.close()
+            return job.as_dict()
 
         thread = threading.Thread(
             target=self._wait_and_save,
             args=(provider, job.id),
             daemon=True,
         )
-        thread.start()
+        try:
+            thread.start()
+        except Exception:
+            provider._client.close()
+            with self._lock:
+                job.status = "failed"
+                job.message = "无法启动登录任务，请重试"
+                job.completed_at = isoformat(utc_now())
+            raise
         return job.as_dict()
 
     def get(self, job_id: str) -> dict[str, Any]:
@@ -169,10 +211,16 @@ class LoginJobManager:
         try:
             with self._lock:
                 job = self._jobs[job_id]
+                if job.status == "canceled":
+                    return
                 job.status = "scanning"
                 job.message = "二维码已生成，等待确认"
+                attempt = job.attempt
+                poll_url = job.poll_url
 
-            result = provider._long_poll_for_scan(self._jobs[job_id].poll_url)
+            result = provider._long_poll_for_scan(poll_url)
+            if not self._runtime.is_current_login_attempt(attempt):
+                raise AccountChangedError("登录任务已取消，请重新扫码")
             callback_response = provider._client.get(result["location"])
             service_token = callback_response.cookies.get("serviceToken")
             if not service_token:
@@ -188,9 +236,11 @@ class LoginJobManager:
                 user_agent=provider._generate_user_agent(),
                 expires_at=provider._calculate_expires_at({}),
             )
-            FileCredentialStore(self._settings.credential_path).save(credential)
+            self._runtime.commit_login_credential(credential, attempt)
             with self._lock:
                 job = self._jobs[job_id]
+                if job.status == "canceled":
+                    return
                 job.status = "success"
                 job.message = "登录成功"
                 job.completed_at = datetime.now(timezone.utc).isoformat()
@@ -198,9 +248,13 @@ class LoginJobManager:
         except Exception as exc:
             with self._lock:
                 job = self._jobs[job_id]
-                job.status = "failed"
+                if job.status == "canceled":
+                    return
+                job.status = "canceled" if isinstance(exc, AccountChangedError) else "failed"
                 job.message = str(exc)
                 job.completed_at = datetime.now(timezone.utc).isoformat()
+        finally:
+            provider._client.close()
 
 
 class SyncInProgressError(RuntimeError):
@@ -214,10 +268,17 @@ class MijiaRuntime:
         self._settings = settings
         self._store = store
         self._credential_lock = threading.RLock()
+        self._refresh_lock = threading.Lock()
+        self._account_generation = 0
+        self._login_sequence = 0
+        self._login_canceller: Optional[Callable[[], None]] = None
         self._sync_lock = threading.Lock()
         self._sync_progress: Optional[SyncProgress] = None
         self._progress_cleanup_delay_seconds = 5.0
         self._refresh_timer: Optional[threading.Timer] = None
+        self._refresh_timer_lock = threading.Lock()
+        self._refresh_timer_enabled = False
+        self._refresh_timer_generation = 0
         self._refresh_interval = 24 * 60 * 60  # 每 24 小时检查一次
         # 复用同一个 MijiaAPI，避免每次请求重建 HttpClient / CacheManager 导致 L1 缓存永远失效。
         self._api_client: Optional[Any] = None
@@ -225,7 +286,40 @@ class MijiaRuntime:
         self._api_lock = threading.Lock()
 
     def load_credential(self) -> Optional[Credential]:
-        return FileCredentialStore(self._settings.credential_path).load()
+        with self._credential_lock:
+            return FileCredentialStore(self._settings.credential_path).load()
+
+    def register_login_canceller(self, callback: Callable[[], None]) -> None:
+        self._login_canceller = callback
+
+    def begin_login_attempt(self) -> tuple[int, int]:
+        with self._credential_lock:
+            self._login_sequence += 1
+            if self._login_canceller is not None:
+                self._login_canceller()
+            return self._account_generation, self._login_sequence
+
+    def is_current_login_attempt(self, attempt: tuple[int, int]) -> bool:
+        with self._credential_lock:
+            return attempt == (self._account_generation, self._login_sequence)
+
+    def _check_account_generation(self, generation: int) -> None:
+        if generation != self._account_generation:
+            raise AccountChangedError("米家账号已移除或重新登录，旧任务结果已丢弃")
+
+    def commit_login_credential(self, credential: Credential, attempt: tuple[int, int]) -> None:
+        with self._credential_lock:
+            if not self.is_current_login_attempt(attempt):
+                raise AccountChangedError("登录任务已取消，请重新扫码")
+            previous = self.load_credential()
+            self._account_generation += 1
+            old_api = self._detach_api_client()
+            if previous is None or previous.user_id != credential.user_id:
+                # Fail closed if registry cleanup or credential persistence fails.
+                FileCredentialStore(self._settings.credential_path).delete()
+                self._store.clear_synced_registries()
+            FileCredentialStore(self._settings.credential_path).save(credential)
+        self._clear_detached_cache(old_api)
 
     def credential_status(self) -> dict[str, Any]:
         credential = self.load_credential()
@@ -261,66 +355,114 @@ class MijiaRuntime:
         }
 
     def refresh_credential(self) -> dict[str, Any]:
-        credential = self._load_required_credential()
-        self._refresh_credential(credential)
+        with self._credential_lock:
+            credential = self._load_required_credential()
+            generation = self._account_generation
+        self._refresh_credential(credential, generation)
         return self.credential_status()
 
-    def _refresh_credential(self, credential: Credential) -> Credential:
-        auth = create_auth_service(
-            credential_store=FileCredentialStore(self._settings.credential_path)
-        )
-        refreshed = auth.refresh_credential(credential)
-        auth.save_credential(refreshed)
-        return refreshed
+    def _refresh_credential(self, credential: Credential, generation: int) -> Credential:
+        # Refresh serialization does not block account removal or login commits.
+        with self._refresh_lock:
+            with self._credential_lock:
+                self._check_account_generation(generation)
+                current = self._load_required_credential()
+                if current.user_id != credential.user_id:
+                    raise AccountChangedError("米家账号已变更，旧刷新任务已取消")
+                if current.service_token != credential.service_token:
+                    return current
+            auth = create_auth_service(
+                credential_store=FileCredentialStore(self._settings.credential_path)
+            )
+            refreshed = auth.refresh_credential(current)
+            with self._credential_lock:
+                self._check_account_generation(generation)
+                latest = self._load_required_credential()
+                if (
+                    latest.user_id != current.user_id
+                    or latest.service_token != current.service_token
+                ):
+                    raise AccountChangedError("米家凭据已变更，旧刷新结果已丢弃")
+                auth.save_credential(refreshed)
+            return refreshed
 
     def delete_credential(self) -> dict[str, Any]:
         """删除米家凭据，同时清理该账号同步下来的数据与 SDK 缓存。
 
         返回受影响的行数摘要，便于上层审计。
         """
-        # 先尝试清 SDK 缓存（依赖当前 api client）；失败不阻塞后续操作
-        try:
-            if self._api_client is not None:
-                self._api_client.clear_all_cache()
-        except Exception:
-            logger.warning("failed to clear SDK cache before credential delete", exc_info=True)
-
-        FileCredentialStore(self._settings.credential_path).delete()
-        self._invalidate_api_client()
-        cleared = self._store.clear_synced_registries()
-
+        with self._credential_lock:
+            self._account_generation += 1
+            self._login_sequence += 1
+            if self._login_canceller is not None:
+                self._login_canceller()
+            old_api = self._detach_api_client()
+            FileCredentialStore(self._settings.credential_path).delete()
+            cleared = self._store.clear_synced_registries()
+        self._clear_detached_cache(old_api)
         return {"cleared": cleared}
+
+    @staticmethod
+    def _clear_detached_cache(api: Any) -> None:
+        try:
+            if api is not None:
+                api.clear_all_cache()
+        except Exception:
+            logger.warning("failed to clear detached SDK cache", exc_info=True)
 
     def start_credential_refresh_timer(self) -> None:
         """启动定时刷新凭据的后台任务"""
-        if self._refresh_timer is not None:
-            return
-        self._refresh_timer = threading.Timer(
-            self._refresh_interval, self._credential_refresh_job
+        with self._refresh_timer_lock:
+            if self._refresh_timer_enabled:
+                return
+            self._refresh_timer_enabled = True
+            self._refresh_timer_generation += 1
+            self._schedule_refresh_timer_locked(self._refresh_timer_generation)
+
+    def _schedule_refresh_timer_locked(self, generation: int) -> None:
+        timer = threading.Timer(
+            self._refresh_interval, lambda: self._credential_refresh_job(generation)
         )
-        self._refresh_timer.daemon = True
-        self._refresh_timer.start()
+        timer.daemon = True
+        self._refresh_timer = timer
+        timer.start()
 
     def stop_credential_refresh_timer(self) -> None:
         """停止定时刷新凭据的后台任务"""
-        if self._refresh_timer is not None:
-            self._refresh_timer.cancel()
-            self._refresh_timer = None
+        with self._refresh_timer_lock:
+            self._refresh_timer_enabled = False
+            self._refresh_timer_generation += 1
+            if self._refresh_timer is not None:
+                self._refresh_timer.cancel()
+                self._refresh_timer = None
 
-    def _credential_refresh_job(self) -> None:
+    def _credential_refresh_job(self, timer_generation: int) -> None:
         """定时刷新凭据的任务"""
+        with self._refresh_timer_lock:
+            if (
+                not self._refresh_timer_enabled
+                or timer_generation != self._refresh_timer_generation
+            ):
+                return
+            self._refresh_timer = None
         try:
-            credential = self.load_credential()
+            with self._credential_lock:
+                credential = self.load_credential()
+                generation = self._account_generation
             if credential is None:
                 return
             threshold = self._settings.credential_refresh_before_seconds
-            if credential.is_valid() and credential.expires_in() < threshold:
-                self._refresh_credential(credential)
+            if credential.expires_in() < threshold:
+                self._refresh_credential(credential, generation)
         except Exception:
             logger.warning("credential refresh job failed", exc_info=True)
         finally:
-            # 重新启动定时器
-            self.start_credential_refresh_timer()
+            with self._refresh_timer_lock:
+                if (
+                    self._refresh_timer_enabled
+                    and timer_generation == self._refresh_timer_generation
+                ):
+                    self._schedule_refresh_timer_locked(timer_generation)
 
     def sync_all(self) -> dict[str, Any]:
         """启动后台同步任务并立即返回。
@@ -334,26 +476,32 @@ class MijiaRuntime:
         if not self._sync_lock.acquire(blocking=False):
             raise SyncInProgressError("同步正在进行中，请稍后再试")
 
-        task_id = str(uuid.uuid4())
-        self._sync_progress = SyncProgress(
-            task_id=task_id,
-            status="running",
-            step="排队中",
-            started_at=isoformat(utc_now()),
-        )
-        thread = threading.Thread(target=self._sync_background, daemon=True)
-        thread.start()
+        try:
+            with self._credential_lock:
+                generation = self._account_generation
+                task_id = str(uuid.uuid4())
+                self._sync_progress = SyncProgress(
+                    task_id=task_id,
+                    status="running",
+                    step="排队中",
+                    started_at=isoformat(utc_now()),
+                )
+            thread = threading.Thread(target=self._sync_background, args=(generation,), daemon=True)
+            thread.start()
+        except Exception:
+            self._sync_lock.release()
+            raise
         return {
             "status": "started",
             "task_id": task_id,
             "message": "同步已在后台启动，请轮询 /api/admin/sync/progress",
         }
 
-    def _sync_background(self) -> None:
+    def _sync_background(self, generation: int) -> None:
         """后台线程入口：执行同步逻辑并确保锁被释放。"""
         task_id: Optional[str] = None
         try:
-            result = self._sync_all_unlocked()
+            result = self._sync_all_unlocked(generation)
             try:
                 self._store.add_audit(
                     "mijia.sync.completed",
@@ -389,11 +537,12 @@ class MijiaRuntime:
 
     def get_sync_progress(self) -> Optional[dict[str, Any]]:
         """Get current sync progress."""
-        if self._sync_progress is None:
-            return None
-        return self._sync_progress.as_dict()
+        with self._credential_lock:
+            if self._sync_progress is None:
+                return None
+            return self._sync_progress.as_dict()
 
-    def _sync_all_unlocked(self) -> dict[str, Any]:
+    def _sync_all_unlocked(self, generation: int) -> dict[str, Any]:
         # Prefer the progress seeded by sync_all(); create one only as fallback.
         if self._sync_progress is None:
             self._sync_progress = SyncProgress(
@@ -409,7 +558,8 @@ class MijiaRuntime:
 
             # Step 2: Get homes
             self._update_progress(step="获取家庭列表", progress=5)
-            api = self._api()
+            api, _ = self._api_with_generation(generation)
+            api.refresh_cache()
             homes = api.get_homes()
 
             # Step 3: Save homes
@@ -453,13 +603,15 @@ class MijiaRuntime:
             self._update_progress(step="保存设备数据", progress=90)
             # Step 8: Commit the complete snapshot atomically.
             self._update_progress(step="保存家庭、设备和场景数据", progress=95)
-            self._store.replace_synced_snapshot(
-                home_dicts,
-                devices,
-                scenes,
-                reconciled_device_home_ids=reconciled_device_homes,
-                reconciled_scene_home_ids=reconciled_scene_homes,
-            )
+            with self._credential_lock:
+                self._check_account_generation(generation)
+                self._store.replace_synced_snapshot(
+                    home_dicts,
+                    devices,
+                    scenes,
+                    reconciled_device_home_ids=reconciled_device_homes,
+                    reconciled_scene_home_ids=reconciled_scene_homes,
+                )
 
             # Complete
             self._update_progress(
@@ -487,84 +639,157 @@ class MijiaRuntime:
 
     def _clear_progress_if_task(self, task_id: Optional[str]) -> None:
         """仅在当前 progress 属于指定 task 时清空，避免误清新一轮任务。"""
-        current = self._sync_progress
-        if current is not None and current.task_id == task_id:
-            self._sync_progress = None
+        with self._credential_lock:
+            current = self._sync_progress
+            if current is not None and current.task_id == task_id:
+                self._sync_progress = None
 
     def _update_progress(self, **kwargs) -> None:
         """Update sync progress."""
-        if self._sync_progress is None:
-            return
+        with self._credential_lock:
+            if self._sync_progress is None:
+                return
 
-        for key, value in kwargs.items():
-            if hasattr(self._sync_progress, key):
-                setattr(self._sync_progress, key, value)
+            for key, value in kwargs.items():
+                if hasattr(self._sync_progress, key):
+                    setattr(self._sync_progress, key, value)
 
-        self._sync_progress.updated_at = isoformat(utc_now())
+            self._sync_progress.updated_at = isoformat(utc_now())
 
-    def get_device_state(self, device_slug: str) -> list[dict[str, Any]]:
-        device = self._store.get_device(device_slug)
-        api = self._api()
-        spec = device.get("spec") or self.get_device_spec(device_slug)
+    @staticmethod
+    def _authorize_resource(
+        resource: dict[str, Any], authorize: Optional[Callable[[dict[str, Any]], bool]]
+    ) -> None:
+        if authorize is not None and not authorize(resource):
+            raise PermissionError("API key cannot access the current resource")
+
+    def get_device_state(
+        self,
+        device_slug: str,
+        *,
+        internal_only: bool = False,
+        authorize: Optional[Callable[[dict[str, Any]], bool]] = None,
+    ) -> list[dict[str, Any]]:
+        with self._credential_lock:
+            generation = self._account_generation
+            device = self._store.get_device(device_slug, internal_only=internal_only)
+            self._authorize_resource(device, authorize)
+        api, _ = self._api_with_generation(generation)
+        spec = device.get("spec")
+        if not spec:
+            fetched = api.get_device_spec(device["model"])
+            spec = model_to_dict(fetched) if fetched is not None else None
         requests = self._readable_property_requests(device["did"], spec)
         if not requests:
             return []
         return api.get_device_properties(requests)
 
     def set_device_property(
-        self, device_slug: str, siid: int, piid: int, value: Any
+        self,
+        device_slug: str,
+        siid: int,
+        piid: int,
+        value: Any,
+        *,
+        internal_only: bool = False,
+        authorize: Optional[Callable[[dict[str, Any]], bool]] = None,
     ) -> dict[str, Any]:
-        device = self._store.get_device(device_slug)
-        if device["access_mode"] != "write":
-            raise PermissionError("设备未授权控制")
-        success = self._api().control_device(
+        with self._credential_lock:
+            generation = self._account_generation
+            device = self._store.get_device(device_slug, internal_only=internal_only)
+            self._authorize_resource(device, authorize)
+            if device["access_mode"] != "write":
+                raise PermissionError("设备未授权控制")
+        api, _ = self._api_with_generation(generation)
+        success = api.control_device(
             device["did"], siid, piid, value, home_id=device.get("home_id")
         )
         return {"success": bool(success)}
 
     def call_device_action(
-        self, device_slug: str, siid: int, aiid: int, params: Optional[dict[str, Any]]
+        self,
+        device_slug: str,
+        siid: int,
+        aiid: int,
+        params: Optional[dict[str, Any]],
+        *,
+        internal_only: bool = False,
+        authorize: Optional[Callable[[dict[str, Any]], bool]] = None,
     ) -> dict[str, Any]:
-        device = self._store.get_device(device_slug)
-        if device["access_mode"] != "write":
-            raise PermissionError("设备未授权控制")
-        result = self._api().call_device_action(
+        with self._credential_lock:
+            generation = self._account_generation
+            device = self._store.get_device(device_slug, internal_only=internal_only)
+            self._authorize_resource(device, authorize)
+            if device["access_mode"] != "write":
+                raise PermissionError("设备未授权控制")
+        api, _ = self._api_with_generation(generation)
+        result = api.call_device_action(
             device["did"], siid, aiid, params or {}, home_id=device.get("home_id")
         )
         return {"result": result}
 
-    def batch_set_properties(self, requests: list[dict[str, Any]]) -> dict[str, Any]:
+    def batch_set_properties(
+        self,
+        requests: list[dict[str, Any]],
+        *,
+        internal_only: bool = False,
+        authorize: Optional[Callable[[dict[str, Any]], bool]] = None,
+    ) -> dict[str, Any]:
         api_requests = []
-        for request in requests:
-            device_ref = request.get("device") or request.get("device_id")
-            if not device_ref:
-                raise ValueError("每项必须包含 device 或 device_id")
-            device = self._store.get_device(str(device_ref))
-            if device["access_mode"] != "write":
-                raise PermissionError(f"设备未授权控制: {device['slug']}")
-            api_requests.append(
-                {
-                    "device_id": device["did"],
-                    "home_id": device.get("home_id"),
-                    "siid": request["siid"],
-                    "piid": request["piid"],
-                    "value": request["value"],
-                }
-            )
-        return {"items": self._api().batch_control_devices(api_requests)}
+        with self._credential_lock:
+            generation = self._account_generation
+            for request in requests:
+                device_ref = request.get("device") or request.get("device_id")
+                if not device_ref:
+                    raise ValueError("每项必须包含 device 或 device_id")
+                device = self._store.get_device(str(device_ref), internal_only=internal_only)
+                self._authorize_resource(device, authorize)
+                if device["access_mode"] != "write":
+                    raise PermissionError(f"设备未授权控制: {device['slug']}")
+                api_requests.append(
+                    {
+                        "did": device["did"],
+                        "home_id": device.get("home_id"),
+                        "siid": request["siid"],
+                        "piid": request["piid"],
+                        "value": request["value"],
+                    }
+                )
+        api, _ = self._api_with_generation(generation)
+        return {"items": api.batch_control_devices(api_requests)}
 
-    def get_device_spec(self, device_slug: str) -> dict[str, Any] | None:
-        device = self._store.get_device(device_slug)
-        spec = self._api().get_device_spec(device["model"])
+    def get_device_spec(
+        self,
+        device_slug: str,
+        *,
+        internal_only: bool = False,
+        authorize: Optional[Callable[[dict[str, Any]], bool]] = None,
+    ) -> dict[str, Any] | None:
+        with self._credential_lock:
+            generation = self._account_generation
+            device = self._store.get_device(device_slug, internal_only=internal_only)
+            self._authorize_resource(device, authorize)
+        api, _ = self._api_with_generation(generation)
+        spec = api.get_device_spec(device["model"])
         if spec is None:
             return None
         return model_to_dict(spec)
 
-    def execute_scene(self, scene_id: str) -> dict[str, Any]:
-        scene = self._store.get_scene(scene_id)
-        if not scene["executable"]:
-            raise PermissionError("场景未授权执行")
-        success = self._api().execute_scene(scene["scene_id"], scene["home_id"])
+    def execute_scene(
+        self,
+        scene_id: str,
+        *,
+        internal_only: bool = False,
+        authorize: Optional[Callable[[dict[str, Any]], bool]] = None,
+    ) -> dict[str, Any]:
+        with self._credential_lock:
+            generation = self._account_generation
+            scene = self._store.get_scene(scene_id, internal_only=internal_only)
+            self._authorize_resource(scene, authorize)
+            if not scene["executable"]:
+                raise PermissionError("场景未授权执行")
+        api, _ = self._api_with_generation(generation)
+        success = api.execute_scene(scene["scene_id"], scene["home_id"])
         return {"success": bool(success)}
 
     def refresh_cache(self, home_id: Optional[str] = None) -> None:
@@ -573,20 +798,23 @@ class MijiaRuntime:
     def clear_sdk_cache(self) -> None:
         self._api().clear_all_cache()
 
-    def _require_credential(self) -> Credential:
-        credential = self._load_required_credential()
+    def _require_credential(self, generation: int) -> Credential:
+        with self._credential_lock:
+            self._check_account_generation(generation)
+            credential = self._load_required_credential()
         if credential.expires_in() > self._settings.credential_refresh_before_seconds:
             return credential
-        with self._credential_lock:
-            credential = self._load_required_credential()
-            if credential.expires_in() > self._settings.credential_refresh_before_seconds:
-                return credential
-            try:
-                return self._refresh_credential(credential)
-            except Exception as exc:
+        try:
+            return self._refresh_credential(credential, generation)
+        except AccountChangedError:
+            raise
+        except Exception as exc:
+            with self._credential_lock:
+                self._check_account_generation(generation)
+                credential = self._load_required_credential()
                 if credential.is_valid():
                     return credential
-                raise RuntimeError(f"米家凭据已过期且自动刷新失败：{exc}") from exc
+            raise RuntimeError(f"米家凭据已过期且自动刷新失败：{exc}") from exc
 
     def _load_required_credential(self) -> Credential:
         credential = self.load_credential()
@@ -602,25 +830,36 @@ class MijiaRuntime:
         - 凭据文件被替换到另一个 ``user_id``。
         凭据 token 因刷新更新时，直接调用 ``update_credential`` 避免全量重建。
         """
-        credential = self._require_credential()
+        return self._api_with_generation()[0]
 
-        with self._api_lock:
-            api = self._api_client
-            if api is not None and self._api_client_credential_id == credential.user_id:
-                # 同一用户：直接更新最新的凭据 token，复用连接池与缓存。
-                api.update_credential(credential)
-                return api
-
-            api = create_api_client(credential, cache_dir=self._settings.data_dir / "cache")
-            self._api_client = api
-            self._api_client_credential_id = credential.user_id
-            return api
+    def _api_with_generation(self, expected: Optional[int] = None) -> tuple[Any, int]:
+        with self._credential_lock:
+            generation = self._account_generation if expected is None else expected
+            self._check_account_generation(generation)
+        self._require_credential(generation)
+        with self._credential_lock:
+            self._check_account_generation(generation)
+            credential = self._load_required_credential()
+            with self._api_lock:
+                api = self._api_client
+                if api is not None and self._api_client_credential_id == credential.user_id:
+                    api.update_credential(credential)
+                else:
+                    api = create_api_client(credential, cache_dir=self._settings.data_dir / "cache")
+                    self._api_client = api
+                    self._api_client_credential_id = credential.user_id
+                return api, generation
 
     def _invalidate_api_client(self) -> None:
         """凭据被删除或替换用户时，丢弃当前 MijiaAPI 实例。"""
+        self._detach_api_client()
+
+    def _detach_api_client(self) -> Any:
         with self._api_lock:
+            previous = self._api_client
             self._api_client = None
             self._api_client_credential_id = None
+            return previous
 
     def _device_dicts(self, api: Any, home: Home) -> list[dict[str, Any]]:
         devices = []

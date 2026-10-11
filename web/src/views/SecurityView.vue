@@ -6,6 +6,7 @@ import { configBool } from "../utils/configHelpers";
 const props = defineProps<{
   configs: Array<Record<string, unknown>>;
   proxyCidrs: string;
+  saving: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -45,6 +46,7 @@ function cfgBool(key: string, defaultValue = false): boolean {
             </div>
           </div>
           <el-switch
+            :disabled="saving"
             :model-value="cfgBool('ALLOW_LAN_ACCESS')"
             active-text="允许"
             inactive-text="关闭"
@@ -60,6 +62,7 @@ function cfgBool(key: string, defaultValue = false): boolean {
             </div>
           </div>
           <el-switch
+            :disabled="saving"
             :model-value="cfgBool('ALLOW_PUBLIC_ACCESS')"
             active-text="允许"
             inactive-text="关闭"
@@ -75,6 +78,7 @@ function cfgBool(key: string, defaultValue = false): boolean {
             </div>
           </div>
           <el-switch
+            :disabled="saving"
             :model-value="cfgBool('TRUST_PROXY_HEADERS')"
             active-text="开启"
             inactive-text="关闭"
@@ -98,7 +102,7 @@ function cfgBool(key: string, defaultValue = false): boolean {
           />
           <div class="proxy-config-actions">
             <el-button @click="emit('sync-proxy-cidrs')">还原</el-button>
-            <el-button type="primary" @click="emit('save-proxy-cidrs')">保存可信代理</el-button>
+            <el-button type="primary" :loading="saving" :disabled="saving" @click="emit('save-proxy-cidrs')">保存可信代理</el-button>
           </div>
         </div>
       </div>
@@ -120,6 +124,7 @@ function cfgBool(key: string, defaultValue = false): boolean {
             </div>
           </div>
           <el-switch
+            :disabled="saving"
             :model-value="cfgBool('DOCS_ENABLED')"
             active-text="开启"
             inactive-text="关闭"
@@ -135,6 +140,7 @@ function cfgBool(key: string, defaultValue = false): boolean {
             </div>
           </div>
           <el-switch
+            :disabled="saving"
             :model-value="cfgBool('OPENAPI_ENABLED')"
             active-text="开启"
             inactive-text="关闭"

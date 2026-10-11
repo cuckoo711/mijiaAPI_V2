@@ -1,4 +1,6 @@
 import { computed, ref } from "vue";
+import { ApiRequestError, parseApiRequestError } from "../utils/apiRequestError";
+export { ApiRequestError } from "../utils/apiRequestError";
 
 export type AdminSessionPayload = {
   token?: string;
@@ -9,18 +11,6 @@ export type AdminSessionPayload = {
 export type RequestBehavior = {
   skipAuthRedirect?: boolean;
 };
-
-export class ApiRequestError extends Error {
-  status: number;
-  code?: string;
-
-  constructor(message: string, status: number, code?: string) {
-    super(message);
-    this.name = "ApiRequestError";
-    this.status = status;
-    this.code = code;
-  }
-}
 
 const EXPIRES_AT_KEY = "mijia_admin_expires_at";
 const LEGACY_TOKEN_KEY = "mijia_admin_token";
@@ -48,6 +38,7 @@ export function useAdminSession() {
 
   const tokenExpiresAt = ref(localStorage.getItem(EXPIRES_AT_KEY) || "");
   const sessionActive = ref(_hasUsableExpiry(tokenExpiresAt.value) || Boolean(legacyBearer.value));
+  const loggingOut = ref(false);
   let adminRefreshTimer: number | undefined;
   let refreshInFlight: Promise<boolean> | null = null;
 
@@ -91,6 +82,7 @@ export function useAdminSession() {
   }
 
   async function refreshAdminSession(): Promise<boolean> {
+    if (loggingOut.value) return false;
     if (refreshInFlight) {
       return refreshInFlight;
     }
@@ -104,7 +96,8 @@ export function useAdminSession() {
           },
           { skipAuthRedirect: true },
         );
-        saveAdminSession(payload);
+        // Logout waits for this response before revoking the cookie it issued.
+        if (!loggingOut.value) saveAdminSession(payload);
         return true;
       } catch (error) {
         if (error instanceof ApiRequestError && error.status === 401) {
@@ -113,7 +106,7 @@ export function useAdminSession() {
               ? "登录已过期，请重新登录"
               : undefined,
           );
-        } else if (sessionActive.value) {
+        } else if (sessionActive.value && !loggingOut.value) {
           adminRefreshTimer = window.setTimeout(() => {
             void refreshAdminSession();
           }, 60_000);
@@ -168,12 +161,14 @@ export function useAdminSession() {
     });
     if (!response.ok) {
       const payload = await response.json().catch(() => ({}));
-      const errorCode = payload?.error?.code;
-      const errorMessage = payload?.error?.message || `请求失败 ${response.status}`;
-      const requestError = new ApiRequestError(errorMessage, response.status, errorCode);
+      const requestError = parseApiRequestError(payload, response.status);
+      const adminAuthFailed = requestError.code === "ADMIN_AUTH_FAILED" || (
+        (!requestError.code || requestError.code === "HTTP_ERROR") && requestError.message === "Missing bearer token"
+      );
       if (
         response.status === 401 &&
-        errorCode === "ADMIN_AUTH_FAILED" &&
+        url.startsWith("/api/admin/") &&
+        adminAuthFailed &&
         !behavior.skipAuthRedirect
       ) {
         clearAdminSession("登录已过期，请重新登录");
@@ -196,16 +191,24 @@ export function useAdminSession() {
   }
 
   async function logout(): Promise<void> {
+    if (loggingOut.value) return;
+    loggingOut.value = true;
+    window.clearTimeout(adminRefreshTimer);
     try {
+      // An earlier refresh can set a cookie. Revoke after it finishes so a late
+      // refresh response cannot restore a session after a successful logout.
+      if (refreshInFlight) await refreshInFlight;
       await request(
         "/api/admin/auth/logout",
         { method: "POST", body: "{}" },
         { skipAuthRedirect: true },
       );
-    } catch {
-      // Cookie/local state is cleared below even if the revoke call fails.
+      clearAdminSession();
+    } finally {
+      loggingOut.value = false;
+      // Failed revocation keeps the authenticated UI and permits an explicit retry.
+      if (sessionActive.value) scheduleAdminTokenRefresh(tokenExpiresAt.value);
     }
-    clearAdminSession();
   }
 
   function disposeAdminSession(): void {
@@ -216,6 +219,7 @@ export function useAdminSession() {
     token,
     tokenExpiresAt,
     isAuthed,
+    loggingOut,
     request,
     saveAdminSession,
     clearAdminSession,

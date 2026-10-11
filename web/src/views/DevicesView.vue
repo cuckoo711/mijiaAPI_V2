@@ -6,6 +6,7 @@ const props = defineProps<{
   devices: DeviceItem[];
   homes: HomeItem[];
   syncing: boolean;
+  pendingIds: string[];
 }>();
 
 const emit = defineEmits<{
@@ -126,7 +127,7 @@ function deviceStatusTag(status: string): "success" | "danger" | "warning" | "in
       </el-table-column>
       <el-table-column label="Slug" min-width="180">
         <template #default="{ row }">
-          <el-input v-model="row.slug" />
+          <el-input v-model="row.slug" :disabled="pendingIds.includes(row.id)" />
         </template>
       </el-table-column>
       <el-table-column label="家庭" min-width="160">
@@ -152,6 +153,7 @@ function deviceStatusTag(status: string): "success" | "danger" | "warning" | "in
             inactive-text="只读"
             inline-prompt
             class="access-switch"
+            :disabled="pendingIds.includes(row.id)"
             @change="(value: string | number | boolean) => emit('auto-save-access', row, value)"
           />
         </template>
@@ -160,13 +162,14 @@ function deviceStatusTag(status: string): "success" | "danger" | "warning" | "in
         <template #default="{ row }">
           <el-switch
             v-model="row.hidden"
+            :disabled="pendingIds.includes(row.id)"
             @change="(value: string | number | boolean) => emit('auto-save-hidden', row, value)"
           />
         </template>
       </el-table-column>
       <el-table-column label="操作" width="100">
         <template #default="{ row }">
-          <el-button size="small" @click="emit('update-device', row)">保存</el-button>
+          <el-button size="small" :loading="pendingIds.includes(row.id)" :disabled="pendingIds.includes(row.id)" @click="emit('update-device', row)">保存</el-button>
         </template>
       </el-table-column>
     </el-table>

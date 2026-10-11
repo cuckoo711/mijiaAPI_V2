@@ -10,6 +10,7 @@ const props = defineProps<{
   homes: HomeItem[];
   apiBaseUrl: string;
   oneTimeApiKey: string;
+  pendingIds: string[];
 }>();
 
 const emit = defineEmits<{
@@ -63,6 +64,7 @@ async function copySceneExecuteCurl(sceneId: string): Promise<void> {
         <template #default="{ row }">
           <el-switch
             v-model="row.executable"
+            :disabled="pendingIds.includes(row.id)"
             @change="(value: string | number | boolean) => emit('auto-save-executable', row, value)"
           />
         </template>
@@ -71,6 +73,7 @@ async function copySceneExecuteCurl(sceneId: string): Promise<void> {
         <template #default="{ row }">
           <el-switch
             v-model="row.hidden"
+            :disabled="pendingIds.includes(row.id)"
             @change="(value: string | number | boolean) => emit('auto-save-hidden', row, value)"
           />
         </template>

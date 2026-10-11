@@ -4,11 +4,24 @@
 """
 
 from typing import Any, Dict, List, Optional
+from contextlib import contextmanager
 
+from .core.logging import get_logger
 from .domain.models import Credential, Device, Home, Scene
-from .services.device_service import DeviceService
+from .services.device_service import DeviceService, normalize_property_requests
 from .services.scene_service import SceneService
 from .services.statistics_service import StatisticsService
+
+logger = get_logger(__name__)
+
+
+@contextmanager
+def _control_cache_update():
+    """Cache maintenance must not mask an already returned control outcome."""
+    try:
+        yield
+    except Exception as exc:
+        logger.warning("控制后的缓存失效失败", extra={"error_type": type(exc).__name__})
 
 
 class MijiaAPI:
@@ -138,7 +151,8 @@ class MijiaAPI:
 
         # 控制成功后刷新缓存
         if result and refresh_cache and self._cache_manager:
-            self._invalidate_device_cache(device_id, home_id)
+            with _control_cache_update():
+                self._invalidate_device_cache(device_id, home_id)
 
         return result
 
@@ -203,7 +217,8 @@ class MijiaAPI:
 
         # 操作成功后刷新缓存
         if refresh_cache and self._cache_manager:
-            self._invalidate_device_cache(device_id, home_id)
+            with _control_cache_update():
+                self._invalidate_device_cache(device_id, home_id)
 
         return result
 
@@ -236,13 +251,15 @@ class MijiaAPI:
             >>> # 批量控制但不刷新缓存（高频操作时使用）
             >>> results = api.batch_control_devices(requests, refresh_cache=False)
         """
+        requests = normalize_property_requests(requests)
         # 剥离仅用于本地失效缓存的辅助字段，避免透传到米家 API
         forwarded = [{k: v for k, v in request.items() if k != "home_id"} for request in requests]
         results = self._device_service.batch_control_devices(forwarded, self._credential)
 
         # 批量控制成功后刷新缓存
         if refresh_cache and self._cache_manager:
-            self._invalidate_batch_device_cache(requests)
+            with _control_cache_update():
+                self._invalidate_batch_device_cache(requests)
 
         return results
 
@@ -254,7 +271,7 @@ class MijiaAPI:
         known_home_ids: set[str] = set()
         unknown_device_ids: set[str] = set()
         for request in requests:
-            device_id = request.get("device_id")
+            device_id = request.get("did") or request.get("device_id")
             home_id = request.get("home_id")
             if home_id:
                 known_home_ids.add(str(home_id))
@@ -539,7 +556,8 @@ class AsyncMijiaAPI:
 
         # 控制成功后刷新缓存
         if result and refresh_cache and self._cache_manager:
-            await self._async_invalidate_device_cache(device_id, home_id)
+            with _control_cache_update():
+                await self._async_invalidate_device_cache(device_id, home_id)
 
         return result
 
@@ -611,7 +629,8 @@ class AsyncMijiaAPI:
 
         # 操作成功后刷新缓存
         if refresh_cache and self._cache_manager:
-            await self._async_invalidate_device_cache(device_id, home_id)
+            with _control_cache_update():
+                await self._async_invalidate_device_cache(device_id, home_id)
 
         return result
 
@@ -647,6 +666,7 @@ class AsyncMijiaAPI:
         """
         import asyncio
 
+        requests = normalize_property_requests(requests)
         # 剥离仅用于本地失效缓存的辅助字段，避免透传到米家 API
         forwarded = [{k: v for k, v in request.items() if k != "home_id"} for request in requests]
         results = await asyncio.to_thread(
@@ -655,28 +675,29 @@ class AsyncMijiaAPI:
 
         # 批量控制成功后刷新缓存
         if refresh_cache and self._cache_manager:
-            known_home_ids: set[str] = set()
-            unknown_device_ids: set[str] = set()
-            for request in requests:
-                device_id = request.get("device_id")
-                home_id = request.get("home_id")
-                if home_id:
-                    known_home_ids.add(str(home_id))
-                elif device_id:
-                    unknown_device_ids.add(str(device_id))
+            with _control_cache_update():
+                known_home_ids: set[str] = set()
+                unknown_device_ids: set[str] = set()
+                for request in requests:
+                    device_id = request.get("did") or request.get("device_id")
+                    home_id = request.get("home_id")
+                    if home_id:
+                        known_home_ids.add(str(home_id))
+                    elif device_id:
+                        unknown_device_ids.add(str(device_id))
 
-            for device_id in unknown_device_ids:
-                device = await asyncio.to_thread(
-                    self._device_service.get_device_by_id, device_id, self._credential
-                )
-                if device:
-                    known_home_ids.add(device.home_id)
+                for device_id in unknown_device_ids:
+                    device = await asyncio.to_thread(
+                        self._device_service.get_device_by_id, device_id, self._credential
+                    )
+                    if device:
+                        known_home_ids.add(device.home_id)
 
-            for home_id in known_home_ids:
-                await asyncio.to_thread(
-                    self._cache_manager.invalidate_pattern,
-                    f"{self._credential.user_id}:devices:{home_id}",
-                )
+                for home_id in known_home_ids:
+                    await asyncio.to_thread(
+                        self._cache_manager.invalidate_pattern,
+                        f"{self._credential.user_id}:devices:{home_id}",
+                    )
 
         return results
 

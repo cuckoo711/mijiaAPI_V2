@@ -79,6 +79,12 @@ curl -H "Authorization: Bearer YOUR_API_KEY" \
 
 管理台「API 使用」页面有完整的请求示例和参数说明。交互式文档（Swagger/ReDoc）可在「系统安全」中开启。
 
+控制请求出现 `409 EXECUTION_UNKNOWN` 时，命令可能已送达，服务不会自动重发；请先查询设备状态或场景效果，再决定后续操作。查询请求与发送前的连接失败仍可重试。
+
+批量属性接口 `/api/v1/batch/devices/properties` 的每项必须包含 `device`（兼容 `device_id`）、正整数 `siid` / `piid` 和 `value`。SDK 批量请求使用 `did`（兼容 `device_id`）。服务会在发送整批命令前检查全部属性规格、写权限、类型、范围和步长。
+
+管理台支持密钥资源范围、有效期、启停、删除与轮换。`POST /api/admin/api-keys/{id}/rotate` 在同一事务中创建新密钥并停用旧密钥；默认继承原权限和有效期，可传 `expires_at` 修改有效期，传 `null` 取消有效期。新密钥仅在创建或轮换响应中显示一次。
+
 ## SDK 使用
 
 ```python

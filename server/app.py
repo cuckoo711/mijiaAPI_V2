@@ -9,11 +9,21 @@ from pathlib import Path
 from typing import Any, AsyncGenerator, Optional
 
 from fastapi import FastAPI, HTTPException, Request, status
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 import mijiaAPI_V2
+from mijiaAPI_V2.domain.exceptions import (
+    AuthenticationError,
+    DeviceNotFoundError,
+    ExecutionUnknownError,
+    MijiaAPIException,
+    NetworkError,
+    PropertyReadOnlyError,
+    ValidationError as ControlValidationError,
+)
 from server.admin_csrf import (
     CSRF_COOKIE_NAME,
     CSRF_HEADER_NAME,
@@ -23,7 +33,12 @@ from server.admin_csrf import (
 )
 from server.admin_session_cookie import ADMIN_SESSION_COOKIE_NAME, optional_bearer_token
 from server.config import ServerSettings
-from server.mijia_runtime import LoginJobManager, MijiaRuntime, SyncInProgressError
+from server.mijia_runtime import (
+    AccountChangedError,
+    LoginJobManager,
+    MijiaRuntime,
+    SyncInProgressError,
+)
 from server.routers import admin_auth, admin_mijia, admin_resources, api_v1
 from server.store import AuthenticationFailedError, ServerStore
 from server.updater import UpdateChecker
@@ -52,14 +67,20 @@ class ErrorEnvelope(BaseModel):
     error: dict[str, Any]
 
 
-def _json_error(status_code: int, code: str, message: str, request_id: str) -> JSONResponse:
+def _json_error(
+    status_code: int,
+    code: str,
+    message: str,
+    request_id: str,
+    details: Optional[dict[str, Any]] = None,
+) -> JSONResponse:
     return JSONResponse(
         status_code=status_code,
         content={
             "error": {
                 "code": code,
                 "message": message,
-                "details": {},
+                "details": details or {},
                 "request_id": request_id,
             }
         },
@@ -252,7 +273,7 @@ def create_app(  # noqa: C901
     app.state.settings = resolved_settings
     app.state.store = resolved_store
     app.state.runtime = MijiaRuntime(resolved_settings, resolved_store)
-    app.state.login_jobs = LoginJobManager(resolved_settings)
+    app.state.login_jobs = LoginJobManager(resolved_settings, app.state.runtime)
     app.state.started_at = datetime.now(timezone.utc)
     app.state.update_checker = UpdateChecker(current_version=mijiaAPI_V2.__version__)
 
@@ -265,8 +286,55 @@ def create_app(  # noqa: C901
                 str(exc.detail["code"]),
                 str(exc.detail["message"]),
                 request_id,
+                exc.detail.get("details"),
             )
         return _json_error(exc.status_code, "HTTP_ERROR", str(exc.detail), request_id)
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_error_handler(
+        request: Request, exc: RequestValidationError
+    ) -> JSONResponse:
+        issues = [
+            {"loc": list(error["loc"]), "message": error["msg"], "type": error["type"]}
+            for error in exc.errors()
+        ]
+        return _json_error(
+            422,
+            "INVALID_REQUEST",
+            "请求参数无效",
+            getattr(request.state, "request_id", ""),
+            {"issues": issues},
+        )
+
+    @app.exception_handler(MijiaAPIException)
+    async def sdk_error_handler(request: Request, exc: MijiaAPIException) -> JSONResponse:
+        details = None
+        if isinstance(exc, ExecutionUnknownError):
+            status_code, code = 409, "EXECUTION_UNKNOWN"
+            message = "请求可能已执行，结果尚未确认；请先查询设备状态，勿直接重试"
+            details = {"outcome": "unknown", "retry_safe": False}
+            completed_count = exc.context.get("completed_count")
+            if type(completed_count) is int and completed_count >= 0:
+                details["completed_count"] = completed_count
+        elif isinstance(exc, ControlValidationError):
+            status_code, code, message = 422, "INVALID_CONTROL_PARAMETERS", str(exc)
+        elif isinstance(exc, PropertyReadOnlyError):
+            status_code, code, message = 403, "PROPERTY_READ_ONLY", str(exc)
+        elif isinstance(exc, DeviceNotFoundError):
+            status_code, code, message = 404, "DEVICE_NOT_FOUND", str(exc)
+        elif isinstance(exc, AuthenticationError):
+            status_code, code, message = 401, "MIJIA_AUTH_FAILED", "米家授权失效，请重新登录米家"
+        elif isinstance(exc, NetworkError):
+            status_code, code, message = (
+                503,
+                "MIJIA_NETWORK_ERROR",
+                "米家服务请求失败，请稍后查询状态",
+            )
+        else:
+            status_code, code, message = 502, "MIJIA_API_ERROR", "米家服务返回错误"
+        return _json_error(
+            status_code, code, message, getattr(request.state, "request_id", ""), details
+        )
 
     @app.exception_handler(KeyError)
     async def key_error_handler(request: Request, exc: KeyError) -> JSONResponse:
@@ -288,6 +356,17 @@ def create_app(  # noqa: C901
             "SYNC_IN_PROGRESS",
             str(exc),
             request_id,
+        )
+
+    @app.exception_handler(AccountChangedError)
+    async def account_changed_error_handler(
+        request: Request, exc: AccountChangedError
+    ) -> JSONResponse:
+        return _json_error(
+            409,
+            "ACCOUNT_CHANGED",
+            "账号已移除或切换，请刷新账号状态后重新操作",
+            getattr(request.state, "request_id", ""),
         )
 
     @app.exception_handler(RuntimeError)

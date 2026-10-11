@@ -11,7 +11,8 @@ import {
   Tickets,
 } from "@element-plus/icons-vue";
 import type { Component } from "vue";
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import { ElMessageBox } from "element-plus";
 import { normalizeApiBaseUrl } from "./apiExamples";
 import { useAdminSession } from "./composables/useAdminSession";
 import { useMijiaLogin } from "./composables/useMijiaLogin";
@@ -21,12 +22,14 @@ import type {
   ApiList,
   AppInfo,
   CheckItem,
+  CreateApiKeyPayload,
   DeviceItem,
   HomeItem,
   SceneItem,
   UpdateInfo,
 } from "./types/admin";
 import { configText } from "./utils/configHelpers";
+import { errorMessage } from "./utils/apiRequestError";
 import ApiDocsView from "./views/ApiDocsView.vue";
 import ApiKeysView from "./views/ApiKeysView.vue";
 import AuditView from "./views/AuditView.vue";
@@ -50,7 +53,7 @@ type MenuSection = {
   pages: PageItem[];
 };
 
-const { isAuthed, request, refreshAdminSession, login: loginAdminSession, logout: logoutAdminSession, disposeAdminSession } =
+const { isAuthed, loggingOut, request, refreshAdminSession, login: loginAdminSession, logout: logoutAdminSession, disposeAdminSession } =
   useAdminSession();
 
 const activeMenu = ref(
@@ -59,6 +62,7 @@ const activeMenu = ref(
 const loading = ref(false);
 const health = ref<{ status: string; version: string } | null>(null);
 const initialized = ref(false);
+const publicLoaded = ref(false);
 const account = ref<Record<string, unknown>>({});
 const checks = ref<CheckItem[]>([]);
 const homes = ref<HomeItem[]>([]);
@@ -75,14 +79,38 @@ const aboutDialogVisible = ref(false);
 const passwordDialogVisible = ref(false);
 const changingPassword = ref(false);
 const checkingUpdate = ref(false);
+const creatingApiKey = ref(false);
+const busyKeyId = ref("");
+const pendingDeviceIds = ref<string[]>([]);
+const pendingSceneIds = ref<string[]>([]);
+const savingConfig = ref(false);
+const logoutError = ref("");
 
-const { qrJob, startQrLogin, deleteCredential, disposeMijiaLogin } = useMijiaLogin({
+const { qrJob, qrError, qrStarting, removingCredential, pollQrLogin, startQrLogin, deleteCredential, disposeMijiaLogin } = useMijiaLogin({
   request,
-  onAccountChanged: () => refreshAll(),
+  onAccountChanged: () => loadAdmin(),
 });
-const { syncing, syncProgress, stopSyncPolling, syncMijia } = useSyncProgress({
+const { syncing, syncProgress, syncError, resumeSyncProgress, stopSyncPolling, syncMijia } = useSyncProgress({
   request,
-  onCompleted: () => refreshAll(),
+  onCompleted: () => loadAdmin(),
+});
+watch(isAuthed, (active) => {
+  if (active) return;
+  logoutError.value = "";
+  stopSyncPolling();
+  disposeMijiaLogin();
+  qrJob.value = null;
+  syncing.value = false;
+  syncProgress.value = null;
+  oneTimeApiKey.value = "";
+  account.value = {};
+  homes.value = [];
+  devices.value = [];
+  scenes.value = [];
+  apiKeys.value = [];
+  checks.value = [];
+  configs.value = [];
+  audits.value = [];
 });
 
 const defaultTrustedProxyCidrs = "127.0.0.1/32\n::1/128";
@@ -166,6 +194,7 @@ async function loadPublic(): Promise<void> {
     version: string;
   }>("/api/admin/bootstrap/state");
   initialized.value = bootstrapPayload.initialized;
+  publicLoaded.value = true;
   health.value = {
     status: bootstrapPayload.status,
     version: bootstrapPayload.version,
@@ -195,6 +224,7 @@ async function loadAdmin(): Promise<void> {
     request<ApiList<Record<string, unknown>>>("/api/admin/config"),
     request<ApiList<Record<string, unknown>>>("/api/admin/audit?limit=50"),
   ]);
+  if (!isAuthed.value) return;
   checks.value = checkPayload.checks;
   account.value = accountPayload;
   homes.value = homePayload.items;
@@ -211,9 +241,11 @@ async function refreshAll(): Promise<void> {
   try {
     await loadPublic();
     await refreshAdminSession();
-    await loadAdmin();
+    await Promise.all([loadAdmin(), isAuthed.value ? resumeSyncProgress() : Promise.resolve()]);
     void loadAppInfo();
     void checkForUpdates({ background: true });
+  } catch (error) {
+    ElMessage.error(errorMessage(error, "刷新失败，请重试"));
   } finally {
     loading.value = false;
   }
@@ -300,7 +332,14 @@ async function login(): Promise<void> {
 }
 
 async function logout(): Promise<void> {
-  await logoutAdminSession();
+  logoutError.value = "";
+  try {
+    await logoutAdminSession();
+    ElMessage.success("已退出登录");
+  } catch (error) {
+    logoutError.value = `退出失败，请重试：${errorMessage(error, "网络异常")}`;
+    ElMessage.error(logoutError.value);
+  }
 }
 
 function openPasswordDialog(): void {
@@ -348,30 +387,122 @@ async function changePassword(): Promise<void> {
   }
 }
 
-async function createApiKey(payload: { name: string; scopes: string[] }): Promise<void> {
-  const response = await request<Record<string, string>>("/api/admin/api-keys", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
-  oneTimeApiKey.value = response.key;
-  ElMessage.success("API Key 已创建，请保存一次性密钥");
-  await loadAdmin();
+async function refreshSavedData(): Promise<void> {
+  try {
+    await loadAdmin();
+  } catch (error) {
+    ElMessage.warning(`操作已成功，但列表刷新失败，请刷新重试：${errorMessage(error, "网络异常")}`);
+  }
+}
+
+async function refreshAuditData(): Promise<void> {
+  try {
+    const payload = await request<ApiList<Record<string, unknown>>>("/api/admin/audit?limit=50");
+    if (isAuthed.value) audits.value = payload.items;
+  } catch (error) {
+    ElMessage.warning(`操作已成功，但审计刷新失败，请刷新重试：${errorMessage(error, "网络异常")}`);
+  }
+}
+
+async function createApiKey(payload: CreateApiKeyPayload): Promise<void> {
+  if (creatingApiKey.value) return;
+  creatingApiKey.value = true;
+  try {
+    const response = await request<{ key: string }>("/api/admin/api-keys", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    oneTimeApiKey.value = response.key;
+    ElMessage.success("API Key 已创建，请保存一次性密钥");
+    await refreshSavedData();
+  } catch (error) {
+    ElMessage.error(errorMessage(error, "API Key 创建失败，请重试"));
+  } finally {
+    creatingApiKey.value = false;
+  }
+}
+
+async function setApiKeyStatus(key: ApiKeyItem, active: boolean): Promise<void> {
+  if (busyKeyId.value) return;
+  busyKeyId.value = key.id;
+  try {
+    const updated = await request<ApiKeyItem>(`/api/admin/api-keys/${key.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ is_active: active }),
+    });
+    Object.assign(key, updated);
+    ElMessage.success(active ? "API Key 已启用" : "API Key 已停用");
+    await refreshSavedData();
+  } catch (error) {
+    ElMessage.error(errorMessage(error, "API Key 状态更新失败，请重试"));
+  } finally {
+    busyKeyId.value = "";
+  }
+}
+
+async function deleteApiKey(key: ApiKeyItem): Promise<void> {
+  if (busyKeyId.value) return;
+  try {
+    await ElMessageBox.confirm(`删除「${key.name}」后该密钥立即失效，确认删除？`, "删除 API Key", { type: "warning" });
+  } catch { return; }
+  busyKeyId.value = key.id;
+  try {
+    await request(`/api/admin/api-keys/${key.id}`, { method: "DELETE" });
+    apiKeys.value = apiKeys.value.filter((item) => item.id !== key.id);
+    ElMessage.success("API Key 已删除");
+    await refreshSavedData();
+  } catch (error) {
+    ElMessage.error(errorMessage(error, "API Key 删除失败，请重试"));
+  } finally {
+    busyKeyId.value = "";
+  }
+}
+
+async function rotateApiKey(key: ApiKeyItem, payload: { expires_at?: string | null }): Promise<void> {
+  if (busyKeyId.value) return;
+  busyKeyId.value = key.id;
+  try {
+    const response = await request<{ key: string }>(`/api/admin/api-keys/${key.id}/rotate`, {
+      method: "POST", body: JSON.stringify(payload),
+    });
+    key.is_active = false;
+    oneTimeApiKey.value = response.key;
+    ElMessage.success("API Key 已轮换，旧密钥已停用，请保存新密钥");
+    await refreshSavedData();
+  } catch (error) {
+    ElMessage.error(errorMessage(error, "API Key 轮换失败，请重试"));
+  } finally {
+    busyKeyId.value = "";
+  }
 }
 
 async function updateDevice(device: DeviceItem, message = "设备已更新"): Promise<void> {
-  await request(`/api/admin/devices/${device.id}`, {
-    method: "PATCH",
-    body: JSON.stringify({
-      slug: device.slug,
-      alias: device.alias,
-      tags: device.tags,
-      group_name: device.group_name,
-      hidden: device.hidden,
-      access_mode: device.access_mode,
-    }),
-  });
-  ElMessage.success(message);
-  await loadAdmin();
+  await saveDevice(device, {
+    slug: device.slug,
+    alias: device.alias,
+    tags: device.tags,
+    group_name: device.group_name,
+    hidden: device.hidden,
+    access_mode: device.access_mode,
+  }, message);
+}
+
+async function saveDevice(device: DeviceItem, patch: Partial<DeviceItem>, message: string): Promise<boolean> {
+  if (pendingDeviceIds.value.includes(device.id)) return false;
+  pendingDeviceIds.value = [...pendingDeviceIds.value, device.id];
+  try {
+    await request(`/api/admin/devices/${device.id}`, { method: "PATCH", body: JSON.stringify(patch) });
+    Object.assign(device, patch);
+    ElMessage.success(message);
+    // Reloading every device here would discard another row's unsaved slug.
+    await refreshAuditData();
+    return true;
+  } catch (error) {
+    ElMessage.error(errorMessage(error, "设备更新失败，请重试"));
+    return false;
+  } finally {
+    pendingDeviceIds.value = pendingDeviceIds.value.filter((id) => id !== device.id);
+  }
 }
 
 async function autoSaveDeviceAccess(
@@ -380,31 +511,33 @@ async function autoSaveDeviceAccess(
 ): Promise<void> {
   const nextValue = String(value);
   const previousValue = nextValue === "write" ? "read" : "write";
-  try {
-    await updateDevice(device, "访问权限已保存");
-  } catch (error) {
+  if (!await saveDevice(device, { access_mode: nextValue }, "访问权限已保存")) {
     device.access_mode = previousValue;
-    ElMessage.error(error instanceof Error ? error.message : "访问权限保存失败");
   }
 }
 
 async function autoSaveDeviceHidden(device: DeviceItem, value: string | number | boolean): Promise<void> {
   const previousValue = !Boolean(value);
-  try {
-    await updateDevice(device, "隐藏状态已保存");
-  } catch (error) {
+  if (!await saveDevice(device, { hidden: Boolean(value) }, "隐藏状态已保存")) {
     device.hidden = previousValue;
-    ElMessage.error(error instanceof Error ? error.message : "隐藏状态保存失败");
   }
 }
 
-async function updateScene(scene: SceneItem, message = "场景已更新"): Promise<void> {
-  await request(`/api/admin/scenes/${scene.id}`, {
-    method: "PATCH",
-    body: JSON.stringify({ hidden: scene.hidden, executable: scene.executable }),
-  });
-  ElMessage.success(message);
-  await loadAdmin();
+async function saveScene(scene: SceneItem, patch: Partial<SceneItem>, message: string): Promise<boolean> {
+  if (pendingSceneIds.value.includes(scene.id)) return false;
+  pendingSceneIds.value = [...pendingSceneIds.value, scene.id];
+  try {
+    await request(`/api/admin/scenes/${scene.id}`, { method: "PATCH", body: JSON.stringify(patch) });
+    Object.assign(scene, patch);
+    ElMessage.success(message);
+    await refreshAuditData();
+    return true;
+  } catch (error) {
+    ElMessage.error(errorMessage(error, "场景更新失败，请重试"));
+    return false;
+  } finally {
+    pendingSceneIds.value = pendingSceneIds.value.filter((id) => id !== scene.id);
+  }
 }
 
 async function autoSaveSceneExecutable(
@@ -412,49 +545,47 @@ async function autoSaveSceneExecutable(
   value: string | number | boolean
 ): Promise<void> {
   const previousValue = !Boolean(value);
-  try {
-    await updateScene(scene, "执行权限已保存");
-  } catch (error) {
+  if (!await saveScene(scene, { executable: Boolean(value) }, "执行权限已保存")) {
     scene.executable = previousValue;
-    ElMessage.error(error instanceof Error ? error.message : "执行权限保存失败");
   }
 }
 
 async function autoSaveSceneHidden(scene: SceneItem, value: string | number | boolean): Promise<void> {
   const previousValue = !Boolean(value);
-  try {
-    await updateScene(scene, "隐藏状态已保存");
-  } catch (error) {
+  if (!await saveScene(scene, { hidden: Boolean(value) }, "隐藏状态已保存")) {
     scene.hidden = previousValue;
-    ElMessage.error(error instanceof Error ? error.message : "隐藏状态保存失败");
   }
 }
 
 async function setConfig(payload: { key: string; value: string }): Promise<void> {
-  await request(`/api/admin/config/${payload.key}`, {
-    method: "PUT",
-    body: JSON.stringify({ value: payload.value }),
-  });
-  ElMessage.success("配置已保存");
-  await loadAdmin();
+  await saveConfig(payload.key, payload.value);
 }
 
 async function setRuntimeSwitch(key: string, value: string | number | boolean): Promise<void> {
-  await request(`/api/admin/config/${key}`, {
-    method: "PUT",
-    body: JSON.stringify({ value: Boolean(value) }),
-  });
-  ElMessage.success("配置已保存");
-  await loadAdmin();
+  await saveConfig(key, Boolean(value));
+}
+
+async function saveConfig(key: string, value: unknown): Promise<void> {
+  if (savingConfig.value) return;
+  savingConfig.value = true;
+  try {
+    const saved = await request<Record<string, unknown>>(`/api/admin/config/${encodeURIComponent(key)}`, {
+      method: "PUT", body: JSON.stringify({ value }),
+    });
+    const current = configs.value.find((item) => item.key === key);
+    if (current) Object.assign(current, { key, value }, saved);
+    else configs.value.push({ key, value, ...saved });
+    ElMessage.success("配置已保存");
+    await refreshSavedData();
+  } catch (error) {
+    ElMessage.error(errorMessage(error, "配置保存失败，请重试"));
+  } finally {
+    savingConfig.value = false;
+  }
 }
 
 async function saveTrustedProxyCidrs(): Promise<void> {
-  await request("/api/admin/config/TRUSTED_PROXY_CIDRS", {
-    method: "PUT",
-    body: JSON.stringify({ value: parseProxyCidrs() }),
-  });
-  ElMessage.success("可信代理已保存");
-  await loadAdmin();
+  await saveConfig("TRUSTED_PROXY_CIDRS", parseProxyCidrs());
 }
 
 function selectPage(index: string): void {
@@ -547,13 +678,22 @@ onBeforeUnmount(() => {
         </div>
         <div class="toolbar">
           <el-button v-if="isAuthed" @click="openPasswordDialog">修改密码</el-button>
-          <el-button v-if="isAuthed" @click="logout">退出</el-button>
+          <el-button v-if="isAuthed" :loading="loggingOut" :disabled="loggingOut" @click="logout">退出</el-button>
           <el-button :loading="loading" :icon="Cpu" @click="refreshAll">刷新</el-button>
         </div>
       </el-header>
 
       <el-main class="content">
-        <section v-if="!initialized" class="auth-panel">
+        <el-alert v-if="logoutError" :title="logoutError" type="error" :closable="false">
+          <el-button size="small" :disabled="loggingOut" @click="logout">重试退出</el-button>
+        </el-alert>
+        <el-alert v-if="isAuthed && syncError" :title="syncError" type="warning" :closable="false">
+          <el-button size="small" @click="resumeSyncProgress">刷新同步进度</el-button>
+        </el-alert>
+        <section v-if="!publicLoaded" class="auth-panel">
+          <el-empty description="正在连接服务；连接失败时请刷新重试" />
+        </section>
+        <section v-else-if="!initialized" class="auth-panel">
           <el-card shadow="never">
             <template #header>创建管理员</template>
             <el-form label-width="96px">
@@ -597,9 +737,13 @@ onBeforeUnmount(() => {
           v-else-if="activeMenu === 'mijia'"
           :account="account"
           :qr-job="qrJob"
+          :qr-error="qrError"
+          :qr-starting="qrStarting"
+          :removing-credential="removingCredential"
           :syncing="syncing"
           :sync-progress="syncProgress"
           @start-qr-login="startQrLogin"
+          @retry-qr-poll="pollQrLogin"
           @sync="syncMijia"
           @delete-credential="deleteCredential"
           @dismiss-sync-progress="dismissSyncProgress"
@@ -609,6 +753,7 @@ onBeforeUnmount(() => {
           :devices="devices"
           :homes="homes"
           :syncing="syncing"
+          :pending-ids="pendingDeviceIds"
           @sync="syncMijia"
           @update-device="updateDevice"
           @auto-save-access="autoSaveDeviceAccess"
@@ -620,6 +765,7 @@ onBeforeUnmount(() => {
           :homes="homes"
           :api-base-url="apiBaseUrl"
           :one-time-api-key="oneTimeApiKey"
+          :pending-ids="pendingSceneIds"
           @auto-save-executable="autoSaveSceneExecutable"
           @auto-save-hidden="autoSaveSceneHidden"
         />
@@ -627,7 +773,15 @@ onBeforeUnmount(() => {
           v-else-if="activeMenu === 'keys'"
           :api-keys="apiKeys"
           :one-time-api-key="oneTimeApiKey"
+          :homes="homes"
+          :devices="devices"
+          :scenes="scenes"
+          :creating="creatingApiKey"
+          :busy-key-id="busyKeyId"
           @create="createApiKey"
+          @set-status="setApiKeyStatus"
+          @delete="deleteApiKey"
+          @rotate="rotateApiKey"
         />
         <ApiDocsView
           v-else-if="activeMenu === 'api-docs'"
@@ -638,6 +792,7 @@ onBeforeUnmount(() => {
           v-else-if="activeMenu === 'security'"
           v-model:proxy-cidrs="proxyCidrs"
           :configs="configs"
+          :saving="savingConfig"
           @set-runtime-switch="setRuntimeSwitch"
           @sync-proxy-cidrs="syncProxyCidrsForm"
           @save-proxy-cidrs="saveTrustedProxyCidrs"
@@ -645,6 +800,7 @@ onBeforeUnmount(() => {
         <SettingsView
           v-else-if="activeMenu === 'settings'"
           :configs="configs"
+          :saving="savingConfig"
           @set-config="setConfig"
         />
         <AuditView v-else-if="activeMenu === 'audit'" :audits="audits" />

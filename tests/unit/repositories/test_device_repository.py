@@ -1,11 +1,11 @@
 """设备仓储单元测试"""
 
 from datetime import datetime, timedelta
-from unittest.mock import MagicMock, Mock
+from unittest.mock import Mock
 
 import pytest
 
-from mijiaAPI_V2.domain.models import Credential, Device, DeviceProperty, DeviceStatus
+from mijiaAPI_V2.domain.models import Credential, DeviceStatus
 from mijiaAPI_V2.infrastructure.cache_manager import CacheManager
 from mijiaAPI_V2.infrastructure.http_client import HttpClient
 from mijiaAPI_V2.repositories.device_repository import DeviceRepositoryImpl
@@ -87,13 +87,9 @@ class TestGetAll:
         # 准备家庭列表API响应（用于获取home_owner）
         home_list_response = {
             "code": 0,
-            "result": {
-                "homelist": [
-                    {"id": 1, "uid": 123456, "name": "我的家"}  # id 应该是整数
-                ]
-            },
+            "result": {"homelist": [{"id": 1, "uid": 123456, "name": "我的家"}]},  # id 应该是整数
         }
-        
+
         # 准备设备列表API响应
         device_list_response = {
             "code": 0,
@@ -115,7 +111,7 @@ class TestGetAll:
                 "has_more": False,
             },
         }
-        
+
         # 配置mock返回不同的响应（第一次调用返回家庭列表，第二次返回设备列表）
         mock_http_client.post.side_effect = [home_list_response, device_list_response]
 
@@ -191,14 +187,14 @@ class TestCallAction:
     ):
         """测试成功调用设备操作"""
         # 准备API响应
-        api_response = {"code": 0, "result": {"status": "ok"}}
+        api_response = {"code": 0, "result": {"code": 0, "status": "ok"}}
         mock_http_client.post.return_value = api_response
 
         # 调用方法
         result = device_repository.call_action("device1", 2, 1, {"param": "value"}, test_credential)
 
         # 验证结果
-        assert result == {"status": "ok"}
+        assert result == {"code": 0, "status": "ok"}
 
         # 验证HTTP调用
         mock_http_client.post.assert_called_once_with(

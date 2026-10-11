@@ -13,7 +13,9 @@ from mijiaAPI_V2.domain.exceptions import (
 )
 from mijiaAPI_V2.domain.models import (
     Credential,
+    ActionParameter,
     Device,
+    DeviceAction,
     DeviceProperty,
     DeviceStatus,
     PropertyAccess,
@@ -115,9 +117,15 @@ def sample_device_spec(
 
 @pytest.fixture
 def device_service(
-    mock_device_repo: Mock, mock_spec_repo: Mock, mock_cache_manager: Mock
+    mock_device_repo: Mock,
+    mock_spec_repo: Mock,
+    mock_cache_manager: Mock,
+    sample_device: Device,
+    sample_device_spec: DeviceSpec,
 ) -> DeviceService:
     """创建DeviceService实例"""
+    mock_device_repo.get_by_id.return_value = sample_device
+    mock_spec_repo.get_spec.return_value = sample_device_spec
     return DeviceService(
         device_repo=mock_device_repo,
         spec_repo=mock_spec_repo,
@@ -298,39 +306,41 @@ def test_set_device_property_raises_validation_error_for_invalid_type(
     assert "属性值无效" in str(exc_info.value)
 
 
-def test_set_device_property_without_spec(
+def test_set_device_property_without_spec_is_rejected(
     device_service: DeviceService,
     mock_device_repo: Mock,
     mock_spec_repo: Mock,
     sample_credential: Credential,
     sample_device: Device,
 ) -> None:
-    """测试set_device_property在没有规格时仍能设置属性"""
+    """规格不可用时拒绝发送属性控制。"""
     # 设置mock返回值（规格不存在）
     mock_device_repo.get_by_id.return_value = sample_device
     mock_spec_repo.get_spec.return_value = None
     mock_device_repo.set_property.return_value = True
 
     # 调用方法（没有规格验证，直接设置）
-    result = device_service.set_device_property(
-        "device_001", siid=2, piid=1, value=True, credential=sample_credential
-    )
-
-    # 验证
-    mock_device_repo.set_property.assert_called_once_with(
-        "device_001", 2, 1, True, sample_credential
-    )
-    assert result is True
+    with pytest.raises(ValidationError):
+        device_service.set_device_property(
+            "device_001", siid=2, piid=1, value=True, credential=sample_credential
+        )
+    mock_device_repo.set_property.assert_not_called()
 
 
 def test_call_device_action_delegates_to_repo(
     device_service: DeviceService,
     mock_device_repo: Mock,
     sample_credential: Credential,
+    sample_device_spec: DeviceSpec,
 ) -> None:
     """测试call_device_action委托给device_repo"""
     # 设置mock返回值
     mock_device_repo.call_action.return_value = {"code": 0, "message": "success"}
+    sample_device_spec.actions = [
+        DeviceAction(
+            siid=2, aiid=1, name="set_level", parameters=[ActionParameter(name="level", type="int")]
+        )
+    ]
 
     # 调用方法
     params: Dict[str, Any] = {"level": 50}
@@ -379,7 +389,9 @@ def test_batch_control_devices_multiple_batches(
     ]
 
     # 设置mock返回值（每次调用返回对应数量的结果）
-    def batch_side_effect(batch_requests: List[Dict[str, Any]], cred: Credential) -> List[Dict[str, Any]]:
+    def batch_side_effect(
+        batch_requests: List[Dict[str, Any]], cred: Credential
+    ) -> List[Dict[str, Any]]:
         return [{"code": 0} for _ in batch_requests]
 
     mock_device_repo.batch_set_properties.side_effect = batch_side_effect

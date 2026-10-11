@@ -46,10 +46,25 @@ export type ApiKeyItem = {
   name: string;
   key_prefix: string;
   scopes: string[];
+  resource_policy: ApiKeyResourcePolicy;
+  expires_at?: string | null;
   is_active: boolean;
   created_at: string;
   last_used_at?: string;
   use_count: number;
+};
+
+export type ApiKeyResourcePolicy = {
+  homes: string[];
+  devices: string[];
+  scenes: string[];
+};
+
+export type CreateApiKeyPayload = {
+  name: string;
+  scopes: string[];
+  resource_policy: ApiKeyResourcePolicy;
+  expires_at: string | null;
 };
 
 export type ApiEndpointRow = {

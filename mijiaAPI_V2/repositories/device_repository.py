@@ -5,10 +5,48 @@
 
 from typing import Any, Dict, List, Optional
 
+from ..core.logging import get_logger
+from ..domain.exceptions import ExecutionUnknownError, MijiaAPIException
 from ..domain.models import Credential, Device, DeviceProperty, DeviceStatus
 from ..infrastructure.cache_manager import CacheManager
 from ..infrastructure.http_client import HttpClient
 from .interfaces import IDeviceRepository
+
+logger = get_logger(__name__)
+
+
+def _unknown_ack() -> ExecutionUnknownError:
+    return ExecutionUnknownError("控制响应缺少有效确认，结果未知；请先核对设备状态，勿直接重试")
+
+
+def _control_result(response: Any) -> Any:
+    if not isinstance(response, dict):
+        raise _unknown_ack()
+    code = response.get("code")
+    if "code" in response and type(code) is not int:
+        raise _unknown_ack()
+    if type(code) is int and code != 0:
+        raise MijiaAPIException("米家服务拒绝控制请求", code=code)
+    if "result" not in response:
+        raise _unknown_ack()
+    return response["result"]
+
+
+def _confirmed_miot_ack(item: Any, target: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(item, dict) or type(item.get("code")) is not int:
+        raise _unknown_ack()
+    # Providers may omit identity fields. When present, they must identify
+    # the request whose result we are returning.
+    for field in ("did", "siid", "piid", "aiid"):
+        if field not in item or field not in target:
+            continue
+        if field == "did":
+            matches = str(item[field]) == str(target[field])
+        else:
+            matches = type(item[field]) is int and item[field] == target[field]
+        if not matches:
+            raise _unknown_ack()
+    return item
 
 
 class DeviceRepositoryImpl(IDeviceRepository):
@@ -256,16 +294,20 @@ class DeviceRepositoryImpl(IDeviceRepository):
             credential=credential,
         )
 
-        # 检查结果（返回的是列表）
-        result = response.get("result", [])
-        if result and len(result) > 0:
-            success = result[0].get("code") == 0
-        else:
-            success = False
+        if (
+            isinstance(response, dict)
+            and type(response.get("code")) is int
+            and response["code"] != 0
+        ):
+            return False
+        result = _control_result(response)
+        if not isinstance(result, list) or len(result) != 1:
+            raise _unknown_ack()
+        success = _confirmed_miot_ack(result[0], params[0])["code"] == 0
 
         if success:
             # 失效相关缓存
-            self._cache.invalidate_pattern(f"{credential.user_id}:device:{device_id}")
+            self._invalidate_control_cache(device_id, credential)
 
         return success
 
@@ -303,10 +345,11 @@ class DeviceRepositoryImpl(IDeviceRepository):
             credential=credential,
         )
 
+        result = _confirmed_miot_ack(_control_result(response), request_data)
         # 失效相关缓存（操作可能改变设备状态）
-        self._cache.invalidate_pattern(f"{credential.user_id}:device:{device_id}")
+        self._invalidate_control_cache(device_id, credential)
 
-        return response.get("result")
+        return result
 
     def batch_get_properties(
         self, requests: List[Dict[str, Any]], credential: Credential
@@ -345,13 +388,24 @@ class DeviceRepositoryImpl(IDeviceRepository):
             "/miotspec/prop/set", json={"params": requests}, credential=credential
         )
 
+        result = _control_result(response)
+        if not isinstance(result, list) or len(result) != len(requests):
+            raise _unknown_ack()
+        for item, target in zip(result, requests):
+            _confirmed_miot_ack(item, target)
+
         # 失效所有相关设备的缓存
         device_ids = {req.get("did") for req in requests if req.get("did")}
         for device_id in device_ids:
-            self._cache.invalidate_pattern(f"{credential.user_id}:device:{device_id}")
+            self._invalidate_control_cache(device_id, credential)
 
-        result: List[Dict[str, Any]] = response.get("result", [])
         return result
+
+    def _invalidate_control_cache(self, device_id: str, credential: Credential) -> None:
+        try:
+            self._cache.invalidate_pattern(f"{credential.user_id}:device:{device_id}")
+        except Exception as exc:
+            logger.warning("控制后的缓存失效失败", extra={"error_type": type(exc).__name__})
 
     def _parse_device_status(self, is_online: Any) -> DeviceStatus:
         """解析设备在线状态

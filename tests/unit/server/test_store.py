@@ -399,8 +399,11 @@ def test_api_key_rejects_expired_key_from_database(tmp_path: Path) -> None:
     store = ServerStore(make_settings(tmp_path))
     store.initialize()
     created = store.create_api_key(
-        "expired", ["read:status"], expires_at=utc_now() - timedelta(minutes=1)
+        "expired", ["read:status"]
     )
+    with store._database.connect() as conn:
+        conn.execute("UPDATE api_keys SET expires_at = ? WHERE id = ?",
+                     ((utc_now() - timedelta(minutes=1)).isoformat(), created["id"]))
 
     with pytest.raises(AuthenticationFailedError, match="expired"):
         store.validate_api_key(created["key"], required_scope="read:status")

@@ -283,10 +283,10 @@ class TestCacheManager:
         assert manager._load_from_file("default:expiring") is None
         assert not cache_file.exists()
 
-    def test_file_cache_reads_legacy_format(
+    def test_file_cache_without_namespace_metadata_is_a_cold_miss(
         self, cache_manager: CacheManager, temp_cache_dir: Path
     ) -> None:
-        """旧格式（顶层即数据）的缓存文件仍能被正确读取"""
+        """旧缓存不能识别命名空间，迁移为冷加载，避免失效后复活。"""
         import json
 
         manager = cache_manager
@@ -294,4 +294,54 @@ class TestCacheManager:
         with open(legacy_path, "w", encoding="utf-8") as f:
             json.dump({"foo": "bar"}, f)
 
-        assert manager._load_from_file("default:legacy") == {"foo": "bar"}
+        assert manager._load_from_file("default:legacy") is None
+
+    @pytest.mark.parametrize("operation", ["exact", "pattern", "namespace", "all"])
+    def test_invalidation_removes_persistent_file_entries(self, cache_manager, operation):
+        manager = cache_manager
+        manager.set("device:1:state", "old", ttl=600, namespace="u")
+        manager.set("homes", "other", ttl=600, namespace="other-u")
+        if operation == "exact":
+            manager.invalidate("device:1:state", namespace="u")
+        elif operation == "pattern":
+            manager.invalidate_pattern("u:device:1")
+        elif operation == "namespace":
+            manager.clear(namespace="u")
+        else:
+            manager.clear()
+        reloaded = CacheManager(cache_dir=manager._cache_dir)
+        assert reloaded.get("device:1:state", namespace="u") is None
+        assert reloaded.get("homes", namespace="other-u") == (
+            None if operation == "all" else "other"
+        )
+
+    def test_short_lived_update_removes_old_persistent_value(self, cache_manager):
+        manager = cache_manager
+        manager.set("homes", "old", ttl=600, namespace="u")
+        manager.set("homes", "new", ttl=300, namespace="u")
+        assert manager.get("homes", namespace="u") == "new"
+        assert CacheManager(cache_dir=manager._cache_dir).get("homes", namespace="u") is None
+
+    def test_clear_preserves_non_cache_files(self, cache_manager):
+        notes = cache_manager._cache_dir / "notes.json"
+        notes.write_text('{"important": true}', encoding="utf-8")
+        cache_manager.clear()
+        assert notes.exists()
+
+    @pytest.mark.parametrize("operation", ["exact", "pattern", "namespace", "all"])
+    def test_redis_invalidation_failure_does_not_claim_refresh_success(
+        self, cache_manager_with_redis, operation
+    ):
+        manager = cache_manager_with_redis
+        manager._redis_client.delete.side_effect = RuntimeError("Redis unavailable")
+        manager._redis_client.delete_pattern.side_effect = RuntimeError("Redis unavailable")
+        manager._redis_client.flushdb.side_effect = RuntimeError("Redis unavailable")
+        with pytest.raises(RuntimeError, match="Redis"):
+            if operation == "exact":
+                manager.invalidate("homes", namespace="u")
+            elif operation == "pattern":
+                manager.invalidate_pattern("u:homes")
+            elif operation == "namespace":
+                manager.clear(namespace="u")
+            else:
+                manager.clear()

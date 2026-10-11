@@ -87,4 +87,4 @@ class SceneRepositoryImpl(ISceneRepository):
         )
 
         # 检查结果
-        return response.get("code") == 0
+        return type(response.get("code")) is int and response["code"] == 0

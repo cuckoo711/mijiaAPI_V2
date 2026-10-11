@@ -3,6 +3,7 @@ import { reactive } from "vue";
 
 defineProps<{
   configs: Array<Record<string, unknown>>;
+  saving: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -13,7 +14,6 @@ const configForm = reactive({ key: "PUBLIC_BASE_URL", value: "" });
 
 function onSave(): void {
   emit("set-config", { key: configForm.key, value: configForm.value });
-  configForm.value = "";
 }
 </script>
 
@@ -21,14 +21,14 @@ function onSave(): void {
   <section class="stack">
     <el-card shadow="never">
       <template #header>运行时配置</template>
-      <el-form inline>
+      <el-form inline @submit.prevent>
         <el-form-item label="Key">
           <el-input v-model="configForm.key" />
         </el-form-item>
         <el-form-item label="Value">
           <el-input v-model="configForm.value" />
         </el-form-item>
-        <el-button type="primary" @click="onSave">保存</el-button>
+        <el-button type="primary" :loading="saving" :disabled="saving" @click="onSave">保存</el-button>
       </el-form>
     </el-card>
     <el-table :data="configs" border>

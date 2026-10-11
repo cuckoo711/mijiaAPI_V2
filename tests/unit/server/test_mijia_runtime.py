@@ -136,6 +136,9 @@ def test_sync_continues_when_one_home_scene_sync_fails(tmp_path: Path, monkeypat
                 Home(id="home-bad", name="异常家庭", uid="user-1", rooms=[]),
             ]
 
+        def refresh_cache(self) -> None:
+            pass
+
         def get_devices(self, home_id: str) -> list[Any]:
             return []
 
@@ -193,6 +196,9 @@ def test_sync_all_rejects_second_request_while_running(
                 release.wait(timeout=5)
             return []
 
+        def refresh_cache(self) -> None:
+            pass
+
         def get_devices(self, home_id: str) -> list[Any]:
             return []
 
@@ -235,6 +241,9 @@ def test_sync_progress_cleanup_does_not_clear_new_run(
     class FakeApi:
         def get_homes(self) -> list[Home]:
             return []
+
+        def refresh_cache(self) -> None:
+            pass
 
         def get_devices(self, home_id: str) -> list[Any]:
             return []

@@ -345,17 +345,15 @@ class RegistryMixin:
             for row in rows
         ]
 
-    def get_device(self, device_slug_or_id: str) -> dict[str, Any]:
+    def get_device(self, device_slug_or_id: str, *, internal_only: bool = False) -> dict[str, Any]:
         """Get a device by slug, internal id, or original did."""
 
         with self._database.connect() as conn:
-            row = conn.execute(
-                """
-                SELECT * FROM device_registry
-                WHERE slug = ? OR id = ? OR miot_did = ?
-                """,
-                (device_slug_or_id, device_slug_or_id, device_slug_or_id),
-            ).fetchone()
+            query = "SELECT * FROM device_registry WHERE id = ?" if internal_only else (
+                "SELECT * FROM device_registry WHERE slug = ? OR id = ? OR miot_did = ?"
+            )
+            params = (device_slug_or_id,) if internal_only else (device_slug_or_id,) * 3
+            row = conn.execute(query, params).fetchone()
         if row is None:
             raise KeyError(f"Device not found: {device_slug_or_id}")
         return self._device_from_row(row, include_spec=True, include_raw=True)
@@ -401,17 +399,15 @@ class RegistryMixin:
             for row in rows
         ]
 
-    def get_scene(self, scene_id: str) -> dict[str, Any]:
+    def get_scene(self, scene_id: str, *, internal_only: bool = False) -> dict[str, Any]:
         """Get a scene by internal id or original scene id."""
 
         with self._database.connect() as conn:
-            row = conn.execute(
-                """
-                SELECT * FROM scene_registry
-                WHERE id = ? OR miot_scene_id = ?
-                """,
-                (scene_id, scene_id),
-            ).fetchone()
+            query = "SELECT * FROM scene_registry WHERE id = ?" if internal_only else (
+                "SELECT * FROM scene_registry WHERE id = ? OR miot_scene_id = ?"
+            )
+            params = (scene_id,) if internal_only else (scene_id,) * 2
+            row = conn.execute(query, params).fetchone()
         if row is None:
             raise KeyError(f"Scene not found: {scene_id}")
         return {

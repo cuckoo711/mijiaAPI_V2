@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import tempfile
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Optional
@@ -86,6 +87,7 @@ class FileCredentialStore(ICredentialStore):
 
     def save(self, credential: Credential, path: Optional[str] = None) -> None:
         file_path = self._get_path(path)
+        temporary_path: Optional[Path] = None
         try:
             plaintext = json.dumps(
                 credential.to_dict(),
@@ -94,13 +96,23 @@ class FileCredentialStore(ICredentialStore):
                 default=str,
             ).encode("utf-8")
             envelope = self._encrypt(plaintext, file_path)
-            with open(file_path, "w", encoding="utf-8") as f:
+            descriptor, temporary_name = tempfile.mkstemp(
+                prefix=f".{file_path.name}.", suffix=".tmp", dir=file_path.parent
+            )
+            temporary_path = Path(temporary_name)
+            with os.fdopen(descriptor, "w", encoding="utf-8") as f:
                 json.dump(envelope, f, ensure_ascii=False, indent=2)
-            self._chmod_private(file_path)
+                f.flush()
+                os.fsync(f.fileno())
+            self._chmod_private(temporary_path)
+            os.replace(temporary_path, file_path)
             logger.info(f"凭据已加密保存到: {file_path}")
         except Exception as e:
             logger.error(f"保存凭据失败: {e}")
             raise
+        finally:
+            if temporary_path is not None:
+                temporary_path.unlink(missing_ok=True)
 
     def load(self, path: Optional[str] = None) -> Optional[Credential]:
         file_path = self._get_path(path)

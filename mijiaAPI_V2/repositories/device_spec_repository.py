@@ -74,7 +74,8 @@ class DeviceSpecRepositoryImpl(IDeviceSpecRepository):
             MijiaAPIException: 网络请求失败或解析失败
         """
         # 检查缓存（使用永久缓存，TTL设置为很大的值）
-        cache_key = f"device_spec:{model}"
+        # Earlier cached schemas discarded action inputs; do not reuse them.
+        cache_key = f"device_spec:v2:{model}"
         cached = self._cache.get(cache_key, namespace="specs")
 
         if cached:
@@ -105,7 +106,7 @@ class DeviceSpecRepositoryImpl(IDeviceSpecRepository):
             model: 设备型号
             spec: 设备规格对象
         """
-        cache_key = f"device_spec:{model}"
+        cache_key = f"device_spec:v2:{model}"
         # 使用很长的TTL（1年）实现永久缓存
         self._cache.set(cache_key, spec.model_dump(), ttl=365 * 24 * 3600, namespace="specs")
         logger.info(f"设备规格已缓存: {model}")
@@ -247,7 +248,7 @@ class DeviceSpecRepositoryImpl(IDeviceSpecRepository):
 
                 # 解析操作
                 for action in service.get("actions", []):
-                    device_action = self._parse_action(siid, action)
+                    device_action = self._parse_action(siid, action, service.get("properties", []))
                     if device_action:
                         actions.append(device_action)
 
@@ -359,7 +360,9 @@ class DeviceSpecRepositoryImpl(IDeviceSpecRepository):
             # 默认为只读
             return PropertyAccess.READ_ONLY
 
-    def _parse_action(self, siid: int, action_data: dict) -> Optional[DeviceAction]:
+    def _parse_action(
+        self, siid: int, action_data: dict, property_data: Optional[list] = None
+    ) -> Optional[DeviceAction]:
         """解析设备操作
 
         Args:
@@ -377,8 +380,25 @@ class DeviceSpecRepositoryImpl(IDeviceSpecRepository):
             # 操作名称
             name = action_data.get("description", f"action_{aiid}")
 
-            # 参数列表（暂时不解析参数，后续可以扩展）
             parameters: list[ActionParameter] = []
+            inputs = action_data.get("in", [])
+            if not isinstance(inputs, list) or len(inputs) != len(set(inputs)):
+                raise ValueError("操作输入规格无效")
+            for piid in inputs:
+                raw = next((p for p in property_data or [] if p.get("iid") == piid), None)
+                prop = self._parse_property(siid, raw) if raw is not None else None
+                if prop is None:
+                    raise ValueError("操作输入引用了未声明的属性")
+                parameters.append(
+                    ActionParameter(
+                        name=prop.name,
+                        piid=prop.piid,
+                        type=prop.type,
+                        required=True,
+                        value_range=prop.value_range,
+                        value_list=prop.value_list,
+                    )
+                )
 
             return DeviceAction(siid=siid, aiid=aiid, name=name, parameters=parameters)
 

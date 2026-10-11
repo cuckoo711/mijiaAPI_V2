@@ -80,6 +80,15 @@ class NetworkError(MijiaAPIException):
     pass
 
 
+class ExecutionUnknownError(MijiaAPIException):
+    """A control request may have executed, but its outcome is unconfirmed.
+
+    Callers must reconcile the device state before issuing another command.
+    """
+
+    pass
+
+
 class TimeoutError(NetworkError):
     """超时错误"""
 

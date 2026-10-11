@@ -5,6 +5,7 @@
 
 from datetime import datetime
 from enum import Enum
+import math
 from typing import Any, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -34,6 +35,79 @@ class PropertyAccess(str, Enum):
     READ_ONLY = "read"
     WRITE_ONLY = "write"
     READ_WRITE = "read_write"
+
+
+def _finite_number(value: Any) -> bool:
+    if type(value) not in (int, float):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
+
+
+def _value_matches_type(kind: PropertyType, value: Any) -> bool:
+    if kind == PropertyType.BOOL:
+        return type(value) is bool
+    if kind == PropertyType.INT:
+        return type(value) is int
+    if kind == PropertyType.UINT:
+        return type(value) is int and value >= 0
+    if kind == PropertyType.FLOAT:
+        return _finite_number(value)
+    if kind == PropertyType.STRING:
+        return type(value) is str
+    return True
+
+
+def _value_matches_step(value: Any, bounds: List[Any]) -> bool:
+    if len(bounds) == 2:
+        return True
+    lower, _, step = bounds
+    if step <= 0:
+        return False
+    if type(value) is int and all(type(bound) is int for bound in bounds):
+        return (value - lower) % step == 0
+    steps = (value - lower) / step
+    return math.isfinite(steps) and math.isclose(steps, round(steps), rel_tol=0, abs_tol=1e-7)
+
+
+def _value_matches_range(value: Any, bounds: Optional[List[Any]]) -> bool:
+    if bounds is None:
+        return True
+    if len(bounds) not in (2, 3) or type(value) not in (int, float):
+        return False
+    if any(not _finite_number(bound) for bound in bounds):
+        return False
+    lower, upper = bounds[:2]
+    return lower <= upper and lower <= value <= upper and _value_matches_step(value, bounds)
+
+
+def _value_matches_enum(kind: PropertyType, value: Any, choices: Optional[List[Any]]) -> bool:
+    if choices is None:
+        return True
+    return any(
+        type(value) is type(choice)
+        and value == choice
+        or kind == PropertyType.FLOAT
+        and type(choice) in (int, float)
+        and value == choice
+        for choice in choices
+    )
+
+
+def _validate_value(
+    kind: PropertyType,
+    value: Any,
+    value_range: Optional[List[Any]],
+    value_list: Optional[List[Any]],
+) -> bool:
+    """Validate MiOT values without Python's bool/int coercion."""
+    return (
+        _value_matches_type(kind, value)
+        and _value_matches_range(value, value_range)
+        and _value_matches_enum(kind, value, value_list)
+    )
 
 
 class Credential(BaseModel):
@@ -127,35 +201,21 @@ class DeviceProperty(BaseModel):
 
     def validate_value(self, value: Any) -> bool:
         """验证值是否有效"""
-        # 类型检查
-        if self.type == PropertyType.BOOL and not isinstance(value, bool):
-            return False
-        if self.type in [PropertyType.INT, PropertyType.UINT] and not isinstance(value, int):
-            return False
-        if self.type == PropertyType.FLOAT and not isinstance(value, (int, float)):
-            return False
-        if self.type == PropertyType.STRING and not isinstance(value, str):
-            return False
-
-        # 范围检查
-        if self.value_range and len(self.value_range) == 2:
-            if value < self.value_range[0] or value > self.value_range[1]:
-                return False
-
-        # 枚举检查
-        if self.value_list and value not in self.value_list:
-            return False
-
-        return True
+        return _validate_value(self.type, value, self.value_range, self.value_list)
 
 
 class ActionParameter(BaseModel):
     """操作参数"""
 
     name: str = Field(description="参数名称")
+    piid: Optional[int] = Field(default=None, description="参数对应的属性ID")
     type: PropertyType = Field(description="参数类型")
     required: bool = Field(default=True, description="是否必需")
     value_range: Optional[List[Any]] = Field(default=None, description="值范围")
+    value_list: Optional[List[Any]] = Field(default=None, description="枚举值列表")
+
+    def validate_value(self, value: Any) -> bool:
+        return _validate_value(self.type, value, self.value_range, self.value_list)
 
 
 class DeviceAction(BaseModel):

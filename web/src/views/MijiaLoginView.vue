@@ -5,12 +5,16 @@ import type { SyncProgress } from "../composables/useSyncProgress";
 defineProps<{
   account: Record<string, unknown>;
   qrJob: Record<string, string> | null;
+  qrError: string;
+  qrStarting: boolean;
+  removingCredential: boolean;
   syncing: boolean;
   syncProgress: SyncProgress | null;
 }>();
 
 const emit = defineEmits<{
   "start-qr-login": [];
+  "retry-qr-poll": [];
   sync: [];
   "delete-credential": [];
   "dismiss-sync-progress": [];
@@ -69,7 +73,7 @@ const emit = defineEmits<{
       </div>
       <div class="card-content">
         <div class="login-actions">
-          <el-button type="primary" size="large" @click="emit('start-qr-login')">
+          <el-button type="primary" size="large" :loading="qrStarting" :disabled="qrStarting || removingCredential" @click="emit('start-qr-login')">
             {{ account.exists ? "重新扫码登录" : "开始扫码登录" }}
           </el-button>
           <el-button :loading="syncing" :disabled="syncing" size="large" @click="emit('sync')">
@@ -80,13 +84,19 @@ const emit = defineEmits<{
             type="danger"
             plain
             size="large"
+            :loading="removingCredential"
+            :disabled="removingCredential || qrStarting"
             @click="emit('delete-credential')"
           >
             移除账号
           </el-button>
         </div>
+        <el-alert v-if="qrError" :title="qrError" type="warning" :closable="false">
+          <el-button v-if="qrJob && !['failed', 'canceled'].includes(qrJob.status)" size="small" @click="emit('retry-qr-poll')">重试读取状态</el-button>
+          <el-button v-else size="small" :disabled="qrStarting || removingCredential" @click="emit('start-qr-login')">重新扫码登录</el-button>
+        </el-alert>
         <div v-if="qrJob" class="qr-box">
-          <img :src="qrJob.qr_image || qrJob.qr_url" alt="米家登录二维码" />
+          <img v-if="!['failed', 'canceled'].includes(qrJob.status)" :src="qrJob.qr_image || qrJob.qr_url" alt="米家登录二维码" />
           <div class="qr-status">
             <el-tag
               :type="
@@ -99,6 +109,8 @@ const emit = defineEmits<{
                   ? "登录成功"
                   : qrJob.status === "failed"
                     ? "登录失败"
+                    : qrJob.status === "canceled"
+                      ? "登录已取消"
                     : "等待扫码"
               }}
             </el-tag>

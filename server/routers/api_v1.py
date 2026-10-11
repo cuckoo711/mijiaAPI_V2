@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends, Query
+from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
 
 import mijiaAPI_V2
+from mijiaAPI_V2.domain.exceptions import ExecutionUnknownError
 from server.deps import (
     get_runtime,
     get_started_at,
@@ -16,32 +17,115 @@ from server.deps import (
     require_api_key_scope,
     require_status_api_key,
 )
+from server.logging_utils import get_server_logger
 from server.mijia_runtime import MijiaRuntime
 from server.store import ServerStore
 
 router = APIRouter(tags=["api-v1"])
+logger = get_server_logger(__name__)
 
 
 class SetPropertyRequest(BaseModel):
     """Set a MiOT property."""
 
-    siid: int
-    piid: int
+    siid: int = Field(gt=0, strict=True)
+    piid: int = Field(gt=0, strict=True)
     value: Any
 
 
 class CallActionRequest(BaseModel):
     """Call a MiOT action."""
 
-    siid: int
-    aiid: int
+    siid: int = Field(gt=0, strict=True)
+    aiid: int = Field(gt=0, strict=True)
     params: dict[str, Any] = Field(default_factory=dict)
+
+
+class BatchPropertyItem(SetPropertyRequest):
+    device: str = Field(min_length=1, validation_alias=AliasChoices("device", "device_id"))
+
+    @field_validator("device")
+    @classmethod
+    def nonempty_device(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("设备标识不能为空")
+        return value.strip()
+
+    @model_validator(mode="before")
+    @classmethod
+    def validate_device_reference(cls, value: Any) -> Any:
+        if isinstance(value, dict):
+            device, alias = value.get("device"), value.get("device_id")
+            if device is not None and alias is not None and device != alias:
+                raise ValueError("device 与 device_id 必须引用同一设备")
+        return value
 
 
 class BatchPropertyRequest(BaseModel):
     """Batch set properties."""
 
-    items: list[dict[str, Any]]
+    items: list[BatchPropertyItem] = Field(min_length=1)
+
+
+def _control_audit_status(result: dict[str, Any], expected_count: Optional[int]) -> str:
+    """Require explicit SDK success; incomplete batches must not look successful."""
+
+    def miot_succeeded(item: Any) -> bool:
+        return isinstance(item, dict) and type(item.get("code")) is int and item["code"] == 0
+
+    if expected_count is not None:
+        items = result.get("items")
+        if not isinstance(items, list):
+            return "failed"
+        succeeded = sum(miot_succeeded(item) for item in items)
+        if expected_count > 0 and len(items) == expected_count and succeeded == expected_count:
+            return "success"
+        return "warning" if succeeded else "failed"
+    if "success" in result:
+        return "success" if result["success"] is True else "failed"
+    return "success" if miot_succeeded(result.get("result")) else "failed"
+
+
+def _run_audited_control(
+    current_store: ServerStore,
+    api_key: dict[str, Any],
+    *,
+    action: str,
+    metadata: dict[str, Any],
+    operation: Callable[[], dict[str, Any]],
+    expected_count: Optional[int] = None,
+) -> dict[str, Any]:
+    """Record the control outcome without masking it if audit storage fails."""
+
+    def record(status: str, details: dict[str, Any]) -> None:
+        try:
+            current_store.add_audit(
+                action,
+                status,
+                actor_type="api_key",
+                actor_id=api_key["key_prefix"],
+                metadata=details,
+            )
+        except Exception as exc:
+            # The command may already have executed; do not turn a logging
+            # failure into an apparent control failure that invites a retry.
+            logger.warning("failed to audit control action %s (%s)", action, type(exc).__name__)
+
+    try:
+        result = operation()
+    except ExecutionUnknownError as exc:
+        details = {**metadata, "error_type": type(exc).__name__, "retry_safe": False}
+        completed_count = exc.context.get("completed_count")
+        if type(completed_count) is int and completed_count >= 0:
+            details["completed_count"] = completed_count
+        record("unknown", details)
+        raise
+    except Exception as exc:
+        # Exception messages may contain upstream credentials or payloads.
+        record("failed", {**metadata, "error_type": type(exc).__name__})
+        raise
+    record(_control_audit_status(result, expected_count), metadata)
+    return result
 
 
 def _resource_allowed(api_key: dict[str, Any], kind: str, resource: dict[str, Any]) -> bool:
@@ -56,6 +140,7 @@ def _resource_allowed(api_key: dict[str, Any], kind: str, resource: dict[str, An
         str(resource.get("scene_id", "")),
         str(resource.get("home_id", "")),
     }
+    candidates.discard("")
     return any(str(item) in candidates for item in allowed)
 
 
@@ -99,9 +184,7 @@ def api_devices(
     api_key: dict[str, Any] = Depends(require_api_key_scope("read:devices")),
     current_store: ServerStore = Depends(get_store),
 ) -> dict[str, Any]:
-    devices = current_store.list_devices(
-        include_spec=include_spec, include_raw=include_raw
-    )
+    devices = current_store.list_devices(include_spec=include_spec, include_raw=include_raw)
     return {
         "items": [device for device in devices if _resource_allowed(api_key, "devices", device)]
     }
@@ -129,7 +212,13 @@ def api_device_state(
     device = current_store.get_device(device_slug)
     if not _resource_allowed(api_key, "devices", device):
         raise PermissionError("API key cannot access this device")
-    return {"items": runtime.get_device_state(device_slug)}
+    return {
+        "items": runtime.get_device_state(
+            device["id"],
+            internal_only=True,
+            authorize=lambda resource: _resource_allowed(api_key, "devices", resource),
+        )
+    }
 
 
 @router.get("/api/v1/devices/{device_slug}/spec")
@@ -142,7 +231,13 @@ def api_device_spec(
     device = current_store.get_device(device_slug)
     if not _resource_allowed(api_key, "devices", device):
         raise PermissionError("API key cannot access this device")
-    return {"spec": runtime.get_device_spec(device_slug)}
+    return {
+        "spec": runtime.get_device_spec(
+            device["id"],
+            internal_only=True,
+            authorize=lambda resource: _resource_allowed(api_key, "devices", resource),
+        )
+    }
 
 
 @router.post("/api/v1/devices/{device_slug}/properties")
@@ -156,15 +251,20 @@ def api_set_device_property(
     device = current_store.get_device(device_slug)
     if not _resource_allowed(api_key, "devices", device):
         raise PermissionError("API key cannot access this device")
-    result = runtime.set_device_property(device_slug, payload.siid, payload.piid, payload.value)
-    current_store.add_audit(
-        "device.property.set",
-        "success",
-        actor_type="api_key",
-        actor_id=api_key["key_prefix"],
+    return _run_audited_control(
+        current_store,
+        api_key,
+        action="device.property.set",
         metadata={"device": device_slug, "siid": payload.siid, "piid": payload.piid},
+        operation=lambda: runtime.set_device_property(
+            device["id"],
+            payload.siid,
+            payload.piid,
+            payload.value,
+            internal_only=True,
+            authorize=lambda resource: _resource_allowed(api_key, "devices", resource),
+        ),
     )
-    return result
 
 
 @router.post("/api/v1/devices/{device_slug}/actions")
@@ -178,15 +278,20 @@ def api_call_device_action(
     device = current_store.get_device(device_slug)
     if not _resource_allowed(api_key, "devices", device):
         raise PermissionError("API key cannot access this device")
-    result = runtime.call_device_action(device_slug, payload.siid, payload.aiid, payload.params)
-    current_store.add_audit(
-        "device.action.call",
-        "success",
-        actor_type="api_key",
-        actor_id=api_key["key_prefix"],
+    return _run_audited_control(
+        current_store,
+        api_key,
+        action="device.action.call",
         metadata={"device": device_slug, "siid": payload.siid, "aiid": payload.aiid},
+        operation=lambda: runtime.call_device_action(
+            device["id"],
+            payload.siid,
+            payload.aiid,
+            payload.params,
+            internal_only=True,
+            authorize=lambda resource: _resource_allowed(api_key, "devices", resource),
+        ),
     )
-    return result
 
 
 @router.post("/api/v1/batch/devices/properties")
@@ -198,27 +303,24 @@ def api_batch_set_properties(
 ) -> dict[str, Any]:
     normalized_items: list[dict[str, Any]] = []
     for item in payload.items:
-        device_ref = item.get("device") or item.get("device_id")
-        if not device_ref:
-            raise HTTPException(
-                status_code=422,
-                detail={"code": "INVALID_BATCH_ITEM", "message": "每项必须包含 device 或 device_id"},
-            )
-        normalized = {**item, "device": str(device_ref)}
-        normalized.pop("device_id", None)
-        device = current_store.get_device(str(device_ref))
+        normalized = item.model_dump()
+        device = current_store.get_device(item.device)
         if not _resource_allowed(api_key, "devices", device):
             raise PermissionError("API key cannot access one or more devices")
+        normalized["device"] = device["id"]
         normalized_items.append(normalized)
-    result = runtime.batch_set_properties(normalized_items)
-    current_store.add_audit(
-        "device.property.batch_set",
-        "success",
-        actor_type="api_key",
-        actor_id=api_key["key_prefix"],
+    return _run_audited_control(
+        current_store,
+        api_key,
+        action="device.property.batch_set",
         metadata={"count": len(payload.items)},
+        operation=lambda: runtime.batch_set_properties(
+            normalized_items,
+            internal_only=True,
+            authorize=lambda resource: _resource_allowed(api_key, "devices", resource),
+        ),
+        expected_count=len(normalized_items),
     )
-    return result
 
 
 @router.get("/api/v1/scenes")
@@ -240,15 +342,17 @@ def api_execute_scene(
     scene = current_store.get_scene(scene_id)
     if not _resource_allowed(api_key, "scenes", scene):
         raise PermissionError("API key cannot access this scene")
-    result = runtime.execute_scene(scene_id)
-    current_store.add_audit(
-        "scene.execute",
-        "success",
-        actor_type="api_key",
-        actor_id=api_key["key_prefix"],
+    return _run_audited_control(
+        current_store,
+        api_key,
+        action="scene.execute",
         metadata={"scene": scene_id},
+        operation=lambda: runtime.execute_scene(
+            scene["id"],
+            internal_only=True,
+            authorize=lambda resource: _resource_allowed(api_key, "scenes", resource),
+        ),
     )
-    return result
 
 
 @router.post("/api/v1/cache/refresh")

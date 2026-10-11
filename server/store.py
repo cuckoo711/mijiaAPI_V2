@@ -142,12 +142,14 @@ class ServerStore(AdminAuthMixin, ApiKeyMixin, RegistryMixin):
         self._config_map_cache: Optional[dict[str, Any]] = None
         self._config_map_cache_at: float = 0.0
         self._config_map_lock = threading.Lock()
-        # token → (admin_dict, expires_at_epoch, cached_until_monotonic)
-        self._admin_session_cache: dict[str, tuple[dict[str, Any], float, float]] = {}
+        # token → (admin_dict, expires_at_epoch, cached_until_monotonic, token_hash)
+        self._admin_session_cache: dict[str, tuple[dict[str, Any], float, float, str]] = {}
         self._admin_session_cache_lock = threading.Lock()
+        self._admin_session_generation = 0
         # raw_api_key → (record_dict, cached_until_monotonic, last_usage_write_monotonic)
         self._api_key_cache: dict[str, tuple[dict[str, Any], float, float]] = {}
         self._api_key_cache_lock = threading.Lock()
+        self._api_key_generation = 0
 
     @property
     def settings(self) -> ServerSettings:

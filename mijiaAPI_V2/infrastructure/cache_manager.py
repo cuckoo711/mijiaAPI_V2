@@ -186,6 +186,9 @@ class CacheManager:
         # L3: 长期缓存写入文件
         if ttl > 300:
             self._save_to_file(full_key, value, ttl)
+        else:
+            # A previous long-lived entry must not reappear after this value expires.
+            self._delete_file_cache(full_key)
 
     def _set_memory_cache(self, full_key: str, value: Any, ttl: int) -> None:
         """写入内存缓存
@@ -223,6 +226,8 @@ class CacheManager:
                 self._redis_client.delete(full_key)
             except Exception as e:
                 logger.warning(f"Redis 删除失败: {e}", extra={"key": full_key})
+                raise RuntimeError("Redis 缓存失效失败") from e
+        self._delete_file_cache(full_key)
 
     def invalidate_pattern(self, pattern: str) -> None:
         """失效匹配模式的所有缓存
@@ -245,6 +250,8 @@ class CacheManager:
                 self._redis_client.delete_pattern(pattern)
             except Exception as e:
                 logger.warning(f"Redis 批量删除失败: {e}", extra={"pattern": pattern})
+                raise RuntimeError("Redis 缓存失效失败") from e
+        self._delete_matching_files(pattern)
 
     def clear(self, namespace: Optional[str] = None) -> None:
         """清空缓存
@@ -252,22 +259,34 @@ class CacheManager:
         Args:
             namespace: 命名空间，如果指定则只清空该命名空间的缓存，否则清空所有缓存
         """
-        if namespace:
-            # 清空指定命名空间
-            self.invalidate_pattern(f"{namespace}:")
-        else:
-            # 清空所有缓存
-            self._device_cache.clear()
-            self._state_cache.clear()
-
-            # 清空 Redis（如果配置）
-            if self._redis_client:
-                try:
-                    self._redis_client.flushdb()
-                except Exception as e:
-                    logger.warning(f"Redis 清空失败: {e}")
-
+        prefix = f"{namespace}:" if namespace else None
+        self._clear_memory(prefix)
+        self._clear_redis(prefix)
+        self._delete_matching_files(prefix, prefix_only=True)
+        if prefix is None:
             logger.info("所有缓存已清空")
+
+    def _clear_memory(self, prefix: Optional[str]) -> None:
+        for memory in (self._device_cache, self._state_cache):
+            if prefix is None:
+                memory.clear()
+                continue
+            for key in list(memory):
+                if key.startswith(prefix):
+                    memory.pop(key, None)
+
+    def _clear_redis(self, prefix: Optional[str]) -> None:
+        if not self._redis_client:
+            return
+        try:
+            if prefix is None:
+                self._redis_client.flushdb()
+            else:
+                self._redis_client.delete_pattern(f"{prefix}*")
+        except Exception as exc:
+            label = "Redis 命名空间清空失败" if prefix is not None else "Redis 清空失败"
+            logger.warning(f"{label}: {exc}")
+            raise RuntimeError("Redis 缓存清空失败") from exc
 
     def get_stats(self) -> Dict[str, Any]:
         """获取缓存统计
@@ -364,9 +383,10 @@ class CacheManager:
             logger.warning(f"文件缓存加载失败: {e}", extra={"key": key})
             return None
 
-        # 兼容旧格式：如果不是带 "data" 键的字典，则整个内容即为数据
-        if not isinstance(payload, dict) or "data" not in payload:
-            return payload
+        # Old cache envelopes did not identify their namespace. Treat them as
+        # cold misses so namespace invalidation cannot resurrect stale entries.
+        if not isinstance(payload, dict) or "data" not in payload or payload.get("key") != key:
+            return None
 
         expires_at = payload.get("expires_at")
         if expires_at is not None and time.time() > expires_at:
@@ -387,6 +407,7 @@ class CacheManager:
         """
         file_path = self._cache_dir / self._hash_key(key)
         payload = {
+            "key": key,
             "expires_at": time.time() + ttl if ttl > 0 else None,
             "data": value,
         }
@@ -395,6 +416,30 @@ class CacheManager:
                 json.dump(payload, f, ensure_ascii=False, indent=2)
         except Exception as e:
             logger.warning(f"文件缓存保存失败: {e}", extra={"key": key})
+
+    def _delete_file_cache(self, key: str) -> None:
+        (self._cache_dir / self._hash_key(key)).unlink(missing_ok=True)
+
+    def _delete_matching_files(
+        self, pattern: Optional[str] = None, *, prefix_only: bool = False
+    ) -> None:
+        for file_path in self._cache_dir.iterdir():
+            # Restrict deletion to this cache's generated file names.
+            if not file_path.is_file() or len(file_path.name) != 32:
+                continue
+            if any(char not in "0123456789abcdef" for char in file_path.name):
+                continue
+            if pattern is not None:
+                try:
+                    payload = json.loads(file_path.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    continue
+                key = payload.get("key") if isinstance(payload, dict) else None
+                if not isinstance(key, str):
+                    continue
+                if not (key.startswith(pattern) if prefix_only else pattern in key):
+                    continue
+            file_path.unlink(missing_ok=True)
 
     def _hash_key(self, key: str) -> str:
         """对key进行哈希

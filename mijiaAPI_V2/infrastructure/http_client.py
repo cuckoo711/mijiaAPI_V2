@@ -15,6 +15,7 @@ from ..core.logging import get_logger
 from ..domain.exceptions import (
     ConnectionError,
     DeviceNotFoundError,
+    ExecutionUnknownError,
     MijiaAPIException,
     NetworkError,
     TimeoutError,
@@ -24,6 +25,36 @@ from ..domain.models import Credential
 from .crypto_service import CryptoService
 
 logger = get_logger(__name__)
+
+# A lost response to these requests cannot safely authorize another dispatch.
+_CONTROL_PATHS = {
+    "/miotspec/prop/set",
+    "/miotspec/action",
+    "/appgateway/miot/appsceneservice/AppSceneService/NewRunScene",
+}
+_BEFORE_SEND_ERRORS = (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)
+
+
+def _unknown_control_error(path: str) -> ExecutionUnknownError:
+    return ExecutionUnknownError(
+        "控制请求可能已执行，结果未确认；请核对设备状态后再决定是否重试",
+        context={"path": path},
+    )
+
+
+def _decode_response(
+    response: httpx.Response, crypto: CryptoService, credential: Credential, nonce: str, path: str
+) -> Dict[str, Any]:
+    try:
+        decrypted = crypto.decrypt_response(response.text, credential.ssecurity, nonce)
+        result = json_module.loads(decrypted)
+        if not isinstance(result, dict) or type(result.get("code")) is not int:
+            raise ValueError("missing or invalid upstream result code")
+        return result
+    except Exception as exc:
+        if path in _CONTROL_PATHS:
+            raise _unknown_control_error(path) from exc
+        raise MijiaAPIException("上游响应格式无效") from exc
 
 
 class HttpClient:
@@ -66,7 +97,13 @@ class HttpClient:
         reraise=True,  # 重试失败后重新抛出异常
     )
     def _do_post(
-        self, url: str, encrypted_params: Dict[str, str], headers: Dict[str, str], **kwargs: Any
+        self,
+        url: str,
+        encrypted_params: Dict[str, str],
+        headers: Dict[str, str],
+        *,
+        retry_safe: bool = True,
+        **kwargs: Any,
     ) -> httpx.Response:
         """执行POST请求（内部方法，用于重试）
 
@@ -84,7 +121,14 @@ class HttpClient:
             httpx.ConnectError: 连接错误（会被重试）
             httpx.HTTPError: 其他HTTP错误（不会被重试）
         """
-        response = self._client.post(url, data=encrypted_params, headers=headers, **kwargs)
+        try:
+            response = self._client.post(url, data=encrypted_params, headers=headers, **kwargs)
+        except httpx.HTTPError as exc:
+            if not retry_safe and not isinstance(
+                exc, (*_BEFORE_SEND_ERRORS, httpx.HTTPStatusError)
+            ):
+                raise _unknown_control_error(httpx.URL(url).path) from exc
+            raise
         response.raise_for_status()
         return response
 
@@ -142,7 +186,9 @@ class HttpClient:
 
         try:
             # 发送POST请求（带重试）
-            response = self._do_post(url, encrypted_params, headers, **kwargs)
+            response = self._do_post(
+                url, encrypted_params, headers, retry_safe=path not in _CONTROL_PATHS, **kwargs
+            )
 
             # 记录原始响应（用于调试）
             logger.debug(
@@ -155,13 +201,9 @@ class HttpClient:
                 },
             )
 
-            # 解密响应
-            decrypted_text = self._crypto.decrypt_response(
-                response.text, credential.ssecurity, encrypted_params["_nonce"]
+            result = _decode_response(
+                response, self._crypto, credential, encrypted_params["_nonce"], path
             )
-
-            # 解析JSON响应
-            result: Dict[str, Any] = json_module.loads(decrypted_text)
 
             # 计算响应时间
             response_time = time.time() - start_time
@@ -197,6 +239,8 @@ class HttpClient:
             raise TimeoutError(f"请求超时: {path}") from e
 
         except httpx.HTTPStatusError as e:
+            if path in _CONTROL_PATHS and e.response.status_code >= 500:
+                raise _unknown_control_error(path) from e
             # HTTP状态码错误
             response_time = time.time() - start_time
             logger.error(
@@ -320,7 +364,13 @@ class AsyncHttpClient:
         )
 
     async def _do_post_with_retry(
-        self, url: str, encrypted_params: Dict[str, str], headers: Dict[str, str], **kwargs: Any
+        self,
+        url: str,
+        encrypted_params: Dict[str, str],
+        headers: Dict[str, str],
+        *,
+        retry_safe: bool = True,
+        **kwargs: Any,
     ) -> httpx.Response:
         """执行POST请求（带重试）
 
@@ -351,12 +401,18 @@ class AsyncHttpClient:
                 response.raise_for_status()
                 return response
             except (httpx.TimeoutException, httpx.ConnectError) as e:
+                if not retry_safe and not isinstance(e, _BEFORE_SEND_ERRORS):
+                    raise _unknown_control_error(httpx.URL(url).path) from e
                 last_exception = e
                 if attempt < max_retries - 1:
                     # 指数退避：1s, 2s, 4s
                     wait_time = min(2**attempt, 10)
                     await asyncio.sleep(wait_time)
                     continue
+            except httpx.HTTPError as exc:
+                if not retry_safe and not isinstance(exc, httpx.HTTPStatusError):
+                    raise _unknown_control_error(httpx.URL(url).path) from exc
+                raise
 
         # 所有重试都失败，抛出最后一个异常
         raise last_exception
@@ -415,15 +471,13 @@ class AsyncHttpClient:
 
         try:
             # 发送POST请求（带重试）
-            response = await self._do_post_with_retry(url, encrypted_params, headers, **kwargs)
-
-            # 解密响应
-            decrypted_text = self._crypto.decrypt_response(
-                response.text, credential.ssecurity, encrypted_params["_nonce"]
+            response = await self._do_post_with_retry(
+                url, encrypted_params, headers, retry_safe=path not in _CONTROL_PATHS, **kwargs
             )
 
-            # 解析JSON响应
-            result: Dict[str, Any] = json_module.loads(decrypted_text)
+            result = _decode_response(
+                response, self._crypto, credential, encrypted_params["_nonce"], path
+            )
 
             # 计算响应时间
             response_time = time.time() - start_time
@@ -459,6 +513,8 @@ class AsyncHttpClient:
             raise TimeoutError(f"请求超时: {path}") from e
 
         except httpx.HTTPStatusError as e:
+            if path in _CONTROL_PATHS and e.response.status_code >= 500:
+                raise _unknown_control_error(path) from e
             # HTTP状态码错误
             response_time = time.time() - start_time
             logger.error(

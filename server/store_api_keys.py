@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from server.security import generate_api_key, hash_secret, secret_prefix, verify_secret
@@ -31,6 +31,11 @@ class ApiKeyMixin:
     ) -> dict[str, Any]:
         """Create an API key and return the plaintext value once."""
 
+        if expires_at is not None:
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+            if expires_at <= utc_now():
+                raise ValueError("密钥有效期必须晚于当前时间")
         key = generate_api_key()
         key_id = str(uuid.uuid4())
         now = isoformat(utc_now())
@@ -99,21 +104,40 @@ class ApiKeyMixin:
     ) -> dict[str, Any]:
         """Validate an API key and optionally require a scope."""
 
-        now = utc_now()
-        now_mono = time.monotonic()
+        # A validation that started before revocation must not refill the cache
+        # after revocation. Do not hold a cache lock during PBKDF2 / SQLite work.
+        for _ in range(3):
+            now = utc_now()
+            now_mono = time.monotonic()
+            with self._api_key_cache_lock:
+                generation = self._api_key_generation
+                cached = self._api_key_cache.get(key)
+            if cached is not None:
+                from_cache = self._validate_cached_api_key(
+                    key, cached, required_scope, source_ip, now, now_mono
+                )
+                if from_cache is not None:
+                    with self._api_key_cache_lock:
+                        if generation == self._api_key_generation:
+                            return from_cache
+                    continue
 
-        cached = self._api_key_cache.get(key)
-        if cached is not None:
-            from_cache = self._validate_cached_api_key(
-                key, cached, required_scope, source_ip, now, now_mono
-            )
-            if from_cache is not None:
-                return from_cache
+            record = self._load_api_key_record(key, required_scope, source_ip, now)
+            # Also honor changes made by another process / store instance.
+            if not self._api_key_is_active(record["id"]):
+                raise AuthenticationFailedError("Invalid API key")
+            with self._api_key_cache_lock:
+                if generation != self._api_key_generation:
+                    continue
+                self._api_key_cache[key] = (record, now_mono + API_KEY_CACHE_TTL, now_mono)
+                return self._api_key_public_view(record)
+        raise AuthenticationFailedError("API key changed during validation")
 
-        record = self._load_api_key_record(key, required_scope, source_ip, now)
-        with self._api_key_cache_lock:
-            self._api_key_cache[key] = (record, now_mono + API_KEY_CACHE_TTL, now_mono)
-        return self._api_key_public_view(record)
+    def _api_key_is_active(self, key_id: str) -> bool:
+        """Keep revocation authoritative even when the hash check is cached."""
+        with self._database.connect() as conn:
+            row = conn.execute("SELECT is_active FROM api_keys WHERE id = ?", (key_id,)).fetchone()
+        return row is not None and bool(row["is_active"])
 
     @staticmethod
     def _api_key_public_view(record: dict[str, Any]) -> dict[str, Any]:
@@ -156,6 +180,9 @@ class ApiKeyMixin:
             raise AuthenticationFailedError("API key expired")
         if required_scope and required_scope not in record["scopes"]:
             raise AuthenticationFailedError("API key does not have required scope")
+        if not self._api_key_is_active(record["id"]):
+            self._invalidate_api_key_cache(key=key)
+            raise AuthenticationFailedError("Invalid API key")
 
         if now_mono - last_write >= API_KEY_CACHE_TTL:
             self._touch_api_key_usage(record["id"], source_ip, now)
@@ -208,9 +235,7 @@ class ApiKeyMixin:
                 "expires_at_dt": expires_at,
             }
 
-    def _touch_api_key_usage(
-        self, key_id: str, source_ip: Optional[str], now: datetime
-    ) -> None:
+    def _touch_api_key_usage(self, key_id: str, source_ip: Optional[str], now: datetime) -> None:
         with self._database.connect() as conn:
             conn.execute(
                 """
@@ -225,6 +250,7 @@ class ApiKeyMixin:
         self, *, key: Optional[str] = None, key_id: Optional[str] = None
     ) -> None:
         with self._api_key_cache_lock:
+            self._api_key_generation += 1
             if key is not None:
                 self._api_key_cache.pop(key, None)
                 return
@@ -279,3 +305,57 @@ class ApiKeyMixin:
         with self._database.connect() as conn:
             conn.execute("DELETE FROM api_keys WHERE id = ?", (key_id,))
         self._invalidate_api_key_cache(key_id=key_id)
+
+    def rotate_api_key(
+        self,
+        key_id: str,
+        *,
+        expires_at: Optional[datetime] = None,
+        replace_expiry: bool = False,
+    ) -> dict[str, Any]:
+        """Create a replacement and disable its predecessor in one transaction."""
+        key = generate_api_key()
+        replacement_id = str(uuid.uuid4())
+        now = utc_now()
+        with self._database.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT * FROM api_keys WHERE id = ?", (key_id,)).fetchone()
+            if row is None:
+                raise KeyError(f"API key not found: {key_id}")
+            if not row["is_active"]:
+                raise ValueError("已停用的密钥不能轮换，请创建新密钥")
+            expiry = expires_at if replace_expiry else parse_datetime(row["expires_at"])
+            if expiry is not None:
+                if expiry.tzinfo is None:
+                    expiry = expiry.replace(tzinfo=timezone.utc)
+                if expiry <= now:
+                    raise ValueError("新密钥有效期必须晚于当前时间")
+            expiry_text = isoformat(expiry) if expiry else None
+            conn.execute(
+                """INSERT INTO api_keys(
+                    id, name, key_prefix, key_hash, scopes_json,
+                    resource_policy_json, expires_at, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    replacement_id,
+                    row["name"],
+                    secret_prefix(key),
+                    hash_secret(key),
+                    row["scopes_json"],
+                    row["resource_policy_json"],
+                    expiry_text,
+                    isoformat(now),
+                ),
+            )
+            conn.execute("UPDATE api_keys SET is_active = 0 WHERE id = ?", (key_id,))
+        self._invalidate_api_key_cache(key_id=key_id)
+        return {
+            "id": replacement_id,
+            "name": row["name"],
+            "key": key,
+            "key_prefix": secret_prefix(key),
+            "scopes": json.loads(row["scopes_json"]),
+            "resource_policy": json.loads(row["resource_policy_json"]),
+            "created_at": isoformat(now),
+            "expires_at": expiry_text,
+        }

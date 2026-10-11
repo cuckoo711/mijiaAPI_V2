@@ -7,12 +7,69 @@ from typing import Any, Dict, List, Optional
 
 from mijiaAPI_V2.domain.exceptions import (
     DeviceNotFoundError,
+    ExecutionUnknownError,
     PropertyReadOnlyError,
     ValidationError,
 )
-from mijiaAPI_V2.domain.models import Credential, Device, DeviceProperty
+from mijiaAPI_V2.domain.models import Credential, Device, DeviceAction, DeviceProperty
 from mijiaAPI_V2.infrastructure.cache_manager import CacheManager
 from mijiaAPI_V2.repositories.interfaces import DeviceSpec, IDeviceRepository, IDeviceSpecRepository
+
+
+def normalize_property_requests(requests: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Normalize the public SDK alias before any batch is dispatched."""
+    normalized = []
+    for request in requests:
+        if not isinstance(request, dict):
+            raise ValidationError("批量属性请求必须为对象")
+        did, legacy = request.get("did"), request.get("device_id")
+        if did is not None and legacy is not None and str(did) != str(legacy):
+            raise ValidationError("did 与 device_id 不一致")
+        device_id = did if did is not None else legacy
+        if type(device_id) not in (str, int) or not str(device_id).strip():
+            raise ValidationError("批量属性请求必须包含 did")
+        for field in ("siid", "piid"):
+            if type(request.get(field)) is not int or request[field] <= 0:
+                raise ValidationError(f"{field} 必须为正整数")
+        if "value" not in request:
+            raise ValidationError("批量属性请求缺少 value")
+        normalized.append(
+            {
+                "did": str(device_id),
+                "siid": request["siid"],
+                "piid": request["piid"],
+                "value": request["value"],
+                **({"home_id": request["home_id"]} if "home_id" in request else {}),
+            }
+        )
+    return normalized
+
+
+def _ordered_action_params(action: DeviceAction, params: Dict[str, Any]) -> Dict[str, Any]:
+    """Validate named inputs, then preserve the action's positional order."""
+    if not isinstance(params, dict):
+        raise ValidationError("操作参数必须为对象")
+    ordered: Dict[str, Any] = {}
+    consumed = set()
+    for parameter in action.parameters:
+        aliases = [parameter.name]
+        if parameter.piid is not None:
+            aliases.append(str(parameter.piid))
+        keys = [key for key in dict.fromkeys(aliases) if key in params]
+        if len(keys) > 1:
+            raise ValidationError(f"操作参数重复: {parameter.name}")
+        if not keys:
+            if parameter.required:
+                raise ValidationError(f"操作参数缺失: {parameter.name}")
+            continue
+        key = keys[0]
+        if key in consumed or not parameter.validate_value(params[key]):
+            raise ValidationError(f"操作参数无效: {parameter.name}")
+        consumed.add(key)
+        ordered[str(parameter.piid) if parameter.piid is not None else parameter.name] = params[key]
+    if set(params) != consumed:
+        raise ValidationError("存在未声明的操作参数")
+    return ordered
 
 
 class DeviceService:
@@ -100,35 +157,40 @@ class DeviceService:
             PropertyReadOnlyError: 属性只读
             ValidationError: 属性值无效
         """
-        # 1. 检查设备是否存在
+        self._validate_property(device_id, siid, piid, value, credential)
+        return self._device_repo.set_property(device_id, siid, piid, value, credential)
+
+    def _required_spec(self, device_id: str, credential: Credential) -> DeviceSpec:
         device = self.get_device_by_id(device_id, credential)
         if not device:
             raise DeviceNotFoundError(f"设备不存在: {device_id}")
-
-        # 2. 获取设备规格进行验证（可选，如果获取失败不影响控制）
         try:
             spec = self._spec_repo.get_spec(device.model)
-            if spec:
-                # 查找属性定义
-                prop = next((p for p in spec.properties if p.siid == siid and p.piid == piid), None)
-                if prop:
-                    # 3. 检查属性是否可写
-                    if not prop.is_writable():
-                        raise PropertyReadOnlyError(f"属性只读: {prop.name}")
-
-                    # 4. 验证属性值
-                    if not prop.validate_value(value):
-                        raise ValidationError(f"属性值无效: {value}")
-        except (PropertyReadOnlyError, ValidationError):
-            # 验证错误需要抛出
-            raise
         except Exception as exc:
-            # 规格不可用时不能证明该属性可写或值合法，拒绝执行，避免
-            # “校验失败但仍然写入”的半闭环行为。
             raise RuntimeError(f"设备规格获取失败，未执行控制: {exc}") from exc
+        if spec is None:
+            raise ValidationError("设备规格不存在，未执行控制")
+        return spec
 
-        # 5. 调用仓储层设置属性
-        return self._device_repo.set_property(device_id, siid, piid, value, credential)
+    def _validate_property(
+        self,
+        device_id: str,
+        siid: int,
+        piid: int,
+        value: Any,
+        credential: Credential,
+        spec: Optional[DeviceSpec] = None,
+    ) -> None:
+        if type(siid) is not int or type(piid) is not int or siid <= 0 or piid <= 0:
+            raise ValidationError("siid 和 piid 必须为正整数")
+        spec = spec if spec is not None else self._required_spec(device_id, credential)
+        prop = next((p for p in spec.properties if p.siid == siid and p.piid == piid), None)
+        if prop is None:
+            raise ValidationError("设备规格未声明该属性")
+        if not prop.is_writable():
+            raise PropertyReadOnlyError(f"属性只读: {prop.name}")
+        if not prop.validate_value(value):
+            raise ValidationError(f"属性值无效: {prop.name}")
 
     def call_device_action(
         self,
@@ -150,7 +212,14 @@ class DeviceService:
         Returns:
             操作执行结果
         """
-        return self._device_repo.call_action(device_id, siid, aiid, params, credential)
+        if type(siid) is not int or type(aiid) is not int or siid <= 0 or aiid <= 0:
+            raise ValidationError("siid 和 aiid 必须为正整数")
+        spec = self._required_spec(device_id, credential)
+        action = next((a for a in spec.actions if a.siid == siid and a.aiid == aiid), None)
+        if action is None:
+            raise ValidationError("设备规格未声明该操作")
+        ordered = _ordered_action_params(action, params)
+        return self._device_repo.call_action(device_id, siid, aiid, ordered, credential)
 
     def batch_control_devices(
         self, requests: List[Dict[str, Any]], credential: Credential
@@ -166,13 +235,35 @@ class DeviceService:
         Returns:
             批量操作结果列表
         """
-        # 分组处理，每组最多20个请求
+        requests = normalize_property_requests(requests)
+        specs: Dict[str, DeviceSpec] = {}
+        for request in requests:
+            did = request["did"]
+            if did not in specs:
+                specs[did] = self._required_spec(did, credential)
+            self._validate_property(
+                did, request["siid"], request["piid"], request["value"], credential, specs[did]
+            )
+        requests = [{k: v for k, v in request.items() if k != "home_id"} for request in requests]
+        # Every item is validated before sending the first batch.
         batch_size = 20
         results: List[Dict[str, Any]] = []
 
         for i in range(0, len(requests), batch_size):
             batch = requests[i : i + batch_size]
-            batch_results = self._device_repo.batch_set_properties(batch, credential)
+            try:
+                batch_results = self._device_repo.batch_set_properties(batch, credential)
+            except Exception as exc:
+                if results:
+                    raise ExecutionUnknownError(
+                        "批量控制已收到部分执行结果，后续结果未完成；请先核对设备状态",
+                        context={
+                            **(exc.context if isinstance(exc, ExecutionUnknownError) else {}),
+                            "completed_count": len(results),
+                            "error_type": type(exc).__name__,
+                        },
+                    ) from exc
+                raise
             results.extend(batch_results)
 
         return results
