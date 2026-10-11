@@ -285,9 +285,6 @@ class DockerRun:
             "MIJIA_SERVER_LOG_LEVEL=WARNING",
             self.image_id,
         )
-        info = self.owned("container", name)
-        binding = info["NetworkSettings"]["Ports"]["8123/tcp"][0]
-        require(binding["HostIp"] == "127.0.0.1", "Smoke port must only bind host loopback")
         self.wait_ready(name)
         uid_probe = (
             "import json; from pathlib import Path; "
@@ -298,7 +295,38 @@ class DockerRun:
         require(
             process_uids == [1000] * 4, "Entrypoint did not drop application privileges to uid 1000"
         )
-        return name, f"http://127.0.0.1:{binding['HostPort']}"
+        client = HttpClient("http://127.0.0.1")
+        self.wait_host_ready(name, client)
+        return name, client.base_url
+
+    def published_url(self, name: str) -> Optional[str]:
+        """Read the current mapping; Docker may allocate a new port after restart."""
+        info = self.owned("container", name)
+        require(info["State"]["Running"], f"Container exited before host readiness: {name}")
+        bindings = info["NetworkSettings"]["Ports"].get("8123/tcp") or []
+        if not bindings:
+            return None
+        require(len(bindings) == 1, "Smoke server must have exactly one host binding")
+        binding = bindings[0]
+        require(binding["HostIp"] == "127.0.0.1", "Smoke port must only bind host loopback")
+        return f"http://127.0.0.1:{binding['HostPort']}"
+
+    def wait_host_ready(self, name: str, client: HttpClient) -> None:
+        """Wait using GET only, updating the endpoint while keeping session cookies."""
+        deadline = time.monotonic() + self.timeout
+        while time.monotonic() < deadline:
+            url = self.published_url(name)
+            if url is not None:
+                client.base_url = url
+                try:
+                    response = client.request("GET", "/api/admin/bootstrap/state")
+                except (URLError, OSError):
+                    pass
+                else:
+                    if response.status in (200, 403):
+                        return
+            time.sleep(0.5)
+        raise SmokeError(f"Timed out waiting for host HTTP readiness: {name}")
 
     def wait_ready(self, name: str, *, healthy: bool = False) -> None:
         deadline = time.monotonic() + self.timeout
@@ -684,6 +712,7 @@ class Smoke:
         with self.phase("container-restart-persistence"):
             self.docker.command("restart", "--time", "10", container)
             self.docker.wait_ready(container)
+            self.docker.wait_host_ready(container, client)
             self.check_persisted(client, key, rejected)
             self.check_account(client, key["key"])
         with self.phase("container-recreate-persistence"):

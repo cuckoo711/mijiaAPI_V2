@@ -9,6 +9,7 @@ import socket
 import sqlite3
 import subprocess
 import threading
+from urllib.error import URLError
 
 import pytest
 
@@ -124,11 +125,17 @@ def test_start_checks_application_pid_one_uid_instead_of_exec_caller(monkeypatch
     monkeypatch.setattr(docker, "wait_ready", lambda name: None)
     monkeypatch.setattr(
         docker,
+        "wait_host_ready",
+        lambda name, client: setattr(client, "base_url", docker.published_url(name)),
+    )
+    monkeypatch.setattr(
+        docker,
         "owned",
         lambda kind, name: {
+            "State": {"Running": True},
             "NetworkSettings": {
                 "Ports": {"8123/tcp": [{"HostIp": "127.0.0.1", "HostPort": "32812"}]}
-            }
+            },
         },
     )
 
@@ -207,6 +214,9 @@ def http_server():
 
         def do_GET(self):
             type(self).static_requests.append(self.path)
+            if self.path == "/api/admin/bootstrap/state":
+                self.reply(200, {"initialized": True})
+                return
             resources = {
                 "/": (
                     "text/html; charset=utf-8",
@@ -270,6 +280,63 @@ def test_http_client_sends_cookie_and_matching_csrf_without_bearer(http_server):
     client.expect("PUT", "/config", 403, payload={"value": True}, error_code="CSRF_FAILED")
     client.expect("PUT", "/config", payload={"value": True}, headers=client.csrf_headers())
     assert handler.received_authorization == [None, None]
+
+
+def published_info(port):
+    return {
+        "State": {"Running": True},
+        "NetworkSettings": {
+            "Ports": {"8123/tcp": [{"HostIp": "127.0.0.1", "HostPort": str(port)}]}
+        },
+    }
+
+
+def test_restart_refreshes_host_port_and_preserves_cookie_session(http_server, monkeypatch):
+    url, handler = http_server
+    client = smoke.HttpClient(url)
+    client.expect("POST", "/login")
+    jar = client.cookies
+    client.base_url = "http://127.0.0.1:1"  # Simulate the no-longer-published old endpoint.
+    docker = smoke.DockerRun("synthetic-image")
+    inspected = []
+
+    def owned(kind, name):
+        inspected.append((kind, name))
+        return published_info(url.rsplit(":", 1)[1])
+
+    monkeypatch.setattr(docker, "owned", owned)
+    docker.wait_host_ready("owned-test-container", client)
+    assert client.base_url == url
+    assert client.cookies is jar
+    assert client.cookie(smoke.ADMIN_COOKIE) == "synthetic-session"
+    client.expect("PUT", "/config", payload={"value": True}, headers=client.csrf_headers())
+    assert inspected == [("container", "owned-test-container")]
+    assert handler.static_requests == ["/api/admin/bootstrap/state"]
+    assert handler.received_authorization == [None]
+
+
+def test_host_readiness_reinspects_port_and_retries_only_get(monkeypatch):
+    docker = smoke.DockerRun("synthetic-image")
+    ports = iter((31001, 31002))
+    monkeypatch.setattr(docker, "owned", lambda *args: published_info(next(ports)))
+    monkeypatch.setattr(smoke.time, "sleep", lambda _: None)
+    client = smoke.HttpClient("http://127.0.0.1:1")
+    jar = client.cookies
+    requests = []
+
+    def request(method, path):
+        requests.append((method, path, client.base_url))
+        if len(requests) == 1:
+            raise URLError("connection refused while publish endpoint comes up")
+        return smoke.Response(200, {"initialized": True}, {})
+
+    monkeypatch.setattr(client, "request", request)
+    docker.wait_host_ready("owned-test-container", client)
+    assert requests == [
+        ("GET", "/api/admin/bootstrap/state", "http://127.0.0.1:31001"),
+        ("GET", "/api/admin/bootstrap/state", "http://127.0.0.1:31002"),
+    ]
+    assert client.cookies is jar
 
 
 def test_bootstrap_fetches_actual_html_and_all_compiled_assets_without_relaxing_json(http_server):
