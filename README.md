@@ -114,7 +114,7 @@ api.control_device(device_id=devices[0].did, siid=2, piid=1, value=True)
 | `MIJIA_CREDENTIAL_PATH` | `configs/credential.json` | 凭据文件（AES-GCM 加密） |
 | `MIJIA_WEB_DIST_DIR` | `web/dist` | 前端静态资源 |
 | `MIJIA_SERVER_LOG_LEVEL` | `INFO` | 日志级别（支持 `DEBUG`） |
-| `MIJIA_BOOTSTRAP_ALLOW_PRIVATE` | 空 | `1` 时允许私网完成首次建管理员（Docker） |
+| `MIJIA_BOOTSTRAP_ALLOW_PRIVATE` | 空 | `1` 时允许未初始化实例从私网首次建管理员，并原子启用局域网访问策略（Docker）；不启用公网 |
 | `MIJIA_CREDENTIAL_SECRET` | 空 | 可选凭据加密密钥；不设则用 `.credential_key` |
 
 也可编辑 `configs/server.toml`（可用 `python -m server.cli write-config` 生成）；环境变量优先。
@@ -144,13 +144,15 @@ docker compose -f deploy/docker-compose.yml up -d --build
 
 默认只绑定本机 `127.0.0.1:8123`，启动后访问 `http://127.0.0.1:8123`。数据、SQLite 数据库、米家凭据、加密密钥和缓存持久化在命名卷 `mijia-data` 中。
 
+Docker 会把宿主回环 HTTP 转为容器的私网来源。Compose 默认设置 `MIJIA_BOOTSTRAP_ALLOW_PRIVATE=1`，仅在尚无管理员时放行首页、静态资源和首次创建入口；首次私网创建管理员会同时启用 `ALLOW_LAN_ACCESS`，使随后登录可用，`ALLOW_PUBLIC_ACCESS` 仍关闭。已有管理员的实例不会因该变量自动修改访问策略。
+
 > 从 v3.7.3 及更早版本升级的实例，旧卷名是 `deploy_mijia-data`，需要按
 > [`deploy/README.md`](deploy/README.md#从旧卷名迁移仅影响-v373-及更早已部署的实例) 搬迁一次，否则会挂到空卷。
 
 首次创建管理员可以直接打开管理台，或执行：
 
 ```bash
-docker compose -f deploy/docker-compose.yml run --rm mijia-server mijia-server init --admin admin
+docker compose -f deploy/docker-compose.yml run --rm mijia-server mijia-server init --admin admin --allow-lan
 ```
 
 常用维护命令：
@@ -171,7 +173,13 @@ MIJIA_BOOTSTRAP_ALLOW_PRIVATE=0
 MIJIA_SERVER_LOG_LEVEL=INFO
 ```
 
-改为非本机绑定后，建议使用容器内 `init --admin` 创建管理员，并在管理台按需开启局域网访问。更多说明见 [`deploy/README.md`](deploy/README.md)。
+改为非本机绑定后，建议关闭私网首次创建入口，使用容器内 `init --admin admin --allow-lan` 创建管理员并明确启用局域网策略。更多说明见 [`deploy/README.md`](deploy/README.md)。
+
+Docker 生命周期验证可复用以下命令。测试仅创建带随机前缀的隔离卷和回环端口，覆盖首次创建、Cookie/CSRF、密钥撤销、重启/重建持久化及整卷备份恢复；不会读取生产卷或调用真实米家设备。
+
+```bash
+python tests/docker/smoke.py --image mijia-server:latest --report docker-smoke-report.json
+```
 
 ### systemd
 

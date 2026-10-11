@@ -30,8 +30,10 @@ docker compose -f deploy/docker-compose.yml logs -f mijia-server
 
 默认回环绑定下可以直接打开管理台完成首次创建。也可以使用容器内 CLI：
 
+宿主回环连接在容器内表现为 Docker bridge 私网来源。Compose 默认的 `MIJIA_BOOTSTRAP_ALLOW_PRIVATE=1` 仅对尚无管理员的首页、静态资源、初始化状态和首次创建入口提供例外，其他 API 仍按网络策略拒绝。第一次通过私网创建管理员会在同一事务启用 `ALLOW_LAN_ACCESS`，使后续登录可用；不会启用 `ALLOW_PUBLIC_ACCESS`。如果实例已有管理员，该变量不改变访问策略。
+
 ```bash
-docker compose -f deploy/docker-compose.yml run --rm mijia-server mijia-server init --admin admin
+docker compose -f deploy/docker-compose.yml run --rm mijia-server mijia-server init --admin admin --allow-lan
 ```
 
 ### 配置端口和安全选项
@@ -58,7 +60,19 @@ MIJIA_SERVER_LOG_LEVEL=INFO
 docker compose -f deploy/docker-compose.yml up -d --build
 ```
 
-将绑定地址改为 `0.0.0.0` 后，不建议再允许通过网络首次建管理员；先执行容器内 `init --admin`，再按需在管理台开启局域网访问策略。
+将绑定地址改为 `0.0.0.0` 后，建议关闭网络首次创建入口，先执行容器内 `init --admin admin --allow-lan` 明确创建管理员并启用局域网访问策略。
+
+容器内 CLI 默认保留关闭局域网访问的策略。Docker 端口发布需要显式增加 `--allow-lan`；已有管理员但关闭了该策略时，也可执行 `docker compose -f deploy/docker-compose.yml run --rm mijia-server mijia-server init --allow-lan` 恢复宿主浏览器访问。该操作不会启用公网策略。
+
+### 运行集成验证
+
+```bash
+python tests/docker/smoke.py --image mijia-server:latest --report docker-smoke-report.json
+```
+
+脚本使用已构建镜像创建隔离的随机名称容器、回环端口和数据/备份/恢复卷。它从宿主 HTTP 验证首次创建、管理员 Cookie 与 CSRF、API Key 创建/启停/轮换/撤销、restart 与 recreate 持久化，并将停机后的完整数据卷备份到新卷恢复。假米家凭据只用于核对加密文件和 `.credential_key` 配套恢复，不连接米家云或控制物理设备。
+
+脚本输出不含密码、Cookie、API Key 或米家凭据的 JSON 报告，并只清理它创建的临时资源。CI 的 Docker job 会运行该脚本；镜像构建成功不会单独算作运行验证通过。
 
 ### 停止、更新和备份
 
@@ -78,6 +92,8 @@ docker run --rm -v mijia-data:/data -v <本机备份目录>:/backup alpine tar c
 ```bash
 docker run --rm -v mijia-data:/data -v <本机备份目录>:/backup alpine tar xzf /backup/mijia-data.tar.gz -C /data
 ```
+
+应将整个卷作为同一份备份恢复，尤其是 `credential.json` 与 `.credential_key`。若使用 `MIJIA_CREDENTIAL_SECRET`，还必须保留原来的部署密钥配置；卷备份不会包含外部环境变量。恢复后先确认管理员登录、Key 状态、账号身份和配置，再开放业务入口。
 
 ### 从旧卷名迁移（仅影响 v3.7.3 及更早已部署的实例）
 

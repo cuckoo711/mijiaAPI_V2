@@ -5,8 +5,6 @@
 
 from pathlib import Path
 
-import pytest
-
 
 def test_import_main_package() -> None:
     """测试主包导入"""
@@ -97,9 +95,9 @@ def test_docker_build_context_includes_required_entrypoint() -> None:
 
     assert "deploy" not in ignored
     assert (root / "deploy" / "docker-entrypoint.sh").is_file()
-    assert "COPY deploy/docker-entrypoint.sh" in (
-        root / "deploy" / "Dockerfile"
-    ).read_text(encoding="utf-8")
+    assert "COPY deploy/docker-entrypoint.sh" in (root / "deploy" / "Dockerfile").read_text(
+        encoding="utf-8"
+    )
 
 
 def test_docker_compose_defaults_to_loopback() -> None:
@@ -107,9 +105,17 @@ def test_docker_compose_defaults_to_loopback() -> None:
     root = Path(__file__).resolve().parents[2]
     compose = (root / "deploy" / "docker-compose.yml").read_text(encoding="utf-8")
 
-    assert 'MIJIA_BIND_ADDRESS:-127.0.0.1' in compose
-    assert 'MIJIA_BOOTSTRAP_ALLOW_PRIVATE:-1' in compose
+    assert "MIJIA_BIND_ADDRESS:-127.0.0.1" in compose
+    assert "MIJIA_BOOTSTRAP_ALLOW_PRIVATE:-1" in compose
     assert "stop_grace_period: 30s" in compose
+
+
+def test_docker_entrypoint_has_a_linux_shebang_and_lf_newlines() -> None:
+    """Windows CRLF must not corrupt the Linux interpreter path in Docker COPY."""
+    root = Path(__file__).resolve().parents[2]
+    entrypoint = (root / "deploy" / "docker-entrypoint.sh").read_bytes()
+    assert entrypoint.startswith(b"#!/bin/sh\n")
+    assert b"\r" not in entrypoint
 
 
 def test_import_core() -> None:

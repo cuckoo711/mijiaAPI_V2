@@ -26,12 +26,17 @@ def init_command(args: argparse.Namespace) -> None:
     store = ServerStore(settings)
     store.initialize()
     created_admin = None
+    allow_lan = bool(getattr(args, "allow_lan", False))
     if args.admin:
         password = args.password or getpass.getpass("Admin password: ")
         try:
-            created_admin = store.create_initial_admin(args.admin, password)
+            created_admin = store.create_initial_admin(
+                args.admin, password, allow_private_requests=allow_lan
+            )
         except BootstrapAlreadyCompletedError:
             created_admin = {"skipped": True, "reason": "Administrator already exists"}
+    if allow_lan and (created_admin is None or created_admin.get("skipped")):
+        store.set_config("ALLOW_LAN_ACCESS", True, source="cli")
     _print_json(
         {
             "database": str(settings.database_path),
@@ -113,9 +118,7 @@ def purge_audit_command(args: argparse.Namespace) -> None:
     _print_json(
         {
             "purged": deleted,
-            "retention_days": (
-                settings.audit_retention_days if args.days is None else args.days
-            ),
+            "retention_days": (settings.audit_retention_days if args.days is None else args.days),
         }
     )
 
@@ -231,6 +234,11 @@ def build_parser() -> argparse.ArgumentParser:
     init_parser = subparsers.add_parser("init", help="initialize SQLite storage")
     init_parser.add_argument("--admin", help="create the initial administrator")
     init_parser.add_argument("--password", help="administrator password")
+    init_parser.add_argument(
+        "--allow-lan",
+        action="store_true",
+        help="explicitly enable private-network HTTP access (needed for Docker port publishing)",
+    )
     init_parser.set_defaults(func=init_command)
 
     run_parser = subparsers.add_parser("run", help="run the API server")

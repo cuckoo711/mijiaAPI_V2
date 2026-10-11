@@ -35,7 +35,9 @@ class AdminAuthMixin:
             row = conn.execute("SELECT 1 FROM admin_users LIMIT 1").fetchone()
             return row is not None
 
-    def create_initial_admin(self, username: str, password: str) -> dict[str, Any]:
+    def create_initial_admin(
+        self, username: str, password: str, *, allow_private_requests: bool = False
+    ) -> dict[str, Any]:
         """Create the first administrator account."""
 
         if self.has_admin():
@@ -56,6 +58,23 @@ class AdminAuthMixin:
                 """,
                 (admin_id, username, hash_secret(password), now, now),
             )
+            if allow_private_requests:
+                # The administrator and network policy must commit together:
+                # otherwise a Docker browser can create an admin, then be locked
+                # out of login before it can enable private-network access.
+                conn.execute(
+                    """
+                    INSERT INTO runtime_config(key, value, source, updated_at)
+                    VALUES ('ALLOW_LAN_ACCESS', 'true', 'private-bootstrap', ?)
+                    ON CONFLICT(key) DO UPDATE SET
+                        value = excluded.value,
+                        source = excluded.source,
+                        updated_at = excluded.updated_at
+                    """,
+                    (now,),
+                )
+        if allow_private_requests:
+            self._invalidate_config_map_cache()
         return {"id": admin_id, "username": username, "created_at": now}
 
     def authenticate_admin(self, username: str, password: str) -> dict[str, Any]:

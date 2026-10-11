@@ -73,6 +73,14 @@ def _bootstrap_source_allowed(host: str) -> bool:
     return bool(allow_private and (address.is_private or address.is_link_local))
 
 
+def _bootstrap_enables_private_requests(host: str) -> bool:
+    """Loopback setup retains the existing default; opted-in private setup enables LAN."""
+    try:
+        return not ip_address(host).is_loopback and _bootstrap_source_allowed(host)
+    except ValueError:
+        return False
+
+
 def _cookie_secure(request: Request, current_store: ServerStore) -> bool:
     return request_is_https(request, current_store.get_config_map())
 
@@ -151,7 +159,11 @@ def create_initial_admin(
             headers={"Retry-After": str(limit.retry_after_seconds)},
         )
     try:
-        return current_store.create_initial_admin(payload.username, payload.password)
+        return current_store.create_initial_admin(
+            payload.username,
+            payload.password,
+            allow_private_requests=_bootstrap_enables_private_requests(source_ip),
+        )
     except BootstrapAlreadyCompletedError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

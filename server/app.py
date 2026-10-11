@@ -182,6 +182,18 @@ def _network_policy_required(path: str) -> bool:
     return True
 
 
+def _private_bootstrap_request_allowed(request: Request, host: str, store: ServerStore) -> bool:
+    """Expose only first-run setup through an explicitly enabled private network."""
+    if not admin_auth._bootstrap_source_allowed(host) or store.has_admin():
+        return False
+    path = request.url.path.rstrip("/") or "/"
+    if request.method == "POST":
+        return path == "/api/admin/bootstrap/admin"
+    if request.method != "GET":
+        return False
+    return path in {"/", "/index.html", "/api/admin/bootstrap/state"} or path.startswith("/assets/")
+
+
 def _docs_route_disabled(path: str, config: dict[str, Any]) -> bool:
     normalized_path = path.rstrip("/") or "/"
     docs_enabled = _config_bool(config, "DOCS_ENABLED")
@@ -388,8 +400,10 @@ def create_app(  # noqa: C901
                 "API documentation is disabled",
                 request_id,
             )
-        if _network_policy_required(request.url.path) and not _request_network_allowed(
-            source_host, config_map
+        if (
+            _network_policy_required(request.url.path)
+            and not _request_network_allowed(source_host, config_map)
+            and not _private_bootstrap_request_allowed(request, source_host, resolved_store)
         ):
             return _json_error(
                 status.HTTP_403_FORBIDDEN,
