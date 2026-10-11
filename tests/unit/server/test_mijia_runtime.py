@@ -159,6 +159,7 @@ def test_sync_continues_when_one_home_scene_sync_fails(tmp_path: Path, monkeypat
     progress = _wait_for_sync_completion(runtime)
     assert progress["status"] == "completed"
     assert progress["homes_total"] == 2
+    assert progress["homes_processed"] == 2
     assert progress["devices_found"] == 0
     assert progress["scenes_found"] == 0
     assert progress["warnings"] == [
@@ -172,9 +173,7 @@ def test_sync_continues_when_one_home_scene_sync_fails(tmp_path: Path, monkeypat
     ]
 
 
-def test_sync_all_rejects_second_request_while_running(
-    tmp_path: Path, monkeypatch: Any
-) -> None:
+def test_sync_all_rejects_second_request_while_running(tmp_path: Path, monkeypatch: Any) -> None:
     settings = make_settings(tmp_path)
     store = ServerStore(settings)
     store.initialize()
@@ -228,9 +227,7 @@ def test_sync_all_rejects_second_request_while_running(
     assert call_count == 1
 
 
-def test_sync_progress_cleanup_does_not_clear_new_run(
-    tmp_path: Path, monkeypatch: Any
-) -> None:
+def test_sync_progress_cleanup_does_not_clear_new_run(tmp_path: Path, monkeypatch: Any) -> None:
     """旧一次 sync 的延迟清理线程不应把后续新一轮 sync 的 progress 清空。"""
     settings = make_settings(tmp_path)
     store = ServerStore(settings)
@@ -268,9 +265,7 @@ def test_sync_progress_cleanup_does_not_clear_new_run(
 
     # 第二次 sync 完成，覆盖了 _sync_progress
     _start_sync(runtime)
-    second_progress = _wait_for_sync_completion(
-        runtime, previous_task_id=first_task_id
-    )
+    second_progress = _wait_for_sync_completion(runtime, previous_task_id=first_task_id)
     second_task_id = second_progress["task_id"]
     assert second_task_id != first_task_id
 
@@ -347,9 +342,7 @@ def test_delete_credential_clears_synced_data_and_sdk_cache(
     )
 
     # 塞一些"已同步"的数据
-    store.replace_home_registry(
-        [{"id": "home-1", "name": "主家庭", "uid": "u", "rooms": []}]
-    )
+    store.replace_home_registry([{"id": "home-1", "name": "主家庭", "uid": "u", "rooms": []}])
     store.upsert_devices(
         [
             {
@@ -398,3 +391,50 @@ def test_delete_credential_clears_synced_data_and_sdk_cache(
     assert fake_api.cache_cleared is True
     # 凭据文件被删
     assert not settings.credential_path.exists()
+
+
+@pytest.mark.parametrize("home_count", [2, 0])
+def test_sync_counts_processed_homes_before_commit_and_at_completion(
+    tmp_path: Path, monkeypatch: Any, home_count: int
+) -> None:
+    settings = make_settings(tmp_path)
+    store = ServerStore(settings)
+    store.initialize()
+    FileCredentialStore(settings.credential_path).save(
+        make_credential("token", datetime.now() + timedelta(days=30))
+    )
+
+    class FakeApi:
+        def refresh_cache(self) -> None:
+            pass
+
+        def get_homes(self) -> list[Home]:
+            return [
+                Home(id=f"home-{index}", name=f"家庭 {index}", uid="user-1", rooms=[])
+                for index in range(home_count)
+            ]
+
+        def get_devices(self, home_id: str) -> list[Any]:
+            return []
+
+        def get_scenes(self, home_id: str, owner_uid: str | None = None) -> list[Any]:
+            return []
+
+    monkeypatch.setattr("server.mijia_runtime.create_api_client", lambda credential, **_: FakeApi())
+    runtime = MijiaRuntime(settings, store)
+    runtime._progress_cleanup_delay_seconds = 3600
+    captured = []
+    replace_snapshot = store.replace_synced_snapshot
+
+    def capture_commit(*args, **kwargs) -> None:
+        captured.append(runtime.get_sync_progress()["homes_processed"])
+        replace_snapshot(*args, **kwargs)
+
+    monkeypatch.setattr(store, "replace_synced_snapshot", capture_commit)
+    runtime.sync_all()
+    progress = _wait_for_sync_completion(runtime)
+    assert progress["status"] == "completed"
+    assert progress["homes_total"] == home_count
+    assert progress["homes_processed"] == home_count
+    assert captured == [home_count]
+    assert len(store.list_homes()) == home_count

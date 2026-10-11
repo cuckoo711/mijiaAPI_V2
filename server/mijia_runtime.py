@@ -607,6 +607,8 @@ class MijiaRuntime:
                 except Exception as exc:
                     warnings.append(self._sync_warning("scenes", home, exc))
 
+                self._update_progress(homes_processed=i + 1)
+
             # Step 7: Save devices
             self._update_progress(step="保存设备数据", progress=90)
             # Step 8: Commit the complete snapshot atomically.
@@ -626,6 +628,7 @@ class MijiaRuntime:
                 status="completed",
                 step="同步完成",
                 progress=100,
+                homes_processed=len(home_dicts),
                 completed_at=isoformat(utc_now()),
                 warnings=warnings,
             )
