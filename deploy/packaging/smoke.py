@@ -8,6 +8,7 @@ configuration template and frontend came from the executable's own bundle.
 from __future__ import annotations
 
 import argparse
+from contextlib import closing
 import hashlib
 import json
 import locale
@@ -22,6 +23,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import traceback
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 from pathlib import Path
@@ -332,7 +334,7 @@ class FrozenSmoke:
                 self.stop(process)
 
             require(database.is_file() and database.stat().st_size > 0, "SQLite was not persisted")
-            with sqlite3.connect(database) as connection:
+            with closing(sqlite3.connect(database)) as connection:
                 integrity = connection.execute("PRAGMA integrity_check").fetchone()
                 require(integrity == ("ok",), "Persisted SQLite failed integrity check")
                 count = connection.execute(
@@ -379,6 +381,13 @@ def main() -> int:
     except Exception as exc:
         # Unexpected exceptions may contain request bodies or secret arguments.
         report["error"] = f"Unexpected {type(exc).__name__} during frozen smoke test"
+        smoke.diagnostics["unexpected_exception"] = {
+            "type": type(exc).__name__,
+            "frames": [
+                {"file": Path(frame.filename).name, "line": frame.lineno, "function": frame.name}
+                for frame in traceback.extract_tb(exc.__traceback__)
+            ],
+        }
         print(report["error"], file=sys.stderr)
     finally:
         report["completed_at"] = datetime.now(timezone.utc).isoformat()
