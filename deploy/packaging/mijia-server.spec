@@ -99,7 +99,7 @@ exe = EXE(
     a.scripts,
     a.binaries,
     a.datas,
-    [],
+    [("X utf8", None, "OPTION")],
     name="mijia-server",
     debug=False,
     bootloader_ignore_signals=False,

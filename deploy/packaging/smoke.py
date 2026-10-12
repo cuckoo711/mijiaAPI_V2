@@ -14,6 +14,7 @@ import json
 import locale
 import os
 import platform
+import re
 import secrets
 import shutil
 import signal
@@ -111,7 +112,14 @@ class FrozenSmoke:
             )
         except subprocess.TimeoutExpired as exc:
             raise SmokeFailure(f"{command} timed out") from exc
-        require(result.returncode == 0, f"{command} exited with code {result.returncode}")
+        if result.returncode != 0:
+            self.diagnostics[f"cli_{command}"] = {
+                "exit_code": result.returncode,
+                "error_types": sorted(
+                    set(re.findall(r"(?m)^(\w+(?:Error|Exception)):", decode_output(result.stderr)))
+                ),
+            }
+            raise SmokeFailure(f"{command} exited with code {result.returncode}")
         # Never print stdout/stderr: commands can contain administrator details.
         return parse_cli_json(result.stdout, command) if as_json else decode_output(result.stdout)
 
