@@ -51,8 +51,11 @@ def build_frontend() -> None:
         return
 
     print("构建前端...")
-    subprocess.run(["npm", "ci"], cwd=web_dir, check=True)
-    subprocess.run(["npm", "run", "build"], cwd=web_dir, check=True)
+    npm_path = shutil.which("npm")
+    if npm_path is None:
+        raise RuntimeError("未找到 npm，请先安装 Node.js")
+    subprocess.run([npm_path, "ci"], cwd=web_dir, check=True)
+    subprocess.run([npm_path, "run", "build"], cwd=web_dir, check=True)
 
 
 def build_executable() -> None:

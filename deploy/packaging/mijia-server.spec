@@ -13,6 +13,10 @@ datas = [
     (str(ROOT_DIR / "server"), "server"),
     (str(ROOT_DIR / "web" / "dist"), "web/dist"),
 ]
+datas.extend(
+    (str(template), "configs")
+    for template in sorted((ROOT_DIR / "configs").glob("*.toml.template"))
+)
 
 # 隐式导入
 hiddenimports = [

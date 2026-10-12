@@ -64,6 +64,33 @@ jobs:
       - name: Build executable
         run: pyinstaller --clean --noconfirm deploy/packaging/mijia-server.spec
 
+      - name: Smoke-test frozen executable in an isolated directory
+        id: smoke
+        shell: bash
+        run: |
+          set -e
+          EXPECTED_VERSION="$(python -c 'import mijiaAPI_V2; print(mijiaAPI_V2.__version__)')"
+          if [[ "$GITHUB_REF" == refs/tags/* && "${GITHUB_REF#refs/tags/v}" != "$EXPECTED_VERSION" ]]; then
+            echo "::error::Release tag does not match the bundled application version"
+            exit 1
+          fi
+          EXECUTABLE="dist/mijia-server"
+          if [[ "${{ matrix.platform }}" == "windows" ]]; then
+            EXECUTABLE="${EXECUTABLE}.exe"
+          fi
+          python deploy/packaging/smoke.py \
+            --executable "$EXECUTABLE" \
+            --expected-version "$EXPECTED_VERSION" \
+            --report "dist/smoke-${{ matrix.platform }}-${{ matrix.arch }}.json"
+
+      - name: Upload frozen executable smoke report
+        if: always() && steps.smoke.outcome != 'skipped'
+        uses: actions/upload-artifact@v4
+        with:
+          name: frozen-smoke-${{ matrix.platform }}-${{ matrix.arch }}
+          path: dist/smoke-${{ matrix.platform }}-${{ matrix.arch }}.json
+          if-no-files-found: error
+
       # 防止「标签与实际架构不符」再次悄悄发布：v3.8.0 曾把 x64 产物标成
       # linux-arm64、把 arm64 产物标成 macos-x64，构建全绿也没发现。
       - name: Verify binary architecture (Linux/macOS)
@@ -121,10 +148,36 @@ jobs:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
+          pattern: mijia-server-*
+          merge-multiple: true
           path: artifacts
 
-      - name: List artifacts
-        run: find artifacts -type f
+      - name: Verify complete release and generate download checksums
+        run: |
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+
+          directory = Path("artifacts")
+          expected = {
+              "mijia-server-linux-x64",
+              "mijia-server-linux-arm64",
+              "mijia-server-windows-x64.exe",
+              "mijia-server-macos-arm64",
+          }
+          files = {path.name for path in directory.iterdir() if path.is_file()}
+          if files != expected:
+              raise SystemExit(f"Incomplete release assets: missing={sorted(expected - files)}, unexpected={sorted(files - expected)}")
+          lines = []
+          for name in sorted(expected):
+              path = directory / name
+              if path.stat().st_size == 0:
+                  raise SystemExit(f"Empty release executable: {name}")
+              digest = hashlib.sha256(path.read_bytes()).hexdigest()
+              lines.append(f"{digest}  {name}\n")
+          (directory / "SHA256SUMS").write_text("".join(lines), encoding="utf-8")
+          print("Verified all four executables; generated SHA256SUMS")
+          PY
 
       - name: Extract release notes from CHANGELOG
         id: notes
@@ -144,7 +197,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            artifacts/**/*
+            artifacts/mijia-server-*
+            artifacts/SHA256SUMS
           # body_path 提供的 CHANGELOG 摘要会被放到自动生成的 issue/PR 列表前面
           body_path: ${{ steps.notes.outputs.body_file }}
           generate_release_notes: true

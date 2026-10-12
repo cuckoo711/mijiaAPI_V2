@@ -22,8 +22,8 @@ data_dir = "configs"
 database_path = "configs/server/server.sqlite3"
 # 凭据文件路径
 credential_path = "configs/credential.json"
-# Web前端目录
-web_dist_dir = "web/dist"
+# 默认自动定位项目或打包内置的 Web 前端；需要使用自定义目录时再配置
+# web_dist_dir = "web/dist"
 
 [security]
 # 公共基础URL（用于API文档等）

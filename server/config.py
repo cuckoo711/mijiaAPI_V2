@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import shutil
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
@@ -31,6 +31,15 @@ def _bundled_base_dir() -> Path:
         return Path(sys._MEIPASS)  # type: ignore[attr-defined]
     # Running from source: __file__ is server/config.py, so go up one level.
     return Path(__file__).resolve().parent.parent
+
+
+def _config_template_path() -> Path:
+    """Prefer an operator's local template, then the bundled default template."""
+
+    local_template = Path("configs/server.toml.template")
+    if local_template.is_file():
+        return local_template
+    return _bundled_base_dir() / "configs" / "server.toml.template"
 
 
 def _load_toml_config(path: Path) -> dict[str, Any]:
@@ -167,7 +176,7 @@ class ServerSettings:
     log_level: str = "INFO"
     web_dist_dir: Path = _bundled_base_dir() / "web" / "dist"
     config_file_path: Path = Path("configs/server.toml")
-    config_template_path: Path = Path("configs/server.toml.template")
+    config_template_path: Path = field(default_factory=_config_template_path)
 
     @classmethod
     def from_env(cls) -> "ServerSettings":
@@ -239,7 +248,6 @@ class ServerSettings:
             ).upper(),
             web_dist_dir=web_dist_dir,
             config_file_path=config_file,
-            config_template_path=Path("configs/server.toml.template"),
         )
 
     def ensure_directories(self) -> None:

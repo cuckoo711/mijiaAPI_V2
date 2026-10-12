@@ -275,7 +275,7 @@ uv run pyinstaller --clean --noconfirm deploy/packaging/mijia-server.spec
 | Linux | ARM64 | `mijia-server-linux-arm64` |
 | macOS | ARM64 | `mijia-server-macos-arm64` |
 
-产物是 PyInstaller 单文件可执行程序，直接挂在 Release 上，不额外打包成压缩包。
+产物是 PyInstaller 单文件可执行程序，直接挂在 Release 上，不额外打包成压缩包。Release 同时提供 `SHA256SUMS`，用于核对下载文件的 SHA-256。
 
 > macOS Intel（x64）不再随版本发布：标准运行器里最后一个 Intel macOS 镜像
 > `macos-13` 已于 2025 年 12 月停止支持，而 PyInstaller 无法交叉编译。Intel Mac
@@ -284,16 +284,23 @@ uv run pyinstaller --clean --noconfirm deploy/packaging/mijia-server.spec
 推送版本标签后会自动触发 GitHub Actions 构建：
 
 ```bash
-git tag v3.8.1
-git push origin v3.8.1
+git tag v3.9.0
+git push origin v3.9.0
 ```
 
 ### 运行可执行文件
 
 ```bash
-# 解压后直接运行
-./mijia-server init
-./mijia-server run
+# Linux x64 示例；ARM64/macOS 请替换为上表中的对应文件名
+chmod +x mijia-server-linux-x64
+./mijia-server-linux-x64 init
+./mijia-server-linux-x64 run
+```
+
+```powershell
+# Windows x64
+.\mijia-server-windows-x64.exe init
+.\mijia-server-windows-x64.exe run
 ```
 
 默认监听 `127.0.0.1:8123`。
