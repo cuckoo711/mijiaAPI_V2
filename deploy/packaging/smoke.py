@@ -89,6 +89,7 @@ class FrozenSmoke:
         self.expected_version = expected_version.removeprefix("v")
         self.timeout = timeout
         self.checks: list[dict[str, Any]] = []
+        self.diagnostics: dict[str, Any] = {}
         self.http = build_opener(ProxyHandler({}))
 
     def passed(self, name: str, **details: Any) -> None:
@@ -124,6 +125,20 @@ class FrozenSmoke:
                 require(response.status == 200, f"{path} did not return HTTP 200")
                 return response.read(), response.headers.get("Content-Type", "")
         except HTTPError as exc:
+            if path == "/readyz":
+                try:
+                    readiness = json.loads(exc.read())
+                    checks = readiness.get("checks", {})
+                    self.diagnostics["readiness"] = {
+                        "http_status": exc.code,
+                        "checks": {
+                            name: checks[name]
+                            for name in ("sqlite", "frontend", "audit")
+                            if type(checks.get(name)) is bool
+                        },
+                    }
+                except (ValueError, AttributeError):
+                    pass
             raise SmokeFailure(f"{path} returned HTTP {exc.code}") from exc
 
     def json_request(self, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -234,7 +249,10 @@ class FrozenSmoke:
     def run(self) -> None:
         require(self.original.is_file(), "Executable does not exist")
         with tempfile.TemporaryDirectory(prefix="mijia-frozen-smoke-") as directory:
-            self.cwd = Path(directory)
+            # macOS's default /var temporary directory is an alias for
+            # /private/var. Use the physical path so the audit store's
+            # deliberate symlink-ancestor rejection remains enabled.
+            self.cwd = Path(directory).resolve()
             self.executable = self.cwd / self.original.name
             shutil.copy2(self.original, self.executable)
             require(
@@ -349,6 +367,7 @@ def main() -> int:
         ),
         "started_at": datetime.now(timezone.utc).isoformat(),
         "checks": smoke.checks,
+        "diagnostics": smoke.diagnostics,
         "success": False,
     }
     try:
