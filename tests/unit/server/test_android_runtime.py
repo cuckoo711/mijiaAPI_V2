@@ -37,3 +37,24 @@ def test_android_stop_before_start_can_be_reset_for_a_new_service():
     assert runtime._stop_requested
     runtime.prepare()
     assert not runtime._stop_requested
+
+
+def test_android_bootstrap_requires_the_app_owner_cookie(tmp_path):
+    from fastapi.testclient import TestClient
+    from server.store import ServerStore
+
+    runtime = load_runtime()
+    settings = runtime.settings_for(tmp_path / "private")
+    store = ServerStore(settings)
+    store.initialize()
+    token = "android-owner-test-token-with-256-bit-entropy-in-production"
+    client = TestClient(runtime.create_android_app(settings, store, token), client=("127.0.0.1", 50000))
+    body = {"username": "admin", "password": "local-test-password"}
+    denied = client.post("/api/admin/bootstrap/admin", json=body)
+    assert denied.status_code == 403
+    assert not store.has_admin()
+    allowed = client.post(
+        "/api/admin/bootstrap/admin", json=body, headers={"Cookie": f"mijia_android_owner={token}"}
+    )
+    assert allowed.status_code == 201
+    assert store.has_admin()

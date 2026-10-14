@@ -8,6 +8,8 @@ import com.chaquo.python.android.AndroidPlatform;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.security.SecureRandom;
+import android.util.Base64;
 
 /** A user-started foreground service owns the embedded interpreter and HTTP listener. */
 public class ServerService extends Service {
@@ -15,6 +17,11 @@ public class ServerService extends Service {
     public static volatile boolean active = false;
     public static volatile boolean ready = false;
     public static volatile String status = "服务未启动";
+    public static final String OWNER_TOKEN = ownerToken();
+    private static String ownerToken() {
+        byte[] bytes=new byte[32]; new SecureRandom().nextBytes(bytes);
+        return Base64.encodeToString(bytes,Base64.URL_SAFE|Base64.NO_WRAP|Base64.NO_PADDING);
+    }
     private final AtomicBoolean started = new AtomicBoolean();
     private volatile boolean stopping;
     private PowerManager.WakeLock wakeLock;
@@ -51,7 +58,7 @@ public class ServerService extends Service {
                 if (!Python.isStarted()) Python.start(new AndroidPlatform(getApplicationContext()));
                 if (!stopping) Python.getInstance().getModule("mijia_android.runtime").callAttr("prepare");
                 if (!stopping) Python.getInstance().getModule("mijia_android.runtime")
-                        .callAttr("run", getFilesDir().getAbsolutePath() + "/service", lan);
+                        .callAttr("run", getFilesDir().getAbsolutePath() + "/service", lan, OWNER_TOKEN);
             } catch (Throwable error) {
                 // Do not put potentially credential-bearing exception messages into notifications.
                 status = "启动失败：" + error.getClass().getSimpleName() + "（请重试或提供测试反馈）";

@@ -8,7 +8,12 @@ import zipfile
 
 root = Path(__file__).resolve().parent / "wheels/dist"
 records = []
-for abi, elf_class, machine in [("armeabi_v7a", 1, 40), ("arm64_v8a", 2, 183), ("x86_64", 2, 62)]:
+for abi, elf_class, machine in [
+    ("armeabi_v7a", 1, 40),
+    ("arm64_v8a", 2, 183),
+    ("x86", 1, 3),
+    ("x86_64", 2, 62),
+]:
     for package, version in [("pydantic_core", "2.46.4"), ("pycryptodome", "3.23.0")]:
         wheels = list(root.glob(f"{package}-{version}-*-cp311-cp311-android_24_{abi}.whl"))
         assert len(wheels) == 1, f"Expected exactly one {package} wheel for {abi}, got {wheels}"

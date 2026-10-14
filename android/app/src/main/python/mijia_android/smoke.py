@@ -12,6 +12,7 @@ import platform
 import re
 import secrets
 import struct
+from datetime import datetime, timedelta
 
 
 def run(data_dir):
@@ -38,7 +39,28 @@ def run(data_dir):
     png = render_qr_data_url("https://account.xiaomi.com/android-smoke-only")
     assert base64.b64decode(png.split(",", 1)[1]).startswith(b"\x89PNG\r\n\x1a\n")
     checks.append("qr_png_without_pillow")
-    client = httpx.Client(base_url="http://127.0.0.1:8123", timeout=10)
+    from mijiaAPI_V2.domain.models import Credential
+    from mijiaAPI_V2.infrastructure.credential_store import FileCredentialStore
+
+    credential_path = Path(data_dir) / "smoke-credential/credential.json"
+    credential_store = FileCredentialStore(credential_path)
+    secret = secrets.token_urlsafe(32)
+    credential_store.save(
+        Credential(
+            user_id="android-smoke-offline",
+            service_token=secret,
+            ssecurity="offline-fixture",
+            c_user_id="offline",
+            device_id="offline",
+            user_agent="android-smoke",
+            expires_at=datetime.now() + timedelta(days=1),
+        )
+    )
+    assert credential_store.load().service_token == secret
+    assert secret not in credential_path.read_text()
+    credential_digest = hashlib.sha256(secret.encode()).hexdigest()
+    checks.append("encrypted_credential_storage")
+    client = httpx.Client(base_url="http://127.0.0.1:8123", timeout=30)
     with client:
         assert client.get("/healthz").json()["version"] == mijiaAPI_V2.__version__
         ready = client.get("/readyz").json()
@@ -54,6 +76,12 @@ def run(data_dir):
             "initialized"
         ], "Use a fresh disposable device"
         password = secrets.token_urlsafe(24)
+        body = {"username": "android-smoke", "password": password}
+        assert client.post("/api/admin/bootstrap/admin", json=body).status_code == 403
+        from mijia_android import runtime
+
+        client.cookies.set("mijia_android_owner", runtime._owner_token)
+        checks.append("android_initialization_owner_guard")
         response = client.post(
             "/api/admin/bootstrap/admin", json={"username": "android-smoke", "password": password}
         )
@@ -82,10 +110,13 @@ def run(data_dir):
             ).status_code
             == 200
         )
-        assert client.get("/api/v1/devices", headers=api).status_code == 401
+        denied = client.get("/api/v1/devices", headers=api)
+        assert denied.status_code == 403
+        assert denied.json()["error"]["code"] == "API_KEY_FORBIDDEN"
         checks.append("api_key_scopes_and_revocation")
     store = ServerStore(settings_for(data_dir))
     store.set_config("ANDROID_SMOKE_MARKER", "persisted", source="android-smoke")
+    store.set_config("ANDROID_SMOKE_CREDENTIAL_DIGEST", credential_digest, source="android-smoke")
     result = {
         "passed": True,
         "version": mijiaAPI_V2.__version__,
@@ -108,6 +139,18 @@ def verify_restart(data_dir):
     assert store.has_admin()
     assert store.get_config_map()["ANDROID_SMOKE_MARKER"] == "persisted"
     assert len(store.list_api_keys()) == 1
-    result = {"passed": True, "admin_and_api_key_persisted": True, "config_persisted": True}
+    from mijiaAPI_V2.infrastructure.credential_store import FileCredentialStore
+
+    credential = FileCredentialStore(Path(data_dir) / "smoke-credential/credential.json").load()
+    assert (
+        hashlib.sha256(credential.service_token.encode()).hexdigest()
+        == store.get_config_map()["ANDROID_SMOKE_CREDENTIAL_DIGEST"]
+    )
+    result = {
+        "passed": True,
+        "admin_and_api_key_persisted": True,
+        "config_persisted": True,
+        "credential_keypair_persisted": True,
+    }
     (Path(data_dir) / "android-restart-smoke.json").write_text(json.dumps(result, indent=2))
     return json.dumps(result)

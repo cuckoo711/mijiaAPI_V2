@@ -1,0 +1,49 @@
+[
+  {
+    "file": "pydantic_core-2.46.4.tar.gz",
+    "sha256": "62f875393d7f270851f20523dd2e29f082bcc82292d66db2b64ea71f64b6e1c1",
+    "bytes": 471464,
+    "url": "https://files.pythonhosted.org/packages/9d/56/921726b776ace8d8f5db44c4ef961006580d91dc52b803c489fafd1aa249/pydantic_core-2.46.4.tar.gz"
+  },
+  {
+    "file": "pycryptodome-3.23.0.tar.gz",
+    "sha256": "447700a657182d60338bab09fdb27518f8856aecd80ae4c6bdddb67ff5da44ef",
+    "bytes": 4921276,
+    "url": "https://files.pythonhosted.org/packages/8e/a6/8452177684d5e906854776276ddd34eca30d1b1e15aa1ee9cefc289a33f5/pycryptodome-3.23.0.tar.gz"
+  },
+  {
+    "file": "target-3.11.17-0-arm64-v8a.zip",
+    "sha256": "399b58d04898f2c7d5f0044e141bdf3818552e538e5f36d06d7fe0bebc298582",
+    "bytes": 6992518,
+    "url": "https://chaquo.com/maven-central/com/chaquo/python/target/3.11.17-0/target-3.11.17-0-arm64-v8a.zip"
+  },
+  {
+    "file": "target-3.11.17-0-armeabi-v7a.zip",
+    "sha256": "7516b90fcb8a5a2df70e5f9899aab7e63fa43efa0455c3ba7b846ae54d70ee2c",
+    "bytes": 6287159,
+    "url": "https://chaquo.com/maven-central/com/chaquo/python/target/3.11.17-0/target-3.11.17-0-armeabi-v7a.zip"
+  },
+  {
+    "file": "target-3.11.17-0-stdlib-pyc.zip",
+    "sha256": "5b853d5631b8f482f4f181af3d7b8162c17f440da5eafc5e1f64b23faf53f773",
+    "bytes": 4833553,
+    "url": "https://chaquo.com/maven-central/com/chaquo/python/target/3.11.17-0/target-3.11.17-0-stdlib-pyc.zip"
+  },
+  {
+    "file": "target-3.11.17-0-stdlib.zip",
+    "sha256": "860d5684cfb30cb4b7ff71dd3ba3f9b352e7a91a7329552e1be7ca87a4ae4cf5",
+    "bytes": 2721869,
+    "url": "https://chaquo.com/maven-central/com/chaquo/python/target/3.11.17-0/target-3.11.17-0-stdlib.zip"
+  },
+  {
+    "file": "target-3.11.17-0-x86_64.zip",
+    "sha256": "a479a9c74ca9e900f30b6089ffd23a10d74fe7a9f427d967bceddf8f3fe206f1",
+    "bytes": 7212185,
+    "url": "https://chaquo.com/maven-central/com/chaquo/python/target/3.11.17-0/target-3.11.17-0-x86_64.zip"
+  },
+  {
+    "file": "target-3.11.17-0-x86.zip",
+    "sha256": "03cc81afd7b7b8063249c871d62c1a26b1776aee3783e7c1cd914ed3b4c1d67c",
+    "url": "https://chaquo.com/maven-central/com/chaquo/python/target/3.11.17-0/target-3.11.17-0-x86.zip"
+  }
+]

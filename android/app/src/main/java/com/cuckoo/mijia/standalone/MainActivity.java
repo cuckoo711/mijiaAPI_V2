@@ -66,6 +66,14 @@ public class MainActivity extends Activity {
                 .setMessage("停止后，本机管理台和局域网 API 暂时不可用。数据会保留。")
                 .setNegativeButton("取消",null).setPositiveButton("停止",(d,w) -> startService(new Intent(this,ServerService.class).setAction(ServerService.STOP))).show());
         open = button(controls, "打开管理台", v -> {
+            java.util.regex.Matcher chrome = java.util.regex.Pattern.compile("Chrome/(\\d+)").matcher(web.getSettings().getUserAgentString());
+            if (chrome.find() && Integer.parseInt(chrome.group(1)) < 61) {
+                new AlertDialog.Builder(this).setTitle("请更新系统 WebView")
+                        .setMessage("当前系统 WebView 不支持管理台所需的网页模块。更新 Android System WebView 后可在本机打开；服务仍可运行，也可开启局域网后用其他设备访问。")
+                        .setPositiveButton("知道了",null).show();
+                return;
+            }
+            CookieManager.getInstance().setCookie("http://127.0.0.1:8123", "mijia_android_owner=" + ServerService.OWNER_TOKEN + "; Path=/; HttpOnly; SameSite=Strict");
             web.setVisibility(View.VISIBLE);
             if (!pageOpened) { web.loadUrl("http://127.0.0.1:8123/"); pageOpened = true; }
         });

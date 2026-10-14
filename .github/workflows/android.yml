@@ -1,0 +1,134 @@
+name: Android Test APK
+
+on:
+  push:
+    tags: ['v*-android-test.*']
+  workflow_dispatch:
+  workflow_call:
+    secrets:
+      ANDROID_TEST_KEYSTORE:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install Android and Rust toolchains
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager 'platforms;android-35' 'build-tools;35.0.0' 'ndk;27.3.13750724'
+          rustup toolchain install 1.99.0 --profile minimal
+          rustup default 1.99.0
+          rustup target add armv7-linux-androideabi aarch64-linux-android i686-linux-android x86_64-linux-android
+          python -m pip install build==1.5.0 jinja2==3.1.6 jsonschema==2.6.0 pyelftools==0.29 pypi-simple==1.1.0 pyyaml==6.0.3 setuptools==69.1.1 wheel==0.33.6
+      - uses: actions/cache@v4
+        id: wheels
+        with:
+          path: android/wheels/dist
+          key: android-native-v1-${{ runner.os }}-${{ hashFiles('android/wheels/**', 'android/ci/inputs.json', 'android/requirements.txt') }}
+      - name: Cross-compile native dependencies for all four ABIs
+        if: steps.wheels.outputs.cache-hit != 'true'
+        run: |
+          python android/ci/prepare_native.py
+          python android/wheels/build.py --chaquopy-source android/build/native/chaquopy --source-cache android/build/native/sources
+        env:
+          CARGO_BUILD_JOBS: '2'
+      - name: Restore persistent test signing identity
+        env:
+          KEYSTORE: ${{ secrets.ANDROID_TEST_KEYSTORE }}
+        run: |
+          set -euo pipefail
+          test -n "$KEYSTORE" || { echo '::error::ANDROID_TEST_KEYSTORE secret is required'; exit 1; }
+          umask 077
+          printf '%s' "$KEYSTORE" | base64 --decode > "$RUNNER_TEMP/android-test.keystore"
+          echo "ANDROID_TEST_KEYSTORE_PATH=$RUNNER_TEMP/android-test.keystore" >> "$GITHUB_ENV"
+      - name: Build offline Python bundle and five APK flavors
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd web
+          npm ci
+          npm run build
+          cd ..
+          python android/prepare.py
+          python android/wheels/vendor.py
+          python android/verify_wheels.py
+          VERSION="$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')-android-test.1"
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then VERSION="${GITHUB_REF#refs/tags/v}"; fi
+          cd android
+          sh gradlew assembleDebug "-PbuildPython=$(command -v python)" "-PandroidVersion=$VERSION" --no-daemon --console plain
+      - name: Enable KVM on the disposable runner
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Test HTTP, WebView, permissions and restart on every flavor
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          target: google_apis
+          arch: x86_64
+          cores: 2
+          ram-size: 1536M
+          disable-animations: true
+          script: python android/ci/test_emulator.py
+      - name: Verify signatures, ABI resources and collect release assets
+        run: python android/ci/collect.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-release
+          path: android/build/release/*
+          if-no-files-found: error
+      - name: Keep diagnostic reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-validation
+          path: android/build/validation/*
+          if-no-files-found: ignore
+      - name: Remove signing material
+        if: always()
+        run: rm -f "$RUNNER_TEMP/android-test.keystore"
+
+  prerelease:
+    if: startsWith(github.ref, 'refs/tags/') && contains(github.ref, '-android-test.')
+    needs: android
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: android-release
+          path: artifacts
+      - name: Publish verified Android test APKs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          cat > notes.md <<'EOF'
+          Android 独立服务测试版，手机内运行后端和管理台。Android 7.0 起，优先下载 universal 通用 APK；ARM32/ARM64 包可减少下载大小。
+
+          安装后点击“启动服务”和“打开管理台”，创建自己的管理员账号。局域网访问默认关闭。停止和覆盖升级保留数据，卸载或清除应用数据会删除数据。
+
+          五种 APK 均通过隔离 Android 11 模拟器的 HTTP、WebView、管理员/API Key 权限、加密存储和重启持久化验收。ARM 使用指令转换；尚未完成真机、Android 7–10/12+、真实米家设备及长时间锁屏验收。
+
+          使用持续维护的测试签名，可覆盖升级同签名测试包。附件包含 APK、ANDROID_SHA256SUMS 和验收报告。源码版本以本 Release 标签为准。
+          EOF
+          gh release create "$GITHUB_REF_NAME" artifacts/* --verify-tag --prerelease --latest=false --title "$GITHUB_REF_NAME · Android 独立服务测试版" --notes-file notes.md

@@ -9,7 +9,7 @@ import subprocess
 CHAQUOPY_COMMIT = "884ec5f14591d69844e20c9dc6a6a9c5d1ba0a41"
 parser = argparse.ArgumentParser()
 parser.add_argument("--chaquopy-source", type=Path, required=True)
-parser.add_argument("--abis", nargs="+", default=["armeabi-v7a", "arm64-v8a", "x86_64"])
+parser.add_argument("--abis", nargs="+", default=["armeabi-v7a", "arm64-v8a", "x86", "x86_64"])
 parser.add_argument("--source-cache", type=Path)
 args = parser.parse_args()
 os.environ.setdefault("SOURCE_DATE_EPOCH", "315532800")

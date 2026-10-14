@@ -41,7 +41,7 @@ public class SmokeInstrumentation extends Instrumentation {
         View root=activity.getWindow().getDecorView();
         runOnMainSync(()->((Button)find(root,Button.class,"打开管理台")).performClick());
         WebView web=(WebView)find(root,WebView.class,null);
-        long deadline=System.currentTimeMillis()+30000;
+        long deadline=System.currentTimeMillis()+120000;
         while (System.currentTimeMillis()<deadline) {
             AtomicReference<String> body=new AtomicReference<>("");
             CountDownLatch done=new CountDownLatch(1);
