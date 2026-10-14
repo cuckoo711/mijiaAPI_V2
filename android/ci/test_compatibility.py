@@ -46,8 +46,24 @@ def run(*command, check=True):
     return result.stdout
 
 def hierarchy():
-    run('shell', 'uiautomator', 'dump', '/sdcard/compat-ui.xml')
-    return run('shell', 'cat', '/sdcard/compat-ui.xml')
+    for attempt in range(3):
+        # Some emulator builds exit nonzero after writing a complete snapshot.
+        # Remove the prior file so only a freshly produced, valid XML is usable.
+        run('shell', 'rm', '-f', '/sdcard/compat-ui.xml', check=False)
+        dumped = subprocess.run(adb+['shell', 'uiautomator', 'dump', '/sdcard/compat-ui.xml'],
+                                capture_output=True, text=True, timeout=45)
+        xml = run('shell', 'cat', '/sdcard/compat-ui.xml', check=False)
+        try:
+            document = ET.fromstring(xml)
+            assert document.tag == 'hierarchy'
+            if dumped.returncode:
+                report['snapshot_nonzero_with_valid_xml'] = report.get('snapshot_nonzero_with_valid_xml', 0)+1
+                with (out/'snapshot-warnings.log').open('a') as diagnostics:
+                    diagnostics.write(dumped.stdout+dumped.stderr)
+            return xml
+        except (ET.ParseError, AssertionError):
+            time.sleep(1)
+    raise RuntimeError('Unable to obtain a fresh valid UI snapshot')
 
 def click_text(text, resource=None):
     document = ET.fromstring(hierarchy())
@@ -111,7 +127,7 @@ try:
         assert 'Success' in run('shell', 'pm', 'clear', package)
     run('shell', 'am', 'start', '-W', '-n', package + '/.MainActivity')
     time.sleep(3)
-    assert click_text('启动服务')
+    await_click('启动服务')
     time.sleep(3)
     if report['api'] >= 33:
         click_text(None, 'permission_deny_button')
