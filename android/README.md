@@ -83,7 +83,7 @@ Linux CI 从固定提交获取交叉编译器，按 `ci/inputs.json` 的 SHA256 
 24 小时长测使用服务器上独立的一次性模拟器，由 systemd 托管测试进程，避免终端关闭中断。示例（仅限隔离模拟器，测试会清空应用数据）：
 
 ```sh
-python android/ci/test_compatibility.py --serial emulator-5590 --apk /path/to/test.apk \
+python android/ci/test_compatibility.py --serial emulator-5584 --adb-server-port 5039 --apk /path/to/test.apk \
   --output /path/to/evidence --seconds 86400 --expect-page-size 16384 \
   --disposable --expect-console --expect-exemption-ui --full-ui
 ```
@@ -95,3 +95,5 @@ python android/ci/test_compatibility.py --serial emulator-5590 --apk /path/to/te
 API 35 的 16 KiB 镜像内置 WebView 124，在管理台加载时会于 WebView MemoryInfra 线程原生崩溃。应用会在创建 WebView 前阻止此组合并提示更新组件，后台服务可以独立启动。完整管理台与长测使用 API 36 的 16 KiB 镜像，报告中记录实际 WebView 版本。
 
 16 KiB 系统镜像使用 4096 MiB 内存；2048 MiB 在首次启动与 WebView 加载时可能触发系统低内存回收，不能将这类测试基础设施失败当作应用已通过。共享验收主机应串行执行 16 KiB 和旧系统长测，保留各自完整 24 小时结果，避免影响同机服务。
+
+长测使用专用 ADB 服务端口（例如 5039），启动模拟器时将 `launch_16k.py --adb-server-port` 与测试参数设为相同值；API 24 的启动进程也应使用对应的 `ANDROID_ADB_SERVER_PORT` 和 `ADB_SERVER_SOCKET`。模拟器控制台端口采用 5554–5584 范围内的偶数，以便 ADB 重启后自动发现。报告分别记录 APK 源提交、测试脚本提交与 SHA256，测试基础设施修正不改动受测 APK。传输中断导致失败的记录保留，重新从零进行 24 小时验收。

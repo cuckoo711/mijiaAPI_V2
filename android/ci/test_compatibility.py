@@ -20,6 +20,7 @@ import xml.etree.ElementTree as ET
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--serial', required=True)
+parser.add_argument('--adb-server-port', type=int, default=5037)
 parser.add_argument('--apk', type=Path, required=True)
 parser.add_argument('--output', type=Path, required=True)
 parser.add_argument('--seconds', type=int, default=600)
@@ -33,7 +34,8 @@ assert args.serial.startswith('emulator-'), 'Disposable emulators only'
 assert args.seconds >= 60
 out = args.output
 out.mkdir(parents=True, exist_ok=True)
-adb = ['adb', '-s', args.serial]
+assert 1024 <= args.adb_server_port <= 65535
+adb = ['adb', '-P', str(args.adb_server_port), '-s', args.serial]
 package = 'com.cuckoo.mijia.standalone'
 if args.expect_page_size == 16384:
     # Disable Android's 4 KiB backcompat fallback on this disposable userdebug
@@ -104,6 +106,9 @@ def health():
     return True
 
 report = {'passed': False, 'serial': args.serial, 'samples': [],
+          'adb_server_port': args.adb_server_port,
+          'harness_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+          'harness_commit': os.environ.get('MIJIA_TEST_HARNESS_COMMIT', ''),
           'state': 'preflight', 'requested_seconds': args.seconds,
           'commit': os.environ.get('GITHUB_SHA', ''),
           'apk_sha256': hashlib.sha256(args.apk.read_bytes()).hexdigest()}

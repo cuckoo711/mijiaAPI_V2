@@ -9,11 +9,16 @@ parser.add_argument('--sdk', type=Path, required=True)
 parser.add_argument('--output', type=Path, required=True)
 parser.add_argument('--api', type=int, choices=(35, 36), default=36)
 parser.add_argument('--memory', type=int, default=4096)
-parser.add_argument('--port', type=int, default=5590)
+parser.add_argument('--port', type=int, default=5584)
+parser.add_argument('--adb-server-port', type=int, default=5037)
 args = parser.parse_args()
 root = args.output.resolve()
 root.mkdir(parents=True, exist_ok=True)
-env = dict(os.environ, ANDROID_HOME=str(args.sdk), ANDROID_AVD_HOME=str(root/'avd'))
+assert args.port % 2 == 0 and 5554 <= args.port <= 5584, 'Use an ADB-discoverable console port'
+assert 1024 <= args.adb_server_port <= 65535
+env = dict(os.environ, ANDROID_HOME=str(args.sdk), ANDROID_AVD_HOME=str(root/'avd'),
+           ANDROID_ADB_SERVER_PORT=str(args.adb_server_port),
+           ADB_SERVER_SOCKET=f'tcp:127.0.0.1:{args.adb_server_port}')
 (root/'avd').mkdir(exist_ok=True)
 name = f'mijia-acceptance-{args.api}-16k'
 avd = root/'avd'/f'{name}.avd'
