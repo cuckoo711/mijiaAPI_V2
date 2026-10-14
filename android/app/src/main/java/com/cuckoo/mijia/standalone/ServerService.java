@@ -13,6 +13,7 @@ import android.util.Base64;
 
 /** A user-started foreground service owns the embedded interpreter and HTTP listener. */
 public class ServerService extends Service {
+    public static final int STATUS = 1, DEBUG_ACCEPTANCE = 2;
     public static final String STOP = "com.cuckoo.mijia.standalone.STOP";
     public static volatile boolean active = false;
     public static volatile boolean ready = false;
@@ -24,10 +25,47 @@ public class ServerService extends Service {
     }
     private final AtomicBoolean started = new AtomicBoolean();
     private volatile boolean stopping;
+    private volatile int generation;
     private PowerManager.WakeLock wakeLock;
     private final Handler handler = new Handler(Looper.getMainLooper());
 
-    @Override public IBinder onBind(Intent intent) { return null; }
+    private final Messenger rpc = new Messenger(new Handler(Looper.getMainLooper()) {
+        @Override public void handleMessage(Message message) {
+            // This non-exported service only accepts its own application UID.
+            if (message.sendingUid != android.os.Process.myUid() || message.replyTo == null) return;
+            Messenger client = message.replyTo;
+            if (message.what == STATUS) {
+                Bundle data = new Bundle();
+                data.putBoolean("active", active); data.putBoolean("ready", ready);
+                data.putString("status", status); data.putInt("pid", android.os.Process.myPid());
+                if (ready) data.putString("owner", OWNER_TOKEN);
+                reply(client, STATUS, message.arg1, data);
+            } else if (message.what == DEBUG_ACCEPTANCE &&
+                    (getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
+                Bundle request = message.getData(); int id = message.arg1;
+                new Thread(() -> {
+                    Bundle data = new Bundle();
+                    try {
+                        String mode = request.getString("mode");
+                        String directory = getFilesDir().getAbsolutePath() + "/service";
+                        Object result;
+                        if ("run".equals(mode)) result = Python.getInstance().getModule("mijia_android.smoke").callAttr("run", directory, request.getString("password"));
+                        else if ("restart".equals(mode)) result = Python.getInstance().getModule("mijia_android.smoke").callAttr("verify_restart", directory);
+                        else throw new IllegalArgumentException("Unsupported acceptance command");
+                        data.putString("result", result.toString());
+                    } catch (Throwable error) {
+                        data.putString("error", error.getClass().getSimpleName() + ": " + error.getMessage());
+                    }
+                    reply(client, DEBUG_ACCEPTANCE, id, data);
+                }, "mijia-debug-acceptance").start();
+            }
+        }
+    });
+    private void reply(Messenger client, int what, int id, Bundle data) {
+        Message result = Message.obtain(null, what); result.arg1 = id; result.setData(data);
+        try { client.send(result); } catch (RemoteException ignored) { }
+    }
+    @Override public IBinder onBind(Intent intent) { return rpc.getBinder(); }
 
     private Notification notification() {
         String channel = "mijia_server";
@@ -48,11 +86,13 @@ public class ServerService extends Service {
             requestStop(); return START_NOT_STICKY;
         }
         if (!started.compareAndSet(false, true)) return START_STICKY;
+        int runGeneration = ++generation;
         active = true; ready = false; stopping = false; status = "正在启动 Python 服务…";
         startForeground(1, notification());
         wakeLock = ((PowerManager)getSystemService(POWER_SERVICE)).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "mijia:server");
         wakeLock.acquire();
-        boolean lan = getSharedPreferences("server", MODE_PRIVATE).getBoolean("lan", false);
+        boolean lan = intent != null && intent.hasExtra("lan") ? intent.getBooleanExtra("lan", false)
+                : getSharedPreferences("server", MODE_PRIVATE).getBoolean("lan", false);
         new Thread(() -> {
             try {
                 if (!Python.isStarted()) Python.start(new AndroidPlatform(getApplicationContext()));
@@ -64,21 +104,28 @@ public class ServerService extends Service {
                 status = "启动失败：" + error.getClass().getSimpleName() + "（请重试或提供测试反馈）";
                 android.util.Log.e("MijiaServer", "Embedded runtime failed", error);
             } finally {
-                active = false; ready = false;
                 if (stopping) status = "服务已停止";
                 else if (!status.startsWith("启动失败")) status = "服务已退出，请检查日志后重新启动";
-                handler.post(this::stopSelf);
+                handler.post(() -> {
+                    if (generation != runGeneration) return;
+                    active = false; ready = false; started.set(false); generation++;
+                    if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
+                    stopForeground(true); stopSelf();
+                });
             }
         }, "mijia-python").start();
         new Thread(() -> {
-            while (active && !stopping) {
+            while (active && !stopping && generation == runGeneration) {
                 HttpURLConnection connection = null;
                 try {
                     connection = (HttpURLConnection)new URL("http://127.0.0.1:8123/readyz").openConnection();
                     connection.setConnectTimeout(1500); connection.setReadTimeout(1500);
-                    ready = connection.getResponseCode() == 200;
-                    if (ready) status = "服务运行正常 · 127.0.0.1:8123";
-                } catch (Exception ignored) { ready = false; }
+                    boolean responseReady = connection.getResponseCode() == 200;
+                    if (generation == runGeneration) {
+                        ready = responseReady;
+                        if (ready) status = "服务运行正常 · 127.0.0.1:8123";
+                    }
+                } catch (Exception ignored) { if (generation == runGeneration) ready = false; }
                 finally { if (connection != null) connection.disconnect(); }
                 try { Thread.sleep(2000); } catch (InterruptedException ignored) { break; }
             }

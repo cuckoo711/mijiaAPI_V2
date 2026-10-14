@@ -6,7 +6,7 @@ import android.os.*;
 import android.view.*;
 import android.webkit.WebView;
 import android.widget.Button;
-import com.chaquo.python.Python;
+
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -16,6 +16,7 @@ import android.webkit.ConsoleMessage;
 
 /** Invoked only by adb on disposable test devices; never runs automatically. */
 public class SmokeInstrumentation extends Instrumentation {
+    private MainActivity activity;
     private String browserError = "";
     private boolean inspectOnly;
     @Override public void onCreate(Bundle args) { super.onCreate(args); inspectOnly=args!=null && "inspect".equals(args.getString("mode")); start(); }
@@ -25,8 +26,8 @@ public class SmokeInstrumentation extends Instrumentation {
         Intent start = new Intent(context, ServerService.class);
         if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(start); else context.startService(start);
         long deadline = System.currentTimeMillis() + 120000;
-        while (!ServerService.ready && System.currentTimeMillis() < deadline) Thread.sleep(250);
-        if (!ServerService.ready) throw new AssertionError("Server readiness timeout: " + ServerService.status);
+        while (!activity.serverState().ready && System.currentTimeMillis() < deadline) Thread.sleep(250);
+        if (!activity.serverState().ready) throw new AssertionError("Server readiness timeout: " + activity.serverState().status);
     }
 
     private View find(View view, Class<?> type, String text) {
@@ -108,7 +109,7 @@ public class SmokeInstrumentation extends Instrumentation {
 
     private void verifyRendererRecovery(MainActivity activity, Bundle result) throws Exception {
         if (Build.VERSION.SDK_INT < 29) { result.putString("renderer_recovery", "unavailable_before_api29"); return; }
-        int pid=android.os.Process.myPid(), previous=activity.rendererRecoveries;
+        int pid=android.os.Process.myPid(), servicePid=activity.serverState().pid, previous=activity.rendererRecoveries;
         WebView old=(WebView)find(activity.getWindow().getDecorView(),WebView.class,null);
         AtomicReference<Boolean> terminated=new AtomicReference<>(false);
         AtomicReference<Boolean> available=new AtomicReference<>(false);
@@ -126,7 +127,7 @@ public class SmokeInstrumentation extends Instrumentation {
             Thread.sleep(100);
         }
         if (replacement.get()==null || replacement.get()==old) throw new AssertionError("Console was not recreated");
-        if (android.os.Process.myPid()!=pid || !ServerService.active || !ServerService.ready) throw new AssertionError("Renderer failure interrupted service");
+        if (android.os.Process.myPid()!=pid || activity.serverState().pid!=servicePid || !activity.serverState().active || !activity.serverState().ready) throw new AssertionError("Renderer failure interrupted service");
         runOnMainSync(()->((Button)find(activity.getWindow().getDecorView(),Button.class,"打开管理台")).performClick());
         WebView web=replacement.get();
         deadline=System.currentTimeMillis()+60000;
@@ -140,7 +141,7 @@ public class SmokeInstrumentation extends Instrumentation {
         Bundle result = new Bundle();
         try {
             Context context=getTargetContext();
-            Activity activity=startActivitySync(new Intent(context,MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            activity=(MainActivity)startActivitySync(new Intent(context,MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
             startServer();
             verifyWebView(activity);
             if (inspectOnly) {
@@ -149,17 +150,17 @@ public class SmokeInstrumentation extends Instrumentation {
                 return;
             }
             String password="Android-ui-"+UUID.randomUUID().toString();
-            String before=Python.getInstance().getModule("mijia_android.smoke").callAttr("run",context.getFilesDir().getAbsolutePath()+"/service",password).toString();
+            String before=activity.serverState().acceptance("run",password);
             verifyBrowserLogin(activity,password,result);
             verifyRendererRecovery((MainActivity)activity,result);
             context.startService(new Intent(context,ServerService.class).setAction(ServerService.STOP));
             long deadline=System.currentTimeMillis()+15000;
-            while (ServerService.active && System.currentTimeMillis()<deadline) Thread.sleep(250);
-            if (ServerService.active) throw new AssertionError("Graceful stop timeout");
+            while (activity.serverState().active && System.currentTimeMillis()<deadline) Thread.sleep(250);
+            if (activity.serverState().active) throw new AssertionError("Graceful stop timeout");
             Thread.sleep(1000);
             waitForIdleSync();
             startServer();
-            String after=Python.getInstance().getModule("mijia_android.smoke").callAttr("verify_restart",context.getFilesDir().getAbsolutePath()+"/service").toString();
+            String after=activity.serverState().acceptance("restart",null);
             result.putString("smoke",before);
             result.putString("restart",after);
             result.putString("webview_ui","passed");

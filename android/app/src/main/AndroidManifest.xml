@@ -16,7 +16,7 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-        <service android:name=".ServerService" android:exported="false" android:foregroundServiceType="specialUse">
+        <service android:name=".ServerService" android:process=":server" android:exported="false" android:foregroundServiceType="specialUse">
             <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="User-started self-hosted home automation HTTP API server for local devices" />
         </service>

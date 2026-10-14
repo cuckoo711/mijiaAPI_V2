@@ -16,6 +16,8 @@ for path in (root / 'compatibility').glob('**/compatibility.json'):
     assert report['passed'] and report['apk_sha256'] == digest
     assert report['commit'] == os.environ['GITHUB_SHA']
     assert report['screen_off_seconds'] >= 600
+    assert report['ui_process_termination_survived'] and report['ui_process_recreated']
+    assert report['background_process'] == 'com.cuckoo.mijia.standalone:server'
     if api >= 29:
         assert report['renderer_recovery'] == 'passed'
     assert all(report[key] for key in ['browser_login_navigation', 'console_rendered',

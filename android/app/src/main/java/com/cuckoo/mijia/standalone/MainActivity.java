@@ -24,17 +24,20 @@ public class MainActivity extends Activity {
     private CheckBox lan;
     private Button start, stop, open;
     private WebView web;
+    private final ServerConnection server = new ServerConnection(this);
+    ServerConnection serverState() { return server; }
     private LinearLayout webRoot;
     private boolean webReset;
     public volatile int rendererRecoveries;
     private boolean pageOpened;
     private final Runnable refresh = new Runnable() {
         @Override public void run() {
-            status.setText(ServerService.status + (lan.isChecked() ? "\n局域网：" + addresses() : "\n仅允许本机访问") + (webReset ? "\n管理台已重置，请重新打开" : ""));
-            start.setEnabled(!ServerService.active);
-            stop.setEnabled(ServerService.active);
-            open.setEnabled(ServerService.ready && web != null);
-            lan.setEnabled(!ServerService.active);
+            server.refresh();
+            status.setText(server.status + (lan.isChecked() ? "\n局域网：" + addresses() : "\n仅允许本机访问") + (webReset ? "\n管理台已重置，请重新打开" : ""));
+            start.setEnabled(!server.active);
+            stop.setEnabled(server.active);
+            open.setEnabled(server.ready && web != null);
+            lan.setEnabled(!server.active);
             handler.postDelayed(this, 1000);
         }
     };
@@ -77,14 +80,14 @@ public class MainActivity extends Activity {
         start = button(controls, "启动服务", v -> {
             if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
                 requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 1);
-            Intent intent = new Intent(this, ServerService.class);
+            Intent intent = new Intent(this, ServerService.class).putExtra("lan", lan.isChecked());
             if (Build.VERSION.SDK_INT >= 26) startForegroundService(intent); else startService(intent);
         });
         stop = button(controls, "停止服务", v -> new AlertDialog.Builder(this).setTitle("停止本机服务")
                 .setMessage("停止后，本机管理台和局域网 API 暂时不可用。数据会保留。")
                 .setNegativeButton("取消",null).setPositiveButton("停止",(d,w) -> startService(new Intent(this,ServerService.class).setAction(ServerService.STOP))).show());
         open = button(controls, "打开管理台", v -> {
-            if (web == null) return;
+            if (web == null || !server.connected || server.ownerToken.isEmpty()) return;
             webReset = false;
             java.util.regex.Matcher chrome = java.util.regex.Pattern.compile("Chrome/(\\d+)").matcher(web.getSettings().getUserAgentString());
             if (chrome.find() && Integer.parseInt(chrome.group(1)) < 49) {
@@ -93,7 +96,7 @@ public class MainActivity extends Activity {
                         .setPositiveButton("知道了",null).show();
                 return;
             }
-            CookieManager.getInstance().setCookie("http://127.0.0.1:8123", "mijia_android_owner=" + ServerService.OWNER_TOKEN + "; Path=/; HttpOnly; SameSite=Strict");
+            CookieManager.getInstance().setCookie("http://127.0.0.1:8123", "mijia_android_owner=" + server.ownerToken + "; Path=/; HttpOnly; SameSite=Strict");
             web.setVisibility(View.VISIBLE);
             if (!pageOpened) { web.loadUrl("http://127.0.0.1:8123/"); pageOpened = true; }
         });
@@ -115,7 +118,7 @@ public class MainActivity extends Activity {
         CookieManager.getInstance().setAcceptCookie(true);
         web.setWebViewClient(Build.VERSION.SDK_INT >= 26 ? new RecoveringWebClient() : new LocalWebClient());
         webRoot.addView(web,new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,0,1));
-        open.setEnabled(ServerService.ready);
+        open.setEnabled(server.ready);
     }
 
     private class LocalWebClient extends WebViewClient {
@@ -175,6 +178,8 @@ public class MainActivity extends Activity {
         } catch (Exception ignored) { }
         return result.isEmpty() ? "未发现 IPv4 地址，请连接 Wi-Fi" : android.text.TextUtils.join("，",result);
     }
+    @Override protected void onStart() { super.onStart(); server.bind(); }
+    @Override protected void onStop() { server.unbind(); super.onStop(); }
     @Override protected void onResume() { super.onResume(); handler.post(refresh); }
     @Override protected void onPause() { handler.removeCallbacks(refresh); CookieManager.getInstance().flush(); super.onPause(); }
     @Override public void onBackPressed() {

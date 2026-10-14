@@ -2,6 +2,8 @@
 
 在手机内运行现有 Python 后端、SQLite、加密凭据存储和 Vue 管理台，无需外部服务器。米家云登录、同步和设备控制仍需联网。
 
+Python 由独立的 `:server` 前台服务进程运行，管理台通过不导出的同 UID IPC 获取状态和初始化令牌；界面、WebView 或其字体供应进程退出时，服务进程可继续运行。停止服务和退出界面是不同操作。
+
 ## 兼容目标
 
 - Android 7.0 / API 24 起；ARM 32 位 `armeabi-v7a`、ARM 64 位 `arm64-v8a`，另含 `x86`、`x86_64` 供模拟器验证。
@@ -61,7 +63,7 @@ test.1 的发布附件提供 `android-validation.json` 和 `ANDROID_SHA256SUMS`�
 
 ## GitHub 自动构建与发布
 
-推送 `v3.9.1-android-test.4` 这类标签会单独构建、验收并发布 Android 预发布版本。后续常规 `vX.Y.Z` 发布会同时构建桌面程序和 Android 测试 APK，全部通过后统一发布到同一 Release。手动运行 `Android Test APK` 工作流仅构建验收，不创建 Release。
+推送 `v3.9.1-android-test.5` 这类标签会单独构建、验收并发布 Android 预发布版本。后续常规 `vX.Y.Z` 发布会同时构建桌面程序和 Android 测试 APK，全部通过后统一发布到同一 Release。手动运行 `Android Test APK` 工作流仅构建验收，不创建 Release。
 
 优先安装 `mijia-server-android-universal-<版本>.apk`；确认手机架构后也可选择体积较小的 `arm32` 或 `arm64` 包。CI 附件包含 `ANDROID_SHA256SUMS`、`android-validation.json` 和签名/架构校验报告。ARM 模拟器测试使用指令转换，不能替代真机验证。
 

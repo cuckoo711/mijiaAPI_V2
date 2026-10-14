@@ -52,11 +52,19 @@ def hierarchy():
 def click_text(text, resource=None):
     document = ET.fromstring(hierarchy())
     for node in document.iter('node'):
-        if (resource and node.get('resource-id', '').endswith(resource)) or (text and node.get('text') == text):
+        if node.get('enabled') == 'true' and ((resource and node.get('resource-id', '').endswith(resource)) or (text and node.get('text') == text)):
             x1, y1, x2, y2 = map(int, re.findall(r'\d+', node.get('bounds')))
             run('shell', 'input', 'tap', str((x1+x2)//2), str((y1+y2)//2))
             return True
     return False
+
+def await_click(text):
+    deadline = time.monotonic()+45
+    while not click_text(text):
+        if time.monotonic() >= deadline:
+            (out/'missing-control.xml').write_text(hierarchy())
+            raise AssertionError('Control not ready: '+text)
+        time.sleep(1)
 
 report = {'passed': False, 'serial': args.serial, 'samples': [],
           'commit': os.environ.get('GITHUB_SHA', ''),
@@ -129,7 +137,7 @@ try:
                 raise
             time.sleep(2)
     report['service_started'] = True
-    assert click_text('打开管理台')
+    await_click('打开管理台')
     time.sleep(10)
     ui = hierarchy()
     (out/'console.xml').write_text(ui)
@@ -137,8 +145,24 @@ try:
         subprocess.run(adb+['exec-out', 'screencap', '-p'], stdout=image, check=True)
     report['console_accessibility_text'] = '创建管理员' in ui
     report['legacy_update_prompt'] = '请更新系统 WebView' in ui
-    original_pid = run('shell', 'pidof', package).strip()
+    original_pid = run('shell', 'pidof', package+':server').strip()
+    assert original_pid, 'Dedicated server process missing'
     report['initial_pid'] = original_pid
+    report['background_process'] = package+':server'
+    ui_pid = run('shell', 'pidof', package).strip()
+    assert ui_pid and ui_pid != original_pid
+    report['initial_ui_pid'] = ui_pid
+    # Kill only the UI process, as Android may do after a font/provider failure.
+    # No package-wide force-stop: the dedicated foreground service must survive.
+    run('shell', 'input', 'keyevent', '3')
+    run('shell', 'run-as', package, 'kill', '-9', ui_pid)
+    time.sleep(2)
+    report['ui_process_termination_survived'] = health() and run('shell', 'pidof', package+':server').strip() == original_pid
+    assert report['ui_process_termination_survived']
+    run('shell', 'am', 'start', '-W', '-n', package+'/.MainActivity')
+    await_click('打开管理台')
+    report['ui_process_recreated'] = run('shell', 'pidof', package).strip() != ui_pid
+    assert report['ui_process_recreated']
     # Remove the Activity from the foreground, unplug and explicitly sleep.
     run('shell', 'input', 'keyevent', '3')
     run('shell', 'dumpsys', 'battery', 'unplug')
@@ -152,7 +176,7 @@ try:
         except Exception as error:
             sample['http_ready'] = False
             sample['error'] = type(error).__name__
-        sample['pid'] = run('shell', 'pidof', package).strip()
+        sample['pid'] = run('shell', 'pidof', package+':server').strip()
         report['samples'].append(sample)
         (out/'compatibility.json').write_text(json.dumps(report, indent=2))
         print(f"API {report['api']}: screen off {sample['elapsed_seconds']}s, HTTP={sample['http_ready']}, pid={sample['pid']}", flush=True)
@@ -200,8 +224,8 @@ try:
             run('shell', 'input', 'keyevent', '82')
             run('shell', 'am', 'start', '-W', '-n', package+'/.MainActivity')
             time.sleep(2)
-            assert click_text('后台运行帮助')
-            assert click_text('设置后台运行')
+            await_click('后台运行帮助')
+            await_click('设置后台运行')
             time.sleep(2)
             (out/'battery-permission.xml').write_text(hierarchy())
             assert click_text(None, 'android:id/button1'), 'System battery exemption confirmation missing'
@@ -227,7 +251,7 @@ try:
     time.sleep(2)
     report['http_after_unlock'] = health()
     if args.expect_console:
-        assert click_text('打开管理台')
+        await_click('打开管理台')
         # Some system WebViews omit DOM children from accessibility snapshots.
         # Attach only after background sampling to read the actual DOM.
         inspected = subprocess.run(adb+['shell', 'am', 'instrument', '-w', '-e', 'mode', 'inspect',
