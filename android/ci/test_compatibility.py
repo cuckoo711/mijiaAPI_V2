@@ -146,11 +146,11 @@ try:
     report['console_accessibility_text'] = '创建管理员' in ui
     report['legacy_update_prompt'] = '请更新系统 WebView' in ui
     original_pid = run('shell', 'pidof', package+':server').strip()
-    assert original_pid, 'Dedicated server process missing'
+    assert original_pid.isdigit(), 'Expected one dedicated server process'
     report['initial_pid'] = original_pid
     report['background_process'] = package+':server'
     ui_pid = run('shell', 'pidof', package).strip()
-    assert ui_pid and ui_pid != original_pid
+    assert ui_pid.isdigit() and ui_pid != original_pid
     report['initial_ui_pid'] = ui_pid
     # Kill only the UI process, as Android may do after a font/provider failure.
     # No package-wide force-stop: the dedicated foreground service must survive.
