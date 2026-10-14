@@ -11,7 +11,7 @@ export const apiPermissionRows: ApiPermissionRow[] = [
     scope: "read:devices",
     name: "读取家庭与设备",
     description: "允许读取已同步的家庭、设备列表、设备状态和设备规格。",
-    level: "info",
+    level: "success",
   },
   {
     scope: "write:devices",
