@@ -15,6 +15,7 @@ import type { Component } from "vue";
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { ElMessageBox } from "element-plus";
 import { normalizeApiBaseUrl } from "./apiExamples";
+import { observeMediaQuery } from "./utils/browserCompat";
 import { useAdminSession } from "./composables/useAdminSession";
 import { useMijiaLogin } from "./composables/useMijiaLogin";
 import { useSyncProgress } from "./composables/useSyncProgress";
@@ -67,6 +68,7 @@ const activeMenu = ref(
 const navOpen = ref(false);
 const isCompact = ref(false);
 let compactQuery: MediaQueryList | null = null;
+let disposeCompactQuery: (() => void) | undefined;
 const loading = ref(false);
 const health = ref<{ status: string; version: string } | null>(null);
 const initialized = ref(false);
@@ -774,12 +776,12 @@ onMounted(() => {
   });
   compactQuery = window.matchMedia("(max-width: 960px)");
   syncCompactLayout(compactQuery);
-  compactQuery.addEventListener("change", syncCompactLayout);
+  disposeCompactQuery = observeMediaQuery(compactQuery, syncCompactLayout);
   void refreshAll();
 });
 
 onBeforeUnmount(() => {
-  compactQuery?.removeEventListener("change", syncCompactLayout);
+  disposeCompactQuery?.();
   disposeMijiaLogin();
   disposeAdminSession();
   stopSyncPolling();

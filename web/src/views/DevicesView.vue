@@ -6,6 +6,9 @@ import { useDeviceControl, type DeviceControlMemory } from "../composables/useDe
 import { actionKey, parameterKey, propertyKey } from "../utils/controlForm";
 import SpecValueInput from "../components/SpecValueInput.vue";
 import ResourceAuthorizationActions from "../components/ResourceAuthorizationActions.vue";
+import { observeMediaQuery } from "../utils/browserCompat";
+
+let disposeCompactQuery: (() => void) | undefined;
 
 const props = defineProps<{
   devices: DeviceItem[];
@@ -31,11 +34,11 @@ function syncCompactLayout(event?: MediaQueryListEvent | MediaQueryList): void {
 onMounted(() => {
   compactQuery = window.matchMedia("(max-width: 640px)");
   syncCompactLayout(compactQuery);
-  compactQuery.addEventListener("change", syncCompactLayout);
+  disposeCompactQuery = observeMediaQuery(compactQuery, syncCompactLayout);
 });
 
 onBeforeUnmount(() => {
-  compactQuery?.removeEventListener("change", syncCompactLayout);
+  disposeCompactQuery?.();
   closeDevice();
 });
 

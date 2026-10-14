@@ -20,6 +20,7 @@ for flavor in ['x86', 'x64', 'arm32', 'arm64', 'universal']:
     log = run('shell', 'am', 'instrument', '-w', package + '/.SmokeInstrumentation')
     (out / f'smoke-{flavor}.log').write_text(log)
     assert 'INSTRUMENTATION_CODE: -1' in log and 'webview_ui=passed' in log, log
+    assert 'webview_login_navigation=passed' in log, log
     reports[flavor] = {}
     for name, filename in [('runtime', 'android-smoke.json'), ('restart', 'android-restart-smoke.json')]:
         content = run('shell', 'run-as', package, 'cat', 'files/service/' + filename)
@@ -28,6 +29,7 @@ for flavor in ['x86', 'x64', 'arm32', 'arm64', 'universal']:
         assert report['passed'], report
         reports[flavor][name] = report
     reports[flavor]['webview_ui'] = 'passed'
+    reports[flavor]['webview_login_navigation'] = 'passed'
 report = {
     'passed': True,
     'commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip(),
@@ -35,7 +37,8 @@ report = {
     'emulator_abis': run('shell', 'getprop', 'ro.product.cpu.abilist').strip(),
     'arm_execution': 'Android native bridge translation, not ARM hardware',
     'limitations': ['No physical phone testing', 'No real Xiaomi account or device control',
-                    'Android 7-10 and 12+ not runtime tested', 'No long screen-off test'],
+                    'Per-API background checks are recorded separately in android-compatibility.json',
+                    'No multi-day screen-off endurance test'],
     'flavors': reports,
 }
 (out / 'android-validation.json').write_text(json.dumps(report, indent=2))

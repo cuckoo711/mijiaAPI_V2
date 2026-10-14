@@ -15,7 +15,7 @@ import struct
 from datetime import datetime, timedelta
 
 
-def run(data_dir):
+def run(data_dir, ui_password=None):
     import httpx
     import mijiaAPI_V2
     import pydantic_core
@@ -75,7 +75,7 @@ def run(data_dir):
         assert not client.get("/api/admin/bootstrap/state").json()[
             "initialized"
         ], "Use a fresh disposable device"
-        password = secrets.token_urlsafe(24)
+        password = ui_password or secrets.token_urlsafe(24)
         body = {"username": "android-smoke", "password": password}
         assert client.post("/api/admin/bootstrap/admin", json=body).status_code == 403
         from mijia_android import runtime

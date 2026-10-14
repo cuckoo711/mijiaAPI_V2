@@ -5,6 +5,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <application android:label="米家独立服务（测试）" android:allowBackup="false"
         android:icon="@drawable/ic_service" android:theme="@android:style/Theme.Material.Light.NoActionBar"
         android:networkSecurityConfig="@xml/network_security_config" android:supportsRtl="true">

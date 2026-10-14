@@ -3,6 +3,7 @@ package com.cuckoo.mijia.standalone;
 import android.Manifest;
 import android.app.*;
 import android.content.Intent;
+import android.content.ActivityNotFoundException;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.net.Uri;
@@ -67,9 +68,9 @@ public class MainActivity extends Activity {
                 .setNegativeButton("取消",null).setPositiveButton("停止",(d,w) -> startService(new Intent(this,ServerService.class).setAction(ServerService.STOP))).show());
         open = button(controls, "打开管理台", v -> {
             java.util.regex.Matcher chrome = java.util.regex.Pattern.compile("Chrome/(\\d+)").matcher(web.getSettings().getUserAgentString());
-            if (chrome.find() && Integer.parseInt(chrome.group(1)) < 61) {
+            if (chrome.find() && Integer.parseInt(chrome.group(1)) < 49) {
                 new AlertDialog.Builder(this).setTitle("请更新系统 WebView")
-                        .setMessage("当前系统 WebView 不支持管理台所需的网页模块。更新 Android System WebView 后可在本机打开；服务仍可运行，也可开启局域网后用其他设备访问。")
+                        .setMessage("当前系统 WebView 不支持管理台所需的网页功能。请更新 Android System WebView 后再打开。")
                         .setPositiveButton("知道了",null).show();
                 return;
             }
@@ -79,8 +80,8 @@ public class MainActivity extends Activity {
         });
         Button help = new Button(this); help.setText("后台运行帮助");
         help.setOnClickListener(v -> new AlertDialog.Builder(this).setTitle("后台运行")
-                .setMessage("保持服务通知，按需在系统设置中允许后台运行。省电模式、厂商清理或强制停止仍可能中断服务。米家登录需要联网；可在另一台设备打开局域网管理台展示二维码，再用手机米家扫码。")
-                .setPositiveButton("打开电池设置",(d,w)->startActivity(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)))
+                .setMessage(backgroundHelp())
+                .setPositiveButton("设置后台运行",(d,w)->openBackgroundSettings())
                 .setNegativeButton("关闭",null).show());
         root.addView(help);
         web = new WebView(this); web.setVisibility(View.GONE);
@@ -98,6 +99,27 @@ public class MainActivity extends Activity {
         });
         root.addView(web,new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,0,1));
         setContentView(root);
+    }
+
+    private String backgroundHelp() {
+        PowerManager power=(PowerManager)getSystemService(POWER_SERVICE);
+        String state=power.isIgnoringBatteryOptimizations(getPackageName()) ? "已允许不受电池优化限制。" : "尚未解除电池优化限制，长时间锁屏进入休眠后网络可能暂停。";
+        return state + "\n\n专用服务手机建议持续供电，并在系统确认中允许持续后台运行。厂商系统可能还需允许自启动或后台活动。退出界面不等于停止服务；强制停止、重启和厂商清理仍会中断。";
+    }
+
+    private void openBackgroundSettings() {
+        PowerManager power=(PowerManager)getSystemService(POWER_SERVICE);
+        Intent intent=power.isIgnoringBatteryOptimizations(getPackageName())
+                ? new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+                : new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:"+getPackageName()));
+        try { startActivity(intent); }
+        catch (ActivityNotFoundException | SecurityException unavailable) {
+            try { startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:"+getPackageName()))); }
+            catch (ActivityNotFoundException | SecurityException ignored) {
+                new AlertDialog.Builder(this).setTitle("后台运行设置").setMessage("请打开系统设置，找到本应用的电池或后台运行选项，并允许持续后台运行。")
+                        .setPositiveButton("知道了",null).show();
+            }
+        }
     }
 
     private String addresses() {

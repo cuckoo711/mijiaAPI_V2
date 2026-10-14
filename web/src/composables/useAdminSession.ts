@@ -141,7 +141,7 @@ export function useAdminSession() {
     options: RequestInit = {},
     behavior: RequestBehavior = {},
   ): Promise<T> {
-    const headers = new Headers(options.headers);
+    const headers = new Headers(options.headers || {});
     headers.set("Content-Type", "application/json");
     if (legacyBearer.value) {
       headers.set("Authorization", `Bearer ${legacyBearer.value}`);

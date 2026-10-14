@@ -1,12 +1,20 @@
 import { defineConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
+import legacy from "@vitejs/plugin-legacy";
 import AutoImport from "unplugin-auto-import/vite";
 import Components from "unplugin-vue-components/vite";
 import { ElementPlusResolver } from "unplugin-vue-components/resolvers";
 
+const androidLegacy = process.env.MIJIA_ANDROID_WEB_LEGACY === "1";
+
 export default defineConfig({
   plugins: [
     vue(),
+    ...(androidLegacy ? [legacy({
+      targets: ["Chrome >= 49"],
+      modernTargets: ["Chrome >= 64"],
+      modernPolyfills: true,
+    })] : []),
     AutoImport({
       resolvers: [ElementPlusResolver()]
     }),

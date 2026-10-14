@@ -6,7 +6,7 @@
 
 - Android 7.0 / API 24 起；ARM 32 位 `armeabi-v7a`、ARM 64 位 `arm64-v8a`，另含 `x86`、`x86_64` 供模拟器验证。
 - 使用 Python 3.11，避免新 Python 版本仅支持 64 位。原生依赖单独编译；`verify_wheels.py` 核对 ELF 位数与机器架构，构建结果不能替代设备运行验收。
-- 管理台需要支持网页模块的 Android System WebView。低于 Chromium 61 时应用会提示更新，服务本身仍可运行；此最低门槛不等于所有界面都已在该版本验收。
+- APK 附带现代和旧版两套前端，旧内核自动加载兼容包及必要的 JavaScript/DOM 补充实现。Android 7.0 的 WebView 53 与默认 Chrome 69 内核均纳入网页登录和导航检查；低于 Chromium 49 时提示更新。
 - 当前产物为持续维护的 debug 测试签名；GitHub Actions 使用仓库加密 Secret 保留同一签名，可以覆盖升级测试包。不要混用不同签名升级。
 
 ## 使用
@@ -17,7 +17,9 @@
 4. 手机上的米家扫码登录，可通过另一台设备打开局域网管理台展示二维码，再用手机米家扫码。
 5. 停止或正常升级保留数据；卸载、清除应用数据会删除本机 SQLite 和凭据。测试版暂不提供一键备份与恢复入口。
 
-后台服务使用常驻通知和运行期间的 CPU 唤醒锁；退出界面不等于停止服务。可从应用或通知停止。厂商省电策略、系统强制停止或重启仍可能中断服务；本版未提供开机自启。长期供电与锁屏稳定性需要真机验证。
+后台服务使用常驻通知和运行期间的 CPU 唤醒锁；退出界面不等于停止服务。可从应用或通知停止。长时间锁屏进入 Doze 后系统可能暂停网络；请点击“后台运行帮助 → 设置后台运行”，在系统弹窗中确认允许持续后台运行。应用会展示当前电池优化状态；不支持该系统入口时可进入应用设置手动调整。
+
+专用服务手机建议持续供电。厂商省电策略、系统强制停止或重启仍可能中断服务；本版未提供开机自启。模拟器上的十分钟检查不等于真机多日稳定性证明。
 
 ## 构建
 
@@ -57,10 +59,14 @@ adb -s emulator-5580 shell am instrument -w com.cuckoo.mijia.standalone/.SmokeIn
 
 ## GitHub 自动构建与发布
 
-推送 `v3.9.1-android-test.1` 这类标签会单独构建、验收并发布 Android 预发布版本。后续常规 `vX.Y.Z` 发布会同时构建桌面程序和 Android 测试 APK，全部通过后统一发布到同一 Release。手动运行 `Android Test APK` 工作流仅构建验收，不创建 Release。
+推送 `v3.9.1-android-test.2` 这类标签会单独构建、验收并发布 Android 预发布版本。后续常规 `vX.Y.Z` 发布会同时构建桌面程序和 Android 测试 APK，全部通过后统一发布到同一 Release。手动运行 `Android Test APK` 工作流仅构建验收，不创建 Release。
 
 优先安装 `mijia-server-android-universal-<版本>.apk`；确认手机架构后也可选择体积较小的 `arm32` 或 `arm64` 包。CI 附件包含 `ANDROID_SHA256SUMS`、`android-validation.json` 和签名/架构校验报告。ARM 模拟器测试使用指令转换，不能替代真机验证。
 
 构建版本默认跟随 `pyproject.toml`，发布标签必须与后端版本匹配；测试序号支持 1–99。`versionCode` 按主版本、次版本、补丁和测试序号递增，正式版本使用序号 99。仓库 Secret `ANDROID_TEST_KEYSTORE` 保存 Base64 编码的现有测试签名库（标准 Android debug 别名与口令），缺失时构建失败，禁止每次随机换签名。迁移仓库或备份时需单独安全保存该密钥，不能提交到 Git。
 
 Linux CI 从固定提交获取交叉编译器，按 `ci/inputs.json` 的 SHA256 核验 Python target 与依赖源码，使用 NDK 27.3.13750724、Rust 1.99.0 构建原生 wheel。wheel 缓存恢复后仍重新校验 ELF；APK 组装全程使用预下载的 Python wheel。
+
+发布门禁另外在 API 24、31、33、34、35、36（Android 7.0、12–16）上检查同一通用 APK：真实网页登录与导航、无测试仪器附着的连续 600 秒锁屏 HTTP 探测、进程/前台服务/唤醒锁、系统后台授权入口、强制 Doze 网络与解锁后管理台。Android 7 专门选用 WebView 53，避免仅验证系统另带的 Chrome 69。`android-compatibility.json` 记录每个环境、APK SHA256、逐次采样和准确时长；这些检查通过后才生成最终发布附件。
+
+后台探测会在每次请求前建立独立 ADB 通道，避免共享 SDK 客户端重置端口映射造成误报。休眠网络检查使用应用 UID 连接受控本机端点，不连接真实米家。真机、厂商电池管理、多日运行及 16 KiB 内存页设备仍需独立验证。

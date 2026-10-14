@@ -81,6 +81,19 @@ function progress(status = "running", taskId = "task-1") {
   return { task_id: taskId, status, step: "同步", progress: status === "completed" ? 100 : 20, current_home: "", homes_total: 1, homes_processed: 1, devices_found: 2, scenes_found: 3, warnings: [], started_at: "", updated_at: "", completed_at: null, error: null };
 }
 
+test("old WebView Headers constructor receives an explicit empty initializer", async () => {
+  const h = harness(async () => reply({ initialized: false }));
+  h.context.Headers = class OldWebViewHeaders extends Headers {
+    constructor(init) {
+      if (init === undefined) throw new TypeError("No matching constructor signature");
+      super(init);
+    }
+  };
+  const session = h.load("src/composables/useAdminSession.ts").useAdminSession();
+  assert.equal((await session.request("/api/admin/bootstrap/state")).initialized, false);
+  assert.equal(h.calls[0].options.headers.get("Content-Type"), "application/json");
+});
+
 test("logout failure keeps the authenticated session and can be retried", async () => {
   let offline = true;
   const h = harness(async () => {

@@ -68,15 +68,15 @@ jobs:
           set -euo pipefail
           cd web
           npm ci
-          npm run build
+          MIJIA_ANDROID_WEB_LEGACY=1 npm run build
           cd ..
           python android/prepare.py
           python android/wheels/vendor.py
           python android/verify_wheels.py
-          VERSION="$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')-android-test.1"
-          if [[ "$GITHUB_REF" == refs/tags/* ]]; then VERSION="${GITHUB_REF#refs/tags/v}"; fi
+          VERSION_ARGS=()
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then VERSION_ARGS=("-PandroidVersion=${GITHUB_REF#refs/tags/v}"); fi
           cd android
-          sh gradlew assembleDebug "-PbuildPython=$(command -v python)" "-PandroidVersion=$VERSION" --no-daemon --console plain
+          sh gradlew assembleDebug "-PbuildPython=$(command -v python)" "${VERSION_ARGS[@]}" --no-daemon --console plain
       - name: Enable KVM on the disposable runner
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -96,7 +96,7 @@ jobs:
         run: python android/ci/collect.py
       - uses: actions/upload-artifact@v4
         with:
-          name: android-release
+          name: android-build
           path: android/build/release/*
           if-no-files-found: error
       - name: Keep diagnostic reports
@@ -110,9 +110,75 @@ jobs:
         if: always()
         run: rm -f "$RUNNER_TEMP/android-test.keystore"
 
+  compatibility:
+    needs: android
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        api: [24, 31, 33, 34, 35, 36]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/download-artifact@v4
+        with:
+          name: android-build
+          path: android/build/release
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Test startup, browser login, ten-minute screen-off and Doze
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ matrix.api }}
+          target: google_apis
+          arch: ${{ matrix.api == 24 && 'x86' || 'x86_64' }}
+          cores: 2
+          ram-size: 2048M
+          disable-animations: true
+          script: python android/ci/test_compatibility.py --serial emulator-5554 --apk $(find android/build/release -name '*universal*.apk') --output android/build/compatibility/api-${{ matrix.api }} --seconds 600 --disposable --expect-console --expect-exemption-ui --full-ui
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: android-compatibility-${{ matrix.api }}
+          path: android/build/compatibility/*
+          if-no-files-found: error
+
+  verified:
+    needs: [android, compatibility]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/download-artifact@v4
+        with:
+          name: android-build
+          path: android/build/release
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: android-compatibility-*
+          path: android/build/compatibility
+      - run: python android/ci/collect_compatibility.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-release
+          path: android/build/release/*
+          if-no-files-found: error
+
   prerelease:
     if: startsWith(github.ref, 'refs/tags/') && contains(github.ref, '-android-test.')
-    needs: android
+    needs: verified
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -131,7 +197,9 @@ jobs:
 
           安装后点击“启动服务”和“打开管理台”，创建自己的管理员账号。局域网访问默认关闭。停止和覆盖升级保留数据，卸载或清除应用数据会删除数据。
 
-          五种 APK 均通过隔离 Android 11 模拟器的 HTTP、WebView、管理员/API Key 权限、加密存储和重启持久化验收。ARM 使用指令转换；尚未完成真机、Android 7–10/12+、真实米家设备及长时间锁屏验收。
+          五种 APK 通过 Android 11 模拟器验收；通用包另通过 Android 7、12、13、14、15、16 的启动、WebView 网页登录与导航、10 分钟锁屏后台和 Doze 网络验收。ARM 使用指令转换。后台运行帮助可向系统申请解除电池优化限制，需用户确认。
+
+          尚未完成真机与厂商省电策略、16 KiB 页设备、真实米家设备及多日锁屏验收；模拟器结果不等于真机长期运行保证。
 
           使用持续维护的测试签名，可覆盖升级同签名测试包。附件包含 APK、ANDROID_SHA256SUMS 和验收报告。源码版本以本 Release 标签为准。
           EOF

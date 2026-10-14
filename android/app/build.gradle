@@ -4,7 +4,7 @@ plugins {
 }
 
 def backendVersion = (new File(rootDir.parentFile, 'pyproject.toml').text =~ /(?m)^version = "([^"]+)"/)[0][1]
-def apkVersion = project.findProperty('androidVersion') ?: "${backendVersion}-android-test.1"
+def apkVersion = project.findProperty('androidVersion') ?: "${backendVersion}-android-test.${project.findProperty('androidTestRevision') ?: '1'}"
 def parts = backendVersion.tokenize('.').collect { it.toInteger() }
 def testRevision = (apkVersion =~ /-android-test\.(\d+)$/)
 def revision = testRevision.find() ? testRevision.group(1).toInteger() : 99

@@ -13,10 +13,13 @@
   "dependencies": {
     "@element-plus/icons-vue": "^2.3.1",
     "element-plus": "^2.9.3",
+    "resize-observer-polyfill": "^1.5.1",
     "vue": "^3.5.13"
   },
   "devDependencies": {
+    "@vitejs/plugin-legacy": "^6.1.1",
     "@vitejs/plugin-vue": "^5.2.1",
+    "terser": "^5.51.2",
     "typescript": "^5.7.2",
     "unplugin-auto-import": "^21.0.0",
     "unplugin-vue-components": "^32.1.0",
