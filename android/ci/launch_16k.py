@@ -8,6 +8,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--sdk', type=Path, required=True)
 parser.add_argument('--output', type=Path, required=True)
 parser.add_argument('--api', type=int, choices=(35, 36), default=36)
+parser.add_argument('--memory', type=int, default=4096)
 parser.add_argument('--port', type=int, default=5590)
 args = parser.parse_args()
 root = args.output.resolve()
@@ -26,7 +27,7 @@ if not avd.exists():
 with (root/'emulator.log').open('ab') as log:
     process = subprocess.Popen([str(args.sdk/'emulator/emulator'), '-avd', name,
                                 '-no-window', '-no-audio', '-no-snapshot', '-gpu',
-                                'swiftshader_indirect', '-memory', '2048', '-cores', '2',
+                                'swiftshader_indirect', '-memory', str(args.memory), '-cores', '2',
                                 '-port', str(args.port), '-no-boot-anim'], env=env,
                                stdout=log, stderr=log, start_new_session=True)
 (root/'emulator.pid').write_text(str(process.pid))

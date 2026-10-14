@@ -151,7 +151,7 @@ jobs:
           target: ${{ matrix.target }}
           arch: ${{ matrix.api == 24 && 'x86' || 'x86_64' }}
           cores: 2
-          ram-size: 2048M
+          ram-size: ${{ matrix.pages == 16384 && '4096M' || '2048M' }}
           disable-animations: true
           script: python android/ci/test_compatibility.py --serial emulator-5554 --apk $(find android/build/release -name '*universal*.apk') --output android/build/compatibility/api-${{ matrix.api }}-${{ matrix.pages }} --seconds 600 --expect-page-size ${{ matrix.pages }} --disposable --expect-console --expect-exemption-ui --full-ui
       - uses: actions/upload-artifact@v4
