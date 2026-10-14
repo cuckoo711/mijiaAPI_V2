@@ -7,6 +7,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import socket
 import sqlite3
+import ssl
 import subprocess
 import threading
 from urllib.error import URLError
@@ -147,7 +148,7 @@ def test_start_checks_application_pid_one_uid_instead_of_exec_caller(monkeypatch
     monkeypatch.setattr(docker, "command", command)
     if process_uids[0] == 1000:
         _, url = docker.start(volume)
-        assert url == "http://127.0.0.1:32812"
+        assert url == "https://127.0.0.1:32812"
     else:
         with pytest.raises(smoke.SmokeError, match="application privileges"):
             docker.start(volume)
@@ -193,7 +194,7 @@ def test_backup_restore_preserves_a_decryptable_credential_and_its_key(tmp_path)
 
 
 @pytest.fixture
-def http_server():
+def http_server(tmp_path):
     class Handler(BaseHTTPRequestHandler):
         dropped_calls = 0
         received_authorization = []
@@ -263,10 +264,15 @@ def http_server():
             )
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    from server.tls import ensure_self_signed_cert
+    certificate, key = ensure_self_signed_cert(tmp_path)
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(certificate, key)
+    server.socket = context.wrap_socket(server.socket, server_side=True)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        yield f"http://127.0.0.1:{server.server_port}", Handler
+        yield f"https://127.0.0.1:{server.server_port}", Handler
     finally:
         server.shutdown()
         server.server_close()
@@ -296,7 +302,7 @@ def test_restart_refreshes_host_port_and_preserves_cookie_session(http_server, m
     client = smoke.HttpClient(url)
     client.expect("POST", "/login")
     jar = client.cookies
-    client.base_url = "http://127.0.0.1:1"  # Simulate the no-longer-published old endpoint.
+    client.base_url = "https://127.0.0.1:1"  # Simulate the no-longer-published old endpoint.
     docker = smoke.DockerRun("synthetic-image")
     inspected = []
 
@@ -320,7 +326,7 @@ def test_host_readiness_reinspects_port_and_retries_only_get(monkeypatch):
     ports = iter((31001, 31002))
     monkeypatch.setattr(docker, "owned", lambda *args: published_info(next(ports)))
     monkeypatch.setattr(smoke.time, "sleep", lambda _: None)
-    client = smoke.HttpClient("http://127.0.0.1:1")
+    client = smoke.HttpClient("https://127.0.0.1:1")
     jar = client.cookies
     requests = []
 
@@ -333,8 +339,8 @@ def test_host_readiness_reinspects_port_and_retries_only_get(monkeypatch):
     monkeypatch.setattr(client, "request", request)
     docker.wait_host_ready("owned-test-container", client)
     assert requests == [
-        ("GET", "/api/admin/bootstrap/state", "http://127.0.0.1:31001"),
-        ("GET", "/api/admin/bootstrap/state", "http://127.0.0.1:31002"),
+        ("GET", "/api/admin/bootstrap/state", "https://127.0.0.1:31001"),
+        ("GET", "/api/admin/bootstrap/state", "https://127.0.0.1:31002"),
     ]
     assert client.cookies is jar
 
@@ -472,7 +478,7 @@ def test_audit_recovery_smoke_uses_real_permission_denials_sqlite_and_queue(monk
 
     monkeypatch.setattr(docker, "command", local_fixture)
     run = smoke.Smoke(docker)
-    run.audit_recovery(container, volume, LocalHttp("http://synthetic-local-asgi"))
+    run.audit_recovery(container, volume, LocalHttp("https://synthetic-local-asgi"))
     assert sdk_calls == []
     assert run.metadata["queued_refusal_receipts_recovered"] == 2
     assert run.metadata["manual_audit_replay_delivered"] == 2

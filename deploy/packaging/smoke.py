@@ -19,6 +19,7 @@ import secrets
 import shutil
 import signal
 import socket
+import ssl
 import sqlite3
 import subprocess
 import sys
@@ -31,7 +32,7 @@ from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin, urlsplit
-from urllib.request import ProxyHandler, Request, build_opener
+from urllib.request import HTTPSHandler, ProxyHandler, Request, build_opener
 
 
 class SmokeFailure(RuntimeError):
@@ -93,7 +94,8 @@ class FrozenSmoke:
         self.timeout = timeout
         self.checks: list[dict[str, Any]] = []
         self.diagnostics: dict[str, Any] = {}
-        self.http = build_opener(ProxyHandler({}))
+        # This isolated smoke server generates its own certificate below.
+        self.http = build_opener(ProxyHandler({}), HTTPSHandler(context=ssl._create_unverified_context()))
 
     def passed(self, name: str, **details: Any) -> None:
         self.checks.append({"name": name, "passed": True, **details})
@@ -291,7 +293,7 @@ class FrozenSmoke:
                     "PYTHONIOENCODING": "utf-8",
                 }
             )
-            self.base_url = f"http://127.0.0.1:{port}"
+            self.base_url = f"https://127.0.0.1:{port}"
             self.username = "frozen_smoke_admin"
             self.password = secrets.token_urlsafe(24)
 

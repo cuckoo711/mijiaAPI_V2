@@ -18,13 +18,14 @@ from html.parser import HTMLParser
 import json
 from pathlib import Path
 import secrets
+import ssl
 import subprocess
 import sys
 import time
 from typing import Any, Iterator, Optional
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
-from urllib.request import HTTPCookieProcessor, ProxyHandler, Request, build_opener
+from urllib.request import HTTPCookieProcessor, HTTPSHandler, ProxyHandler, Request, build_opener
 import uuid
 
 OWNER_LABEL = "io.mijia.docker-smoke.run"
@@ -222,7 +223,9 @@ class HttpClient:
         self.base_url = base_url
         self.timeout = timeout
         self.cookies = CookieJar()
-        self.opener = build_opener(ProxyHandler({}), HTTPCookieProcessor(self.cookies))
+        # Only disposable, locally-created containers are addressed by this client.
+        self.opener = build_opener(ProxyHandler({}), HTTPCookieProcessor(self.cookies),
+                                   HTTPSHandler(context=ssl._create_unverified_context()))
 
     def cookie(self, name: str) -> str:
         return next((item.value for item in self.cookies if item.name == name), "")
@@ -390,7 +393,7 @@ class DockerRun:
         require(
             process_uids == [1000] * 4, "Entrypoint did not drop application privileges to uid 1000"
         )
-        client = HttpClient("http://127.0.0.1")
+        client = HttpClient("https://127.0.0.1")
         self.wait_host_ready(name, client)
         return name, client.base_url
 
@@ -404,7 +407,7 @@ class DockerRun:
         require(len(bindings) == 1, "Smoke server must have exactly one host binding")
         binding = bindings[0]
         require(binding["HostIp"] == "127.0.0.1", "Smoke port must only bind host loopback")
-        return f"http://127.0.0.1:{binding['HostPort']}"
+        return f"https://127.0.0.1:{binding['HostPort']}"
 
     def wait_host_ready(self, name: str, client: HttpClient) -> None:
         """Wait using GET only, updating the endpoint while keeping session cookies."""
@@ -425,7 +428,7 @@ class DockerRun:
 
     def wait_ready(self, name: str, *, healthy: bool = False) -> None:
         deadline = time.monotonic() + self.timeout
-        probe = "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8123/healthz', timeout=2).read()"
+        probe = "import ssl, urllib.request; urllib.request.urlopen('https://127.0.0.1:8123/healthz', context=ssl._create_unverified_context(), timeout=2).read()"
         while time.monotonic() < deadline:
             info = self.owned("container", name)
             require(info["State"]["Running"], f"Container exited before readiness: {name}")
@@ -492,10 +495,11 @@ class DockerRun:
         address = info["NetworkSettings"]["Networks"]["bridge"]["IPAddress"]
         require(bool(address), "Container has no bridge address")
         script = """
-import json, urllib.request, urllib.error
+import json, ssl, urllib.request, urllib.error
 request = urllib.request.Request(URL, data=PAYLOAD, method=METHOD,
     headers={'Content-Type': 'application/json'})
-opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+opener = urllib.request.build_opener(urllib.request.ProxyHandler({}),
+    urllib.request.HTTPSHandler(context=ssl._create_unverified_context()))
 try:
     response = opener.open(request, timeout=10)
 except urllib.error.HTTPError as exc:
@@ -504,7 +508,7 @@ with response:
     print(json.dumps({'status': response.status, 'body': json.load(response)}))
 """
         script = (
-            f"URL={f'http://{address}:8123{path}'!r}\nMETHOD={method!r}\nPAYLOAD={json.dumps(payload).encode() if payload is not None else None!r}\n"
+            f"URL={f'https://{address}:8123{path}'!r}\nMETHOD={method!r}\nPAYLOAD={json.dumps(payload).encode() if payload is not None else None!r}\n"
             + script
         )
         result = json.loads(self.helper(script, {"/data": (volume, True)}))

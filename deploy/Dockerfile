@@ -37,6 +37,7 @@ RUN pip install --no-cache-dir .
 COPY configs/*.toml.template configs/
 COPY --from=web-builder /build/web/dist web/dist/
 COPY deploy/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+COPY deploy/docker-healthcheck.py /usr/local/bin/docker-healthcheck.py
 
 RUN groupadd --gid 1000 mijia \
     && useradd --uid 1000 --gid mijia --home-dir /home/mijia --shell /usr/sbin/nologin mijia \
@@ -47,7 +48,7 @@ RUN groupadd --gid 1000 mijia \
 EXPOSE 8123
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-    CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8123/healthz', timeout=3).read()"]
+    CMD ["python", "/usr/local/bin/docker-healthcheck.py"]
 
 VOLUME ["/data"]
 
