@@ -42,6 +42,12 @@ uv run python -m server.cli write-config   # 从模板生成 configs/server.toml
 | `MIJIA_WEB_DIST_DIR` | `web/dist` | 前端构建产物 |
 | `MIJIA_BOOTSTRAP_ALLOW_PRIVATE` | 空 | 设为 `1` 时允许私网 IP 完成首次建管理员（Docker 常用） |
 | `MIJIA_CREDENTIAL_SECRET` | 空 | 可选；不设则使用同目录 `.credential_key` |
+| `MIJIA_SERVER_LOG_LEVEL` | `INFO` | 服务日志级别 |
+| `MIJIA_SERVER_ACCESS_LOG` | 关闭 | 设为 `1` 时开启 Uvicorn 访问日志（或 `--access-log`） |
+| `MIJIA_PUBLIC_BASE_URL` | 空 | 对外 Base URL，用于外部调用示例/回调展示 |
+| `MIJIA_AUDIT_RETENTION_DAYS` | `30` | 审计日志保留天数 |
+| `MIJIA_ADMIN_SESSION_HOURS` | `12` | 管理台会话有效期（小时） |
+| `MIJIA_CREDENTIAL_REFRESH_BEFORE_SECONDS` | `86400` | 凭据到期前多少秒触发自动刷新（1 天） |
 
 也可通过 `configs/server.toml` 配置（环境变量优先）。可用 `write-config` 从模板生成。
 
@@ -161,14 +167,21 @@ server/
 对外 API（`Authorization: Bearer <api_key>`）：
 
 - `GET  /api/v1/status`
+- `GET  /api/v1/account`
 - `GET  /api/v1/homes`
 - `GET  /api/v1/devices`（可选 `include_spec` / `include_raw`）
+- `GET  /api/v1/devices/{slug}`
 - `GET  /api/v1/devices/{slug}/state`
+- `GET  /api/v1/devices/{slug}/spec`
 - `POST /api/v1/devices/{slug}/properties`
 - `POST /api/v1/devices/{slug}/actions`
+- `POST /api/v1/batch/devices/properties`
 - `GET  /api/v1/scenes`
 - `POST /api/v1/scenes/{id}/execute`
 - `GET  /api/v1/operations/{operation_id}`（有效 API Key 仅能查询自己发起的控制操作，无需 `read:logs`）
+- `POST /api/v1/cache/refresh`
+- `POST /api/v1/cache/clear`
+- `GET  /api/v1/logs`
 
 管理台「API 使用」页有完整示例；交互式文档可在「系统安全」开启。
 

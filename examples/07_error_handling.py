@@ -159,9 +159,11 @@ def example_comprehensive_error_handling():
         for device in devices:
             try:
                 if device.is_online():
-                    # 尝试获取设备属性
-                    properties = api.get_device_properties(device.did)
-                    print(f"✓ {device.name}: 获取属性成功")
+                    # 批量读取属性（请求项：did + siid + piid）
+                    properties = api.get_device_properties([
+                        {"did": device.did, "siid": 2, "piid": 1},
+                    ])
+                    print(f"✓ {device.name}: 获取属性成功 {properties}")
                 else:
                     print(f"⊘ {device.name}: 设备离线")
                     

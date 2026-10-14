@@ -70,15 +70,21 @@ curl -H "Authorization: Bearer YOUR_API_KEY" \
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | `GET` | `/api/v1/status` | 服务状态 |
+| `GET` | `/api/v1/account` | 当前凭据对应的小米账号信息 |
 | `GET` | `/api/v1/homes` | 家庭列表 |
 | `GET` | `/api/v1/devices` | 设备列表（可选 `include_spec` / `include_raw`） |
+| `GET` | `/api/v1/devices/{slug}` | 单个设备详情 |
 | `GET` | `/api/v1/devices/{slug}/state` | 设备状态 |
+| `GET` | `/api/v1/devices/{slug}/spec` | 设备规格（属性/动作定义） |
 | `POST` | `/api/v1/devices/{slug}/properties` | 控制设备 |
 | `POST` | `/api/v1/devices/{slug}/actions` | 执行动作 |
+| `POST` | `/api/v1/batch/devices/properties` | 批量写入设备属性 |
 | `GET` | `/api/v1/scenes` | 场景列表 |
 | `POST` | `/api/v1/scenes/{id}/execute` | 执行场景 |
 | `GET` | `/api/v1/logs` | 审计日志 |
 | `GET` | `/api/v1/operations/{operation_id}` | 查询当前 API Key 自己发起的控制操作回执 |
+| `POST` | `/api/v1/cache/refresh` | 刷新指定家庭或全部缓存 |
+| `POST` | `/api/v1/cache/clear` | 清除缓存 |
 
 管理台「API 使用」页面有完整的请求示例和参数说明。交互式文档（Swagger/ReDoc）可在「系统安全」中开启。
 
@@ -134,6 +140,11 @@ api.control_device(device_id=devices[0].did, siid=2, piid=1, value=True)
 | `MIJIA_CREDENTIAL_PATH` | `configs/credential.json` | 凭据文件（AES-GCM 加密） |
 | `MIJIA_WEB_DIST_DIR` | `web/dist` | 前端静态资源 |
 | `MIJIA_SERVER_LOG_LEVEL` | `INFO` | 日志级别（支持 `DEBUG`） |
+| `MIJIA_SERVER_ACCESS_LOG` | 关闭 | `1` 时启用 uvicorn access log（等同 `run --access-log`） |
+| `MIJIA_PUBLIC_BASE_URL` | 空 | 对外基础 URL（生成绝对链接时使用） |
+| `MIJIA_AUDIT_RETENTION_DAYS` | `30` | 审计日志保留天数 |
+| `MIJIA_ADMIN_SESSION_HOURS` | `12` | 管理台会话有效期（小时） |
+| `MIJIA_CREDENTIAL_REFRESH_BEFORE_SECONDS` | 见配置 | 凭据到期前多久触发自动刷新 |
 | `MIJIA_BOOTSTRAP_ALLOW_PRIVATE` | 空 | `1` 时允许未初始化实例从私网首次建管理员，并原子启用局域网访问策略（Docker）；不启用公网 |
 | `MIJIA_CREDENTIAL_SECRET` | 空 | 可选凭据加密密钥；不设则用 `.credential_key` |
 
@@ -145,6 +156,7 @@ api.control_device(device_id=devices[0].did, siid=2, piid=1, value=True)
 uv run python -m server.cli init
 uv run python -m server.cli run
 uv run python -m server.cli check
+uv run python -m server.cli diagnose        # 导出诊断数据（可加 --output）
 uv run python -m server.cli status          # 版本 / 路径 / 磁盘占用
 uv run python -m server.cli reset-admin     # 本机重置管理员密码
 uv run python -m server.cli purge-audit
@@ -319,6 +331,19 @@ chmod +x mijia-server-linux-x64
 ```
 
 默认监听 `127.0.0.1:8123`。
+
+## 完整文档
+
+| 分类 | 文档 |
+|------|------|
+| 文档索引 | [docs/README.md](docs/README.md) |
+| 快速开始 / 配置 / 最佳实践 | [docs/使用指南/](docs/使用指南/) |
+| SDK 与领域模型 / 异常 | [docs/API参考/](docs/API参考/) |
+| 架构与开发 | [docs/架构设计/](docs/架构设计/) · [docs/开发指南/](docs/开发指南/) |
+| 部署运维 | [deploy/README.md](deploy/README.md) |
+| 故障排查 | [docs/故障排查指南.md](docs/故障排查指南.md) |
+| 示例代码 | [examples/README.md](examples/README.md) |
+| Android 测试版 | [android/README.md](android/README.md) |
 
 ## 常见问题
 

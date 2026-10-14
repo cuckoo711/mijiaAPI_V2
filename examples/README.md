@@ -121,7 +121,7 @@ uv run python examples/03_device_control.py
 ### 进阶学习
 
 4. 查看 `04_device_spec.py`，理解设备规格
-4. 学习 `05_scene_control.py`，掌握智能控制
+5. 学习 `05_scene_control.py`，掌握智能控制
 6. 优化 `06_batch_operations.py`，提升性能
 
 ### 高级应用
@@ -228,7 +228,7 @@ A: 使用 `04_device_spec.py` 或 `deploy/scripts/show_device_spec.py` 查看设
 
 ### Q: 批量操作有数量限制吗？
 
-A: 建议每批不超过50个请求，大量操作应分批处理。
+A: SDK 内部会按约 20 条一组自动分批发送。调用方仍建议避免单次提交过大列表，大量操作可自行分批以获得更平滑的失败恢复。
 
 ### Q: 如何调试示例代码？
 

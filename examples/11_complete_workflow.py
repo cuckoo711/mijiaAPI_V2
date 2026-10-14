@@ -197,8 +197,8 @@ class SmartHomeAutomation:
                 print(f"可用智能: {[s.name for s in scenes]}")
                 return
             
-            # 执行智能
-            success = self.api.execute_scene(scene.scene_id)
+            # 执行智能（home_id 必填）
+            success = self.api.execute_scene(scene.scene_id, home.id)
             if success:
                 print(f"✓ 智能 '{scene.name}' 执行成功")
             else:

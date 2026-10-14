@@ -127,7 +127,8 @@ def control_device(
     siid: int, 
     piid: int, 
     value: Any,
-    refresh_cache: bool = True
+    refresh_cache: bool = True,
+    home_id: Optional[str] = None
 ) -> bool
 ```
 
@@ -137,6 +138,7 @@ def control_device(
 - `piid`: 属性ID（Property ID）
 - `value`: 属性值
 - `refresh_cache`: 是否在控制后刷新缓存，默认为True
+- `home_id`: 设备所属家庭ID（可选）。传入后可跳过按 device_id 反查家庭的开销；调用方已知家庭时建议提供
 
 **返回**：
 - `bool`: 是否成功
@@ -182,7 +184,8 @@ def call_device_action(
     siid: int,
     aiid: int,
     params: Optional[Dict[str, Any]] = None,
-    refresh_cache: bool = True
+    refresh_cache: bool = True,
+    home_id: Optional[str] = None
 ) -> Any
 ```
 
@@ -192,6 +195,7 @@ def call_device_action(
 - `aiid`: 操作ID（Action ID）
 - `params`: 操作参数（可选）
 - `refresh_cache`: 是否在操作后刷新缓存，默认为True
+- `home_id`: 设备所属家庭ID（可选）。已知时可跳过按 device_id 反查家庭
 
 **返回**：
 - `Any`: 操作结果
@@ -238,7 +242,7 @@ def batch_control_devices(
 
 **参数**：
 - `requests`: 批量请求列表，每个请求包含：
-  - `device_id`: 设备ID
+  - `did`: 设备ID（主键；兼容 `device_id`）
   - `siid`: 服务ID
   - `piid`: 属性ID
   - `value`: 属性值
@@ -257,9 +261,9 @@ def batch_control_devices(
 **示例**：
 ```python
 requests = [
-    {"device_id": "light_1", "siid": 2, "piid": 1, "value": True},
-    {"device_id": "light_2", "siid": 2, "piid": 1, "value": False},
-    {"device_id": "light_3", "siid": 2, "piid": 2, "value": 50},
+    {"did": "light_1", "siid": 2, "piid": 1, "value": True},
+    {"did": "light_2", "siid": 2, "piid": 1, "value": False},
+    {"did": "light_3", "siid": 2, "piid": 2, "value": 50},
 ]
 
 # 批量控制并自动刷新缓存（推荐）
@@ -276,6 +280,60 @@ for i, result in enumerate(results):
         print(f"请求{i+1}失败")
 ```
 
+> 请求项主键为 `did`；为兼容旧写法也可传 `device_id`。两者同时出现时必须一致。
+
+#### get_device_spec()
+
+获取设备规格（支持的属性与操作）。
+
+```python
+def get_device_spec(self, model: str) -> Optional[Any]
+```
+
+**参数**：
+- `model`: 设备型号，如 `"yeelink.light.lamp4"`
+
+**返回**：
+- `DeviceSpec` 或 `None`: 设备规格对象，不存在返回None。规格包含 `model`、`name`、`properties`（`List[DeviceProperty]`）、`actions`（`List[DeviceAction]`）
+
+**示例**：
+```python
+spec = api.get_device_spec(model="yeelink.light.lamp4")
+if spec:
+    for prop in spec.properties:
+        print(f"{prop.name} (siid={prop.siid}, piid={prop.piid})")
+    for action in spec.actions:
+        print(f"{action.name} (siid={action.siid}, aiid={action.aiid})")
+```
+
+#### get_device_properties()
+
+批量读取设备属性实时值。
+
+```python
+def get_device_properties(self, requests: List[Dict[str, Any]]) -> List[Dict[str, Any]]
+```
+
+**参数**：
+- `requests`: 读取请求列表，每个请求包含：
+  - `did`: 设备ID（主键；兼容 `device_id`）
+  - `siid`: 服务ID
+  - `piid`: 属性ID
+
+**返回**：
+- `List[Dict[str, Any]]`: 结果列表，每项包含 `code`、`siid`、`piid`、`value` 等字段
+
+**示例**：
+```python
+requests = [
+    {"did": "device_123", "siid": 2, "piid": 1},
+    {"did": "device_123", "siid": 2, "piid": 2},
+]
+results = api.get_device_properties(requests)
+for item in results:
+    print(f"siid={item['siid']} piid={item['piid']}: code={item['code']} value={item.get('value')}")
+```
+
 ### 智能管理
 
 #### get_scenes()
@@ -283,11 +341,12 @@ for i, result in enumerate(results):
 获取指定家庭下的所有智能。
 
 ```python
-def get_scenes(self, home_id: str) -> List[Scene]
+def get_scenes(self, home_id: str, owner_uid: Optional[str] = None) -> List[Scene]
 ```
 
 **参数**：
 - `home_id`: 家庭ID
+- `owner_uid`: 家庭拥有者用户ID（可选）。共享家庭时传入家庭拥有者的uid
 
 **返回**：
 - `List[Scene]`: 智能列表
@@ -301,6 +360,9 @@ def get_scenes(self, home_id: str) -> List[Scene]
 scenes = api.get_scenes(home_id="123456")
 for scene in scenes:
     print(f"{scene.name} (ID: {scene.scene_id})")
+
+# 共享家庭：传入家庭拥有者uid
+scenes = api.get_scenes(home_id="123456", owner_uid="owner_uid")
 ```
 
 #### execute_scene()
@@ -308,11 +370,13 @@ for scene in scenes:
 执行指定智能。
 
 ```python
-def execute_scene(self, scene_id: str) -> bool
+def execute_scene(self, scene_id: str, home_id: str, owner_uid: Optional[str] = None) -> bool
 ```
 
 **参数**：
 - `scene_id`: 智能ID
+- `home_id`: 家庭ID（必填）
+- `owner_uid`: 共享家庭拥有者用户ID（可选），省略时使用当前用户
 
 **返回**：
 - `bool`: 是否成功
@@ -323,9 +387,16 @@ def execute_scene(self, scene_id: str) -> bool
 
 **示例**：
 ```python
-success = api.execute_scene(scene_id="scene_123")
+success = api.execute_scene(scene_id="scene_123", home_id="123456")
 if success:
     print("智能执行成功")
+
+# 共享家庭
+success = api.execute_scene(
+    scene_id="scene_123",
+    home_id="123456",
+    owner_uid="owner_uid",
+)
 ```
 
 ### 统计信息
