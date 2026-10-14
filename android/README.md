@@ -93,3 +93,5 @@ python android/ci/test_compatibility.py --serial emulator-5590 --apk /path/to/te
 测试进度保存在隔离测试目录的 `compatibility.json`；只有 `state=passed`、受测 APK 哈希匹配且实际时长达标才算通过。模拟器结果不代表 ARM 真机或各厂商后台策略。
 
 API 35 的 16 KiB 镜像内置 WebView 124，在管理台加载时会于 WebView MemoryInfra 线程原生崩溃。应用会在创建 WebView 前阻止此组合并提示更新组件，后台服务可以独立启动。完整管理台与长测使用 API 36 的 16 KiB 镜像，报告中记录实际 WebView 版本。
+
+16 KiB 系统镜像使用 4096 MiB 内存；2048 MiB 在首次启动与 WebView 加载时可能触发系统低内存回收，不能将这类测试基础设施失败当作应用已通过。共享验收主机应串行执行 16 KiB 和旧系统长测，保留各自完整 24 小时结果，避免影响同机服务。
