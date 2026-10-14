@@ -28,6 +28,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+      - uses: android-actions/setup-android@v3
       - name: Install Android and Rust toolchains
         shell: bash
         run: |
