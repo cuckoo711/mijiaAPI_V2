@@ -6,6 +6,7 @@ import android.content.Intent;
 import android.content.ActivityNotFoundException;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
+import android.graphics.Insets;
 import android.net.Uri;
 import android.os.*;
 import android.provider.Settings;
@@ -45,18 +46,30 @@ public class MainActivity extends Activity {
         super.onCreate(state);
         getWindow().setStatusBarColor(Color.rgb(47,154,85));
         LinearLayout root = new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL);
-        root.setFitsSystemWindows(true);
         root.setBackgroundColor(Color.rgb(244,246,245));
-        root.setPadding(12, 12, 12, 0);
-        TextView title = new TextView(this); title.setText("米家独立服务 · Android 测试版"); title.setTextSize(20); root.addView(title);
+        if (Build.VERSION.SDK_INT >= 35) {
+            // Target 35 enforces edge-to-edge; consume bars/cutouts/IME explicitly.
+            getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
+            getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+            root.setOnApplyWindowInsetsListener((view, insets) -> {
+                Insets bars=insets.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
+                Insets ime=insets.getInsets(WindowInsets.Type.ime());
+                view.setPadding(bars.left,bars.top,bars.right,Math.max(bars.bottom,ime.bottom));
+                return WindowInsets.CONSUMED;
+            });
+        } else root.setFitsSystemWindows(true);
+        LinearLayout header = new LinearLayout(this); header.setOrientation(LinearLayout.VERTICAL);
+        header.setPadding(12,12,12,0); root.addView(header);
+        // Keep native header padding out of the WebView's usable viewport.
+        TextView title = new TextView(this); title.setText("米家独立服务 · Android 测试版"); title.setTextSize(20); header.addView(title);
         TextView note = new TextView(this); note.setText("第三方非官方应用，与小米无隶属关系。服务、数据库和登录凭据保存在本机，卸载会清除本机数据。");
-        note.setTextSize(12); root.addView(note);
-        status = new TextView(this); status.setPadding(0,12,0,8); root.addView(status);
+        note.setTextSize(12); header.addView(note);
+        status = new TextView(this); status.setPadding(0,12,0,8); header.addView(status);
         lan = new CheckBox(this); lan.setText("允许局域网访问（仍需管理员或 API Key 鉴权）");
         lan.setChecked(getSharedPreferences("server",MODE_PRIVATE).getBoolean("lan",false));
         lan.setOnCheckedChangeListener((b, value) -> getSharedPreferences("server",MODE_PRIVATE).edit().putBoolean("lan",value).apply());
-        root.addView(lan);
-        LinearLayout controls = new LinearLayout(this); root.addView(controls);
+        header.addView(lan);
+        LinearLayout controls = new LinearLayout(this); header.addView(controls);
         start = button(controls, "启动服务", v -> {
             if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
                 requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 1);
@@ -83,7 +96,7 @@ public class MainActivity extends Activity {
                 .setMessage(backgroundHelp())
                 .setPositiveButton("设置后台运行",(d,w)->openBackgroundSettings())
                 .setNegativeButton("关闭",null).show());
-        root.addView(help);
+        header.addView(help);
         web = new WebView(this); web.setVisibility(View.GONE);
         web.getSettings().setJavaScriptEnabled(true); web.getSettings().setDomStorageEnabled(true);
         web.getSettings().setAllowFileAccess(false); web.getSettings().setAllowContentAccess(false);

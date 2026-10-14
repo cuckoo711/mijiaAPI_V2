@@ -81,11 +81,17 @@ public class SmokeInstrumentation extends Instrumentation {
         throw new AssertionError("WebView missing " + text + ": " + browserError);
     }
 
+    private void verifyViewport(WebView web) throws Exception {
+        String fits=javascript(web,"document.body.scrollWidth <= document.documentElement.clientWidth + 1");
+        if (!"true".equals(fits)) throw new AssertionError("Management console overflows the WebView viewport");
+    }
+
     private void verifyBrowserLogin(Activity activity, String password, Bundle result) throws Exception {
         WebView web=(WebView)find(activity.getWindow().getDecorView(),WebView.class,null);
         runOnMainSync(()->result.putString("webview_user_agent", web.getSettings().getUserAgentString()));
         runOnMainSync(web::reload);
         awaitText(web,"管理员登录");
+        verifyViewport(web);
         javascript(web,"(function(){var inputs=document.querySelectorAll('.auth-panel input');"
             +"inputs[0].value='android-smoke';inputs[1].value='"+password+"';"
             +"for(var i=0;i<inputs.length;i++)inputs[i].dispatchEvent(new Event('input',{bubbles:true}));"
@@ -96,6 +102,7 @@ public class SmokeInstrumentation extends Instrumentation {
         awaitText(web,"创建 API Key");
         javascript(web,"location.hash='devices'");
         awaitText(web,"默认关闭");
+        verifyViewport(web);
         result.putString("webview_login_navigation", "passed");
     }
 
