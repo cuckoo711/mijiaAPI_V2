@@ -206,8 +206,12 @@ def run_command(args: argparse.Namespace) -> None:
 
     import uvicorn
 
+    from server.store import runtime_config_bool
+    from server.tls import ensure_self_signed_cert
+
     settings = _settings()
     app = create_app(settings)
+    store = app.state.store
 
     # 默认关闭 uvicorn access log：前端每 500ms 轮询同步进度会淹没控制台，
     # 且这类日志在 stdio 上是同步阻塞的，Windows 下会明显吃 CPU。
@@ -219,11 +223,18 @@ def run_command(args: argparse.Namespace) -> None:
         "yes",
         "on",
     }
+
+    ssl_kwargs: dict[str, Any] = {}
+    if runtime_config_bool(store.get_config_map(), "SELF_SIGNED_TLS", True):
+        cert_path, key_path = ensure_self_signed_cert(settings.data_dir)
+        ssl_kwargs = {"ssl_certfile": str(cert_path), "ssl_keyfile": str(key_path)}
+
     uvicorn.run(
         app,
         host=settings.host,
         port=settings.port,
         access_log=access_log,
+        **ssl_kwargs,
     )
 
 

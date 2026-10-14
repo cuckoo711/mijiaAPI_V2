@@ -33,7 +33,7 @@ import type {
   SceneItem,
   UpdateInfo,
 } from "./types/admin";
-import { configText } from "./utils/configHelpers";
+import { configBool, configText } from "./utils/configHelpers";
 import { errorMessage } from "./utils/apiRequestError";
 import ApiDocsView from "./views/ApiDocsView.vue";
 import ApiKeysView from "./views/ApiKeysView.vue";
@@ -197,9 +197,16 @@ const activePage = computed(
 const runtimeConfig = computed(
   () => new Map(configs.value.map((item) => [String(item.key), item.value]))
 );
-const apiBaseUrl = computed(() =>
-  normalizeApiBaseUrl(configText(runtimeConfig.value, "PUBLIC_BASE_URL"), window.location.origin)
-);
+const selfSignedTls = computed(() => configBool(runtimeConfig.value, "SELF_SIGNED_TLS", true));
+const apiBaseUrl = computed(() => {
+  const base = normalizeApiBaseUrl(
+    configText(runtimeConfig.value, "PUBLIC_BASE_URL"),
+    window.location.origin
+  );
+  return selfSignedTls.value
+    ? base.replace(/^http:\/\//i, "https://")
+    : base.replace(/^https:\/\//i, "http://");
+});
 
 function syncProxyCidrsForm(): void {
   proxyCidrs.value = configText(runtimeConfig.value, "TRUSTED_PROXY_CIDRS", defaultTrustedProxyCidrs);
@@ -692,7 +699,24 @@ async function setConfig(payload: { key: string; value: string }): Promise<void>
 }
 
 async function setRuntimeSwitch(key: string, value: string | number | boolean): Promise<void> {
-  await saveConfig(key, Boolean(value));
+  const enabled = Boolean(value);
+  if (key === "SELF_SIGNED_TLS" && !enabled) {
+    try {
+      await ElMessageBox.confirm(
+        "关闭后服务以 HTTP 明文传输，API 文档示例链接会切换为 http://，实际监听协议在下次启动时生效。确认关闭自签证书？",
+        "关闭自签证书",
+        {
+          type: "warning",
+          confirmButtonText: "确认关闭",
+          cancelButtonText: "取消",
+          autofocus: false,
+        }
+      );
+    } catch {
+      return;
+    }
+  }
+  await saveConfig(key, enabled);
 }
 
 async function saveConfig(key: string, value: unknown): Promise<void> {

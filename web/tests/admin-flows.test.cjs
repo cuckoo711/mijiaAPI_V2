@@ -814,3 +814,50 @@ test("logout clears audit queue state and a late audit read cannot repopulate it
   assert.equal(app.audits.value.length, 0);
   assert.equal(app.auditLoading.value, false);
 });
+
+test("disabling self-signed TLS asks for confirmation and keeps the switch when canceled", async () => {
+  let confirmCalls = 0;
+  const h = harness(async () => reply({ key: "SELF_SIGNED_TLS", value: false, source: "database", updated_at: "" }), async () => {
+    confirmCalls += 1;
+    throw new Error("cancel");
+  });
+  h.storage.clear();
+  const app = h.component("src/App.vue").setup;
+  await app.setRuntimeSwitch("SELF_SIGNED_TLS", false);
+  assert.equal(confirmCalls, 1);
+  assert.equal(h.calls.length, 0);
+});
+
+test("disabling self-signed TLS saves after confirmation; enabling does not confirm", async () => {
+  const confirmations = [];
+  const h = harness(async () => reply({ key: "SELF_SIGNED_TLS", value: false, source: "database", updated_at: "" }), async (message, title) => {
+    confirmations.push({ message, title });
+  });
+  h.storage.clear();
+  const app = h.component("src/App.vue").setup;
+  await app.setRuntimeSwitch("SELF_SIGNED_TLS", false);
+  assert.equal(confirmations.length, 1);
+  assert.match(confirmations[0].message, /确认关闭自签证书/);
+  assert.equal(confirmations[0].title, "关闭自签证书");
+  assert.equal(h.calls.length, 1);
+  assert.deepEqual(JSON.parse(h.calls[0].options.body), { value: false });
+
+  h.calls.length = 0;
+  await app.setRuntimeSwitch("SELF_SIGNED_TLS", true);
+  assert.equal(confirmations.length, 1);
+  assert.equal(h.calls.length, 1);
+  assert.deepEqual(JSON.parse(h.calls[0].options.body), { value: true });
+});
+
+test("API docs base URL scheme follows the self-signed TLS switch", async () => {
+  const h = harness(async () => reply({ items: [] }));
+  h.context.window.location.origin = "http://127.0.0.1:8123";
+  const app = h.component("src/App.vue").setup;
+  assert.equal(app.apiBaseUrl.value, "https://127.0.0.1:8123");
+  app.configs.value = [{ key: "SELF_SIGNED_TLS", value: false }];
+  await vue.nextTick();
+  assert.equal(app.apiBaseUrl.value, "http://127.0.0.1:8123");
+  app.configs.value = [{ key: "SELF_SIGNED_TLS", value: true }, { key: "PUBLIC_BASE_URL", value: "http://mijia.example.test" }];
+  await vue.nextTick();
+  assert.equal(app.apiBaseUrl.value, "https://mijia.example.test");
+});

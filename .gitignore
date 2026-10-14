@@ -81,6 +81,11 @@ configs/cache/
 configs/*.json
 !configs/*.json.template
 
+# ==================== TLS 自签证书 ====================
+configs/tls/
+**/tls/server.crt
+**/tls/server.key
+
 # ==================== 旧版本数据 ====================
 .mijia/
 .mijia_backup/

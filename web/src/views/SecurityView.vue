@@ -114,6 +114,33 @@ function cfgBool(key: string, defaultValue = false): boolean {
       </el-alert>
     </el-card>
     <el-card shadow="never">
+      <template #header>传输安全</template>
+      <div class="security-switch-list">
+        <div class="security-switch-row">
+          <div>
+            <div class="security-switch-title">自签证书</div>
+            <div class="security-switch-desc">
+              启动时生成并使用本地自签证书提供 HTTPS，传输内容加密。开启状态会同步到 API 文档示例中的域名链接（https://）。
+              证书仅证明链路加密，不替代公网 CA 身份认证；正式对外建议仍用反向代理签发证书。
+            </div>
+          </div>
+          <el-switch
+            :disabled="saving"
+            :model-value="cfgBool('SELF_SIGNED_TLS', true)"
+            active-text="开启"
+            inactive-text="关闭"
+            inline-prompt
+            @change="(value: string | number | boolean) => emit('set-runtime-switch', 'SELF_SIGNED_TLS', value)"
+          />
+        </div>
+      </div>
+      <el-alert class="security-hint" type="info" show-icon :closable="false">
+        <template #title>
+          开关会立即同步 API 文档示例链接的协议前缀；实际监听 HTTP/HTTPS 在下次启动服务时生效。关闭自签证书前需要确认。
+        </template>
+      </el-alert>
+    </el-card>
+    <el-card shadow="never">
       <template #header>API 文档</template>
       <div class="security-switch-list">
         <div class="security-switch-row">
