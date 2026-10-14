@@ -143,7 +143,7 @@ def admin_app_info(
         "name": "米家 API Server（非官方）",
         "version": mijiaAPI_V2.__version__,
         "description": "第三方米家智能家居 Python SDK 与自托管管理台，与小米无隶属关系",
-        "license": "MIT",
+        "license": "Apache-2.0",
         "authors": "MijiaAPI Contributors",
         "repository_url": checker.repository_url,
         "issues_url": f"{checker.repository_url}/issues",

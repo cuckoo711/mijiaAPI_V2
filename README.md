@@ -1,7 +1,7 @@
 # 米家 API SDK & Server
 
 [![Python Version](https://img.shields.io/badge/python-3.9%2B-blue)](https://www.python.org/downloads/)
-[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
 > **非官方第三方项目。** 与小米 / 米家无隶属或授权关系。仅操作你有权控制的账号与设备，并遵守平台用户协议。详见 [免责声明与使用边界](DISCLAIMER.md)。
 

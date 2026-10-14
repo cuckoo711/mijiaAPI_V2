@@ -1008,7 +1008,7 @@ onBeforeUnmount(() => {
         <dl class="about-meta">
           <div>
             <dt>许可证</dt>
-            <dd>{{ appInfo?.license || "MIT" }}</dd>
+            <dd>{{ appInfo?.license || "Apache-2.0" }}</dd>
           </div>
           <div v-if="appInfo?.authors">
             <dt>贡献者</dt>

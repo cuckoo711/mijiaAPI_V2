@@ -533,7 +533,7 @@ def test_admin_app_info_returns_repository_metadata(tmp_path: Path) -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["version"] == mijiaAPI_V2.__version__
-    assert payload["license"] == "MIT"
+    assert payload["license"] == "Apache-2.0"
     assert payload["repository_url"].startswith("https://github.com/")
     assert payload["issues_url"].endswith("/issues")
     assert payload["releases_url"].endswith("/releases")
