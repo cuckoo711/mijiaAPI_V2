@@ -140,9 +140,9 @@ def admin_app_info(
     checker: UpdateChecker = Depends(get_update_checker),
 ) -> dict[str, Any]:
     return {
-        "name": "米家 API Server",
+        "name": "米家 API Server（非官方）",
         "version": mijiaAPI_V2.__version__,
-        "description": "米家智能家居 Python SDK 与管理台",
+        "description": "第三方米家智能家居 Python SDK 与自托管管理台，与小米无隶属关系",
         "license": "MIT",
         "authors": "MijiaAPI Contributors",
         "repository_url": checker.repository_url,

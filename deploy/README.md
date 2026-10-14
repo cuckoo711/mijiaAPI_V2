@@ -2,6 +2,8 @@
 
 本目录集中存放 Docker、systemd、可执行文件打包和运维脚本。
 
+> 部署前请阅读 [DISCLAIMER.md](../DISCLAIMER.md)：本项目为第三方非官方软件，建议自托管。请勿以小米/米家官方名义对外提供服务，勿托管他人账号进行商业代控。
+
 ## Docker Compose
 
 ### 快速启动

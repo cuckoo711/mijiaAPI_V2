@@ -1,7 +1,7 @@
 [project]
 name = "mijia-api"
 version = "3.9.1"
-description = "米家智能家居Python SDK - 重构版本"
+description = "第三方米家智能家居 Python SDK 与自托管管理台（非官方，与小米无隶属关系）"
 authors = [
     {name = "MijiaAPI Contributors"}
 ]

@@ -770,7 +770,7 @@ onBeforeUnmount(() => {
         <div class="brand-mark">米</div>
         <div class="brand-text">
           <div class="brand-title">米家 API Server</div>
-          <div class="brand-subtitle">管理台</div>
+          <div class="brand-subtitle">非官方管理台</div>
         </div>
       </div>
       <el-menu class="nav-menu" :default-active="activeMenu" unique-opened @select="selectPage">
@@ -985,7 +985,7 @@ onBeforeUnmount(() => {
         <div class="about-header">
           <div class="brand-mark about-mark">米</div>
           <div>
-            <div class="about-name">{{ appInfo?.name || "米家 API Server" }}</div>
+            <div class="about-name">{{ appInfo?.name || "米家 API Server（非官方）" }}</div>
             <div class="about-version">
               <span>v{{ appInfo?.version || health?.version || "..." }}</span>
               <el-tag
@@ -1070,6 +1070,9 @@ onBeforeUnmount(() => {
           </el-button>
         </div>
 
+        <p class="about-disclaimer">
+          本项目为第三方开源软件，非小米 / 米家官方产品，与小米无隶属或授权关系。请仅操作你有权控制的账号与设备，并遵守平台用户协议。详见仓库 <code>DISCLAIMER.md</code>。
+        </p>
         <div class="about-copyright">
           © {{ new Date().getFullYear() }} {{ appInfo?.authors || "MijiaAPI Contributors" }}
         </div>

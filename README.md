@@ -3,7 +3,9 @@
 [![Python Version](https://img.shields.io/badge/python-3.9%2B-blue)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-米家智能家居 Python SDK，内置 FastAPI + Vue3 管理后台。
+> **非官方第三方项目。** 与小米 / 米家无隶属或授权关系。仅操作你有权控制的账号与设备，并遵守平台用户协议。详见 [免责声明与使用边界](DISCLAIMER.md)。
+
+第三方米家智能家居 Python SDK，内置 FastAPI + Vue3 管理后台。
 
 **两种使用形态：**
 
@@ -91,6 +93,17 @@ curl -H "Authorization: Bearer YOUR_API_KEY" \
 控制响应进入审计阶段后，`X-Operation-ID` 标识该次操作，`X-Audit-Delivery` 区分 `stored`、`queued`、`unavailable`；审计落盘状态与设备执行结果分开判断。队列在启动时和运行中约每 10 秒补写，也可在管理台显式补写。完全未能保存的事件无法补写，需排查日志与存储。`/healthz` 用于 HTTP 存活检测，`/readyz` 检查 SQLite 可写、前端入口与审计状态，依赖异常返回 503。详细恢复步骤见 [部署运维说明](deploy/README.md#依赖就绪与审计恢复)。
 
 源码测试、模拟浏览器和隔离 Docker 验证只能证明对应的软件路径；真实米家授权、具体设备规格、共享家庭场景权限、设备状态与实际动作效果仍需在目标环境验收。HTTP 200、控制 ACK、操作回执和就绪检查均不代替物理设备验收。
+
+## 免责声明与使用边界
+
+本仓库是**第三方开源项目**，与小米科技有限责任公司 / 米家**无**隶属、授权或合作关系，**不是**官方 SDK 或服务。文档与界面中的「米家」「Xiaomi」等仅用于指明互操作目标，商标归权利人所有。
+
+- 仅在你**有权控制**的账号、家庭与设备上使用
+- 自行遵守当地法律与米家/小米平台用户协议
+- 勿冒充官方、勿对外商业代控、勿用于撞库或接口滥用
+- 软件按现状提供，不附带担保；详见 [DISCLAIMER.md](DISCLAIMER.md)
+
+参与贡献前请阅读 [DISCLAIMER.md](DISCLAIMER.md) 中的贡献者约定。
 
 ## SDK 使用
 
