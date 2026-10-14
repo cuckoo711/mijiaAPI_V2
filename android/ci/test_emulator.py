@@ -21,6 +21,7 @@ for flavor in ['x86', 'x64', 'arm32', 'arm64', 'universal']:
     (out / f'smoke-{flavor}.log').write_text(log)
     assert 'INSTRUMENTATION_CODE: -1' in log and 'webview_ui=passed' in log, log
     assert 'webview_login_navigation=passed' in log, log
+    assert 'renderer_recovery=passed' in log or 'renderer_recovery=in_process_webview' in log, log
     reports[flavor] = {}
     for name, filename in [('runtime', 'android-smoke.json'), ('restart', 'android-restart-smoke.json')]:
         content = run('shell', 'run-as', package, 'cat', 'files/service/' + filename)
@@ -30,6 +31,7 @@ for flavor in ['x86', 'x64', 'arm32', 'arm64', 'universal']:
         reports[flavor][name] = report
     reports[flavor]['webview_ui'] = 'passed'
     reports[flavor]['webview_login_navigation'] = 'passed'
+    reports[flavor]['renderer_recovery'] = 'passed' if 'renderer_recovery=passed' in log else 'in_process_webview'
 report = {
     'passed': True,
     'commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip(),

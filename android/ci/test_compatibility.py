@@ -33,6 +33,11 @@ out = args.output
 out.mkdir(parents=True, exist_ok=True)
 adb = ['adb', '-s', args.serial]
 package = 'com.cuckoo.mijia.standalone'
+logcat_sink = (out/'logcat-full.txt').open('wb')
+live_logcat = subprocess.Popen(adb+['logcat', '-v', 'threadtime', 'ActivityManager:I',
+                                    'AndroidRuntime:E', 'MijiaServer:V', 'MijiaSmoke:V',
+                                    'MijiaBrowser:V', 'libc:F', 'DEBUG:F', 'lmkd:I', '*:W'],
+                               stdout=logcat_sink, stderr=subprocess.STDOUT)
 
 def run(*command, check=True):
     result = subprocess.run(adb + list(command), capture_output=True, text=True, timeout=45)
@@ -87,6 +92,9 @@ try:
         assert 'INSTRUMENTATION_CODE: -1' in instrument.stdout, instrument.stdout
         assert 'webview_login_navigation=passed' in instrument.stdout, instrument.stdout
         report['browser_login_navigation'] = True
+        report['renderer_recovery'] = 'passed' if 'renderer_recovery=passed' in instrument.stdout else 'unavailable'
+        if report['api'] >= 29:
+            assert report['renderer_recovery'] == 'passed', instrument.stdout
         report['browser_user_agent'] = next(line.split('=', 1)[1] for line in instrument.stdout.splitlines()
                                           if line.startswith('INSTRUMENTATION_RESULT: webview_user_agent='))
         if report['api'] == 24:
@@ -234,14 +242,25 @@ try:
                         and report['network_before_idle'] and report['network_idle_exempted']
                         and (report['console_rendered'] or not args.expect_console))
 finally:
-    run('shell', 'dumpsys', 'deviceidle', 'unforce', check=False)
-    run('shell', 'dumpsys', 'deviceidle', 'whitelist', '-'+package, check=False)
-    if 'mDeepEnabled=false' in initial_idle:
-        run('shell', 'dumpsys', 'deviceidle', 'disable', 'deep', check=False)
-    if 'mLightEnabled=false' in initial_idle:
-        run('shell', 'dumpsys', 'deviceidle', 'disable', 'light', check=False)
-    run('shell', 'dumpsys', 'battery', 'reset', check=False)
-    (out/'logcat.txt').write_text(run('logcat', '-d', '-t', '800', check=False))
+    try:
+        run('shell', 'dumpsys', 'deviceidle', 'unforce', check=False)
+        run('shell', 'dumpsys', 'deviceidle', 'whitelist', '-'+package, check=False)
+        if 'mDeepEnabled=false' in initial_idle:
+            run('shell', 'dumpsys', 'deviceidle', 'disable', 'deep', check=False)
+        if 'mLightEnabled=false' in initial_idle:
+            run('shell', 'dumpsys', 'deviceidle', 'disable', 'light', check=False)
+        run('shell', 'dumpsys', 'battery', 'reset', check=False)
+        (out/'logcat.txt').write_text(run('logcat', '-d', '-t', '800', check=False))
+    except Exception as error:
+        report['cleanup_error'] = type(error).__name__
+        report['passed'] = False
+    live_logcat.terminate()
+    try:
+        live_logcat.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        live_logcat.kill()
+        live_logcat.wait()
+    logcat_sink.close()
     (out/'compatibility.json').write_text(json.dumps(report, indent=2))
     print(json.dumps(report, indent=2), flush=True)
 assert report['passed'], 'Compatibility failed; see report and diagnostics'

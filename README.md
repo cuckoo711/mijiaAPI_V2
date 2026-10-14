@@ -302,7 +302,7 @@ uv run pyinstaller --clean --noconfirm deploy/packaging/mijia-server.spec
 
 产物是 PyInstaller 单文件可执行程序，直接挂在 Release 上，不额外打包成压缩包。Release 同时提供 `SHA256SUMS`，用于核对下载文件的 SHA-256。
 
-Android 手机独立运行服务的测试 APK 见 [Android 测试版下载](https://github.com/cuckoo711/mijiaAPI_V2/releases/tag/v3.9.1-android-test.3)。Android 7.0 起，优先下载 `universal` 通用包；安装使用、兼容性与验收范围见 [Android 说明](android/README.md)。后续版本会自动构建并附带安卓测试包。
+Android 手机独立运行服务的测试 APK 见 [Android 测试版下载](https://github.com/cuckoo711/mijiaAPI_V2/releases/tag/v3.9.1-android-test.4)。Android 7.0 起，优先下载 `universal` 通用包；安装使用、兼容性与验收范围见 [Android 说明](android/README.md)。后续版本会自动构建并附带安卓测试包。
 
 > macOS Intel（x64）不再随版本发布：标准运行器里最后一个 Intel macOS 镜像
 > `macos-13` 已于 2025 年 12 月停止支持，而 PyInstaller 无法交叉编译。Intel Mac

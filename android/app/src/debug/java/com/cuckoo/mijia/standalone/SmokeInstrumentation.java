@@ -106,6 +106,36 @@ public class SmokeInstrumentation extends Instrumentation {
         result.putString("webview_login_navigation", "passed");
     }
 
+    private void verifyRendererRecovery(MainActivity activity, Bundle result) throws Exception {
+        if (Build.VERSION.SDK_INT < 29) { result.putString("renderer_recovery", "unavailable_before_api29"); return; }
+        int pid=android.os.Process.myPid(), previous=activity.rendererRecoveries;
+        WebView old=(WebView)find(activity.getWindow().getDecorView(),WebView.class,null);
+        AtomicReference<Boolean> terminated=new AtomicReference<>(false);
+        AtomicReference<Boolean> available=new AtomicReference<>(false);
+        runOnMainSync(()->{
+            available.set(old.getWebViewRenderProcess()!=null);
+            if (available.get()) terminated.set(old.getWebViewRenderProcess().terminate());
+        });
+        if (!available.get()) { result.putString("renderer_recovery", "in_process_webview"); return; }
+        if (!terminated.get()) throw new AssertionError("Renderer fault injection unavailable");
+        AtomicReference<WebView> replacement=new AtomicReference<>();
+        long deadline=System.currentTimeMillis()+30000;
+        while (System.currentTimeMillis()<deadline) {
+            runOnMainSync(()->replacement.set((WebView)find(activity.getWindow().getDecorView(),WebView.class,null)));
+            if (activity.rendererRecoveries>previous && replacement.get()!=null && replacement.get()!=old) break;
+            Thread.sleep(100);
+        }
+        if (replacement.get()==null || replacement.get()==old) throw new AssertionError("Console was not recreated");
+        if (android.os.Process.myPid()!=pid || !ServerService.active || !ServerService.ready) throw new AssertionError("Renderer failure interrupted service");
+        runOnMainSync(()->((Button)find(activity.getWindow().getDecorView(),Button.class,"打开管理台")).performClick());
+        WebView web=replacement.get();
+        deadline=System.currentTimeMillis()+60000;
+        while (!javascript(web,"location.href").contains("127.0.0.1:8123") && System.currentTimeMillis()<deadline) Thread.sleep(100);
+        javascript(web,"location.hash='keys'");
+        awaitText(web,"创建 API Key");
+        result.putString("renderer_recovery", "passed");
+    }
+
     @Override public void onStart() {
         Bundle result = new Bundle();
         try {
@@ -121,6 +151,7 @@ public class SmokeInstrumentation extends Instrumentation {
             String password="Android-ui-"+UUID.randomUUID().toString();
             String before=Python.getInstance().getModule("mijia_android.smoke").callAttr("run",context.getFilesDir().getAbsolutePath()+"/service",password).toString();
             verifyBrowserLogin(activity,password,result);
+            verifyRendererRecovery((MainActivity)activity,result);
             context.startService(new Intent(context,ServerService.class).setAction(ServerService.STOP));
             long deadline=System.currentTimeMillis()+15000;
             while (ServerService.active && System.currentTimeMillis()<deadline) Thread.sleep(250);

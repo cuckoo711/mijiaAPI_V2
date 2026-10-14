@@ -24,13 +24,16 @@ public class MainActivity extends Activity {
     private CheckBox lan;
     private Button start, stop, open;
     private WebView web;
+    private LinearLayout webRoot;
+    private boolean webReset;
+    public volatile int rendererRecoveries;
     private boolean pageOpened;
     private final Runnable refresh = new Runnable() {
         @Override public void run() {
-            status.setText(ServerService.status + (lan.isChecked() ? "\n局域网：" + addresses() : "\n仅允许本机访问"));
+            status.setText(ServerService.status + (lan.isChecked() ? "\n局域网：" + addresses() : "\n仅允许本机访问") + (webReset ? "\n管理台已重置，请重新打开" : ""));
             start.setEnabled(!ServerService.active);
             stop.setEnabled(ServerService.active);
-            open.setEnabled(ServerService.ready);
+            open.setEnabled(ServerService.ready && web != null);
             lan.setEnabled(!ServerService.active);
             handler.postDelayed(this, 1000);
         }
@@ -46,6 +49,7 @@ public class MainActivity extends Activity {
         super.onCreate(state);
         getWindow().setStatusBarColor(Color.rgb(47,154,85));
         LinearLayout root = new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL);
+        webRoot = root;
         root.setBackgroundColor(Color.rgb(244,246,245));
         if (Build.VERSION.SDK_INT >= 35) {
             // Target 35 enforces edge-to-edge; consume bars/cutouts/IME explicitly.
@@ -80,6 +84,8 @@ public class MainActivity extends Activity {
                 .setMessage("停止后，本机管理台和局域网 API 暂时不可用。数据会保留。")
                 .setNegativeButton("取消",null).setPositiveButton("停止",(d,w) -> startService(new Intent(this,ServerService.class).setAction(ServerService.STOP))).show());
         open = button(controls, "打开管理台", v -> {
+            if (web == null) return;
+            webReset = false;
             java.util.regex.Matcher chrome = java.util.regex.Pattern.compile("Chrome/(\\d+)").matcher(web.getSettings().getUserAgentString());
             if (chrome.find() && Integer.parseInt(chrome.group(1)) < 49) {
                 new AlertDialog.Builder(this).setTitle("请更新系统 WebView")
@@ -97,21 +103,46 @@ public class MainActivity extends Activity {
                 .setPositiveButton("设置后台运行",(d,w)->openBackgroundSettings())
                 .setNegativeButton("关闭",null).show());
         header.addView(help);
+        installWebView();
+        setContentView(root);
+    }
+
+    private void installWebView() {
         web = new WebView(this); web.setVisibility(View.GONE);
         web.getSettings().setJavaScriptEnabled(true); web.getSettings().setDomStorageEnabled(true);
         web.getSettings().setAllowFileAccess(false); web.getSettings().setAllowContentAccess(false);
         web.getSettings().setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
         CookieManager.getInstance().setAcceptCookie(true);
-        web.setWebViewClient(new WebViewClient() {
+        web.setWebViewClient(Build.VERSION.SDK_INT >= 26 ? new RecoveringWebClient() : new LocalWebClient());
+        webRoot.addView(web,new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,0,1));
+        open.setEnabled(ServerService.ready);
+    }
+
+    private class LocalWebClient extends WebViewClient {
             @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 Uri uri=request.getUrl();
                 if ("http".equals(uri.getScheme()) && "127.0.0.1".equals(uri.getHost()) && uri.getPort()==8123) return false;
                 if ("https".equals(uri.getScheme())) startActivity(new Intent(Intent.ACTION_VIEW,uri));
                 return true;
             }
-        });
-        root.addView(web,new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,0,1));
-        setContentView(root);
+    }
+
+    // Loaded only on API 26+: renderer eviction must not kill the Python service.
+    private class RecoveringWebClient extends LocalWebClient {
+        @Override public boolean onRenderProcessGone(WebView view, RenderProcessGoneDetail detail) {
+            if (view.getParent() instanceof ViewGroup) ((ViewGroup)view.getParent()).removeView(view);
+            view.destroy();
+            if (view == web) {
+                web = null; pageOpened = false; webReset = true;
+                rendererRecoveries++;
+                open.setEnabled(false);
+                handler.post(() -> {
+                    if (!isFinishing() && !isDestroyed() && web == null) installWebView();
+                });
+            }
+            android.util.Log.w("MijiaBrowser", "Renderer ended; recreating console without stopping service");
+            return true;
+        }
     }
 
     private String backgroundHelp() {
@@ -147,7 +178,7 @@ public class MainActivity extends Activity {
     @Override protected void onResume() { super.onResume(); handler.post(refresh); }
     @Override protected void onPause() { handler.removeCallbacks(refresh); CookieManager.getInstance().flush(); super.onPause(); }
     @Override public void onBackPressed() {
-        if (web.getVisibility()==View.VISIBLE) { web.setVisibility(View.GONE); } else super.onBackPressed();
+        if (web != null && web.getVisibility()==View.VISIBLE) { web.setVisibility(View.GONE); } else super.onBackPressed();
     }
-    @Override protected void onDestroy() { handler.removeCallbacks(refresh); web.destroy(); super.onDestroy(); }
+    @Override protected void onDestroy() { handler.removeCallbacks(refresh); if (web != null) web.destroy(); web = null; super.onDestroy(); }
 }
