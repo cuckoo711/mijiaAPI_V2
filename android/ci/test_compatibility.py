@@ -82,6 +82,15 @@ def await_click(text):
             raise AssertionError('Control not ready: '+text)
         time.sleep(1)
 
+def health():
+    forwarded = run('forward', 'tcp:0', 'tcp:8123').strip()
+    try:
+        with urlopen(f'http://127.0.0.1:{forwarded}/readyz', timeout=6) as response:
+            assert json.load(response)['status'] == 'ready'
+    finally:
+        run('forward', '--remove', 'tcp:'+forwarded, check=False)
+    return True
+
 report = {'passed': False, 'serial': args.serial, 'samples': [],
           'commit': os.environ.get('GITHUB_SHA', ''),
           'apk_sha256': hashlib.sha256(args.apk.read_bytes()).hexdigest()}
@@ -110,8 +119,26 @@ try:
     run('install', '-r', '-t', str(args.apk.resolve()))
     assert 'Success' in run('shell', 'pm', 'clear', package)
     if args.full_ui:
-        instrument = subprocess.run(adb+['shell', 'am', 'instrument', '-w', package+'/.SmokeInstrumentation'],
-                                    capture_output=True, text=True, timeout=360)
+        for attempt in range(3):
+            log_offset = (out/'logcat-full.txt').stat().st_size
+            instrument = subprocess.run(adb+['shell', 'am', 'instrument', '-w', package+'/.SmokeInstrumentation'],
+                                        capture_output=True, text=True, timeout=360)
+            (out/f'webview-smoke-attempt-{attempt}.log').write_text(instrument.stdout+instrument.stderr)
+            if 'INSTRUMENTATION_CODE: -1' in instrument.stdout:
+                break
+            time.sleep(1)
+            recent = (out/'logcat-full.txt').read_bytes()[log_offset:].decode('utf-8', errors='replace')
+            provider_exit = [line for line in recent.splitlines() if f':{package}/' in line
+                             and 'depends on provider' in line and 'FontsProvider' in line]
+            # Fresh Google API images refresh their font provider once. The UI
+            # runner can be killed by Android, but the independent server must
+            # still be healthy. Retry only that evidenced platform event.
+            if 'Process crashed' not in instrument.stdout or not provider_exit or not health():
+                break
+            report.setdefault('font_provider_fixture_retries', []).append(provider_exit)
+            run('shell', 'am', 'force-stop', package)
+            assert 'Success' in run('shell', 'pm', 'clear', package)
+            time.sleep(5)
         (out/'webview-smoke.log').write_text(instrument.stdout+instrument.stderr)
         assert 'INSTRUMENTATION_CODE: -1' in instrument.stdout, instrument.stdout
         assert 'webview_login_navigation=passed' in instrument.stdout, instrument.stdout
@@ -131,18 +158,6 @@ try:
     time.sleep(3)
     if report['api'] >= 33:
         click_text(None, 'permission_deny_button')
-    def health():
-        # Recreate a short-lived tunnel for every probe: an SDK client can reset
-        # ADB forwarding while leaving the actual service/process unaffected.
-        forwarded = run('forward', 'tcp:0', 'tcp:8123').strip()
-        try:
-            with urlopen(f'http://127.0.0.1:{forwarded}/readyz', timeout=6) as response:
-                body = json.load(response)
-                assert body['status'] == 'ready'
-        finally:
-            run('forward', '--remove', 'tcp:'+forwarded, check=False)
-        return True
-
     deadline = time.monotonic()+150
     while True:
         try:
@@ -171,14 +186,17 @@ try:
     # Kill only the UI process, as Android may do after a font/provider failure.
     # No package-wide force-stop: the dedicated foreground service must survive.
     run('shell', 'input', 'keyevent', '3')
-    killed = subprocess.run(adb+['shell', 'run-as', package, 'kill', '-9', ui_pid],
-                            capture_output=True, text=True, timeout=45)
-    time.sleep(2)
-    remaining_ui = run('shell', 'pidof', package, check=False).strip().split()
+    remaining_ui = [ui_pid]
+    for attempt in range(5):
+        # am kill reclaims only safe background processes. Unlike force-stop it
+        # leaves the foreground :server process running, with no root required.
+        run('shell', 'am', 'kill', '--user', '0', package)
+        time.sleep(2)
+        remaining_ui = run('shell', 'pidof', package, check=False).strip().split()
+        if ui_pid not in remaining_ui:
+            break
     assert ui_pid not in remaining_ui, 'The original UI process is still running'
-    # A provider can already have killed the UI between the PID read and signal.
-    # Both paths must demonstrate the same strict outcome: UI gone, server alive.
-    report['ui_termination_method'] = 'signal' if killed.returncode == 0 else 'already_exited'
+    report['ui_termination_method'] = 'activity_manager_background_reclamation'
     report['ui_process_termination_survived'] = health() and run('shell', 'pidof', package+':server').strip() == original_pid
     assert report['ui_process_termination_survived']
     run('shell', 'am', 'start', '-W', '-n', package+'/.MainActivity')
