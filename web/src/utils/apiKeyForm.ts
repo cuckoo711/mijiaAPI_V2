@@ -1,5 +1,17 @@
 import type { ApiKeyResourcePolicy, CreateApiKeyPayload } from "../types/admin";
 
+export type ExpiryMode = "inherit" | "never" | "30" | "90" | "180" | "custom";
+
+export function expiryForMode(mode: ExpiryMode, value: string): string | null | undefined {
+  if (mode === "inherit") return undefined;
+  if (mode === "never") return null;
+  if (mode === "custom") {
+    if (!value.trim()) throw new Error("请选择过期时间");
+    return futureExpiry(value);
+  }
+  return new Date(Date.now() + Number(mode) * 86_400_000).toISOString();
+}
+
 export function futureExpiry(value: string): string | null {
   if (!value.trim()) return null;
   const date = new Date(value);

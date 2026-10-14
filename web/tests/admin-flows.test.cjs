@@ -173,6 +173,46 @@ test("API Key form sends restricted IDs and a UTC expiry, rejects an empty restr
   assert.throws(() => futureExpiry("2000-01-01T00:00"), /晚于当前时间/);
 });
 
+test("API Key expiry presets use submission time and custom expiry cannot be empty or past", () => {
+  const { expiryForMode } = harness().load("src/utils/apiKeyForm.ts");
+  for (const days of [30, 90, 180]) {
+    const before = Date.now();
+    const expiry = Date.parse(expiryForMode(String(days), "2000-01-01"));
+    const after = Date.now();
+    assert.ok(expiry >= before + days * 86_400_000);
+    assert.ok(expiry <= after + days * 86_400_000);
+  }
+  assert.equal(expiryForMode("never", "2099-01-01"), null);
+  assert.equal(expiryForMode("inherit", "2099-01-01"), undefined);
+  assert.throws(() => expiryForMode("custom", ""), /请选择过期时间/);
+  assert.throws(() => expiryForMode("custom", "2000-01-01"), /晚于当前时间/);
+});
+
+test("Key create and rotate submit the selected expiry mode without stale custom dates", () => {
+  const h = harness();
+  const { setup, emissions } = h.component("src/views/ApiKeysView.vue", { oneTimeApiKey: "", apiKeys: [], homes: [], devices: [], scenes: [], creating: false, busyKeyId: "" });
+  setup.keyForm.name = "integration";
+  setup.createExpiryMode.value = "custom";
+  setup.onCreate();
+  assert.equal(emissions.length, 0);
+  setup.keyForm.expiresAt = "2099-01-01T10:00";
+  setup.onCreate();
+  assert.equal(emissions[0][1].expires_at, new Date("2099-01-01T10:00").toISOString());
+  setup.createExpiryMode.value = "never";
+  setup.onCreate();
+  assert.equal(emissions[1][1].expires_at, null);
+  const key = { id: "key-1", name: "app", expires_at: "2099-01-01T10:00:00Z" };
+  setup.openRotate(key);
+  setup.onRotate();
+  assert.equal(Object.hasOwn(emissions[2][2], "expires_at"), false);
+  setup.rotateExpiryMode.value = "90";
+  setup.onRotate();
+  assert.ok(Date.parse(emissions[3][2].expires_at) > Date.now() + 89 * 86_400_000);
+  setup.rotateExpiryMode.value = "never";
+  setup.onRotate();
+  assert.equal(emissions[4][2].expires_at, null);
+});
+
 test("Key and config views keep entered values until a successful creation", () => {
   const h = harness();
   const keyView = h.component("src/views/ApiKeysView.vue", { oneTimeApiKey: "", apiKeys: [], homes: [], devices: [], scenes: [], creating: false, busyKeyId: "" });

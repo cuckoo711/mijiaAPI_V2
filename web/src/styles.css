@@ -529,7 +529,7 @@ textarea {
 
 .el-message-box {
   border-radius: var(--radius-lg);
-  max-width: calc(100vw - 32px);
+  max-width: min(var(--el-messagebox-width, 420px), calc(100vw - 32px));
 }
 
 .el-dialog {

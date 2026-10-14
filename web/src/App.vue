@@ -530,7 +530,12 @@ async function setApiKeyStatus(key: ApiKeyItem, active: boolean): Promise<void> 
 async function deleteApiKey(key: ApiKeyItem): Promise<void> {
   if (busyKeyId.value) return;
   try {
-    await ElMessageBox.confirm(`删除「${key.name}」后该密钥立即失效，确认删除？`, "删除 API Key", { type: "warning" });
+    await ElMessageBox.confirm(`删除「${key.name}」后该密钥立即失效，确认删除？`, "删除 API Key", {
+      type: "warning",
+      confirmButtonText: "确认删除",
+      cancelButtonText: "取消",
+      autofocus: false,
+    });
   } catch { return; }
   busyKeyId.value = key.id;
   try {
@@ -730,7 +735,7 @@ onBeforeUnmount(() => {
           <div class="brand-subtitle">管理台</div>
         </div>
       </div>
-      <el-menu class="nav-menu" :default-active="activeMenu" @select="selectPage">
+      <el-menu class="nav-menu" :default-active="activeMenu" unique-opened @select="selectPage">
         <el-menu-item :index="dashboardPage.key">
           <el-icon><component :is="dashboardPage.icon" /></el-icon>
           <span>{{ dashboardPage.label }}</span>

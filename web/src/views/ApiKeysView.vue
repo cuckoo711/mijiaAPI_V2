@@ -2,7 +2,8 @@
 import { reactive, ref, watch } from "vue";
 import { apiPermissionRows } from "../data/apiDocs";
 import type { ApiKeyItem, CreateApiKeyPayload, DeviceItem, HomeItem, SceneItem } from "../types/admin";
-import { createKeyPayload, futureExpiry } from "../utils/apiKeyForm";
+import { createKeyPayload, expiryForMode, type ExpiryMode } from "../utils/apiKeyForm";
+import ApiKeyExpiryInput from "../components/ApiKeyExpiryInput.vue";
 
 const props = defineProps<{
   apiKeys: ApiKeyItem[];
@@ -29,8 +30,9 @@ const keyForm = reactive({
   expiresAt: "",
 });
 const rotateKey = ref<ApiKeyItem | null>(null);
+const createExpiryMode = ref<ExpiryMode>("never");
 const rotateExpiry = ref("");
-const rotateExpiryMode = ref("inherit");
+const rotateExpiryMode = ref<ExpiryMode>("inherit");
 
 watch(
   () => props.oneTimeApiKey,
@@ -55,7 +57,8 @@ function toggleApiKeyScope(scope: string, checked: string | number | boolean): v
 
 function onCreate(): void {
   try {
-    emit("create", createKeyPayload(keyForm));
+    const expiresAt = expiryForMode(createExpiryMode.value, keyForm.expiresAt);
+    emit("create", createKeyPayload({ ...keyForm, expiresAt: expiresAt || "" }));
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : "创建参数无效");
   }
@@ -64,7 +67,7 @@ function onCreate(): void {
 function openRotate(key: ApiKeyItem): void {
   rotateKey.value = key;
   rotateExpiry.value = "";
-  rotateExpiryMode.value = key.expires_at && new Date(key.expires_at).getTime() <= Date.now() ? "new" : "inherit";
+  rotateExpiryMode.value = isExpired(key) ? "custom" : "inherit";
 }
 
 function isExpired(key: ApiKeyItem): boolean {
@@ -75,12 +78,8 @@ function onRotate(): void {
   if (!rotateKey.value) return;
   try {
     const payload: { expires_at?: string | null } = {};
-    if (rotateExpiryMode.value === "new") {
-      if (!rotateExpiry.value) throw new Error("请选择新的过期时间");
-      payload.expires_at = futureExpiry(rotateExpiry.value);
-    } else if (rotateExpiryMode.value === "never") {
-      payload.expires_at = null;
-    }
+    const expiresAt = expiryForMode(rotateExpiryMode.value, rotateExpiry.value);
+    if (expiresAt !== undefined) payload.expires_at = expiresAt;
     emit("rotate", rotateKey.value, payload);
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : "轮换参数无效");
@@ -141,8 +140,7 @@ function onRotate(): void {
         </el-form-item>
         <el-alert type="info" :closable="false" title="家庭、设备、场景范围分别限制对应资源列表；限制某个家庭时，请同时选择该家庭允许的设备与场景。设备可控和场景可执行开关仍需单独开启。" />
         <el-form-item label="过期时间">
-          <input v-model="keyForm.expiresAt" type="datetime-local" aria-label="API Key 过期时间" />
-          <span>留空表示不过期</span>
+          <ApiKeyExpiryInput v-model:mode="createExpiryMode" v-model:value="keyForm.expiresAt" />
         </el-form-item>
         <el-button type="primary" :loading="creating" :disabled="creating" @click="onCreate">创建</el-button>
       </el-form>
@@ -187,12 +185,7 @@ function onRotate(): void {
     </el-table>
     <el-dialog :model-value="Boolean(rotateKey)" :close-on-click-modal="!busyKeyId" :close-on-press-escape="!busyKeyId" title="轮换 API Key" width="min(480px, 92vw)" class="app-dialog" @update:model-value="(visible: boolean) => { if (!visible && !busyKeyId) rotateKey = null; }">
       <p>为「{{ rotateKey?.name }}」生成新密钥并停用旧密钥。权限和资源范围继承，旧密钥在轮换成功后失效。</p>
-      <el-select v-model="rotateExpiryMode">
-        <el-option label="继承原过期时间" value="inherit" />
-        <el-option label="设置新过期时间" value="new" />
-        <el-option label="不过期" value="never" />
-      </el-select>
-      <input v-if="rotateExpiryMode === 'new'" v-model="rotateExpiry" type="datetime-local" aria-label="新 API Key 过期时间" />
+      <ApiKeyExpiryInput v-model:mode="rotateExpiryMode" v-model:value="rotateExpiry" allow-inherit />
       <template #footer>
         <el-button :disabled="Boolean(busyKeyId)" @click="rotateKey = null">取消</el-button>
         <el-button type="primary" :loading="Boolean(busyKeyId)" :disabled="Boolean(busyKeyId)" @click="onRotate">确认轮换</el-button>
