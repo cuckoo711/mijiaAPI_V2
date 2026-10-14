@@ -93,7 +93,9 @@ jobs:
           disable-animations: true
           script: python android/ci/test_emulator.py
       - name: Verify signatures, ABI resources and collect release assets
-        run: python android/ci/collect.py
+        run: |
+          python android/ci/test_page_size.py
+          python android/ci/collect.py
       - uses: actions/upload-artifact@v4
         with:
           name: android-build
@@ -118,6 +120,12 @@ jobs:
       fail-fast: false
       matrix:
         api: [24, 31, 33, 34, 35, 36]
+        pages: [4096]
+        target: [google_apis]
+        include:
+          - api: 36
+            pages: 16384
+            target: google_apis_ps16k
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -140,16 +148,16 @@ jobs:
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: ${{ matrix.api }}
-          target: google_apis
+          target: ${{ matrix.target }}
           arch: ${{ matrix.api == 24 && 'x86' || 'x86_64' }}
           cores: 2
           ram-size: 2048M
           disable-animations: true
-          script: python android/ci/test_compatibility.py --serial emulator-5554 --apk $(find android/build/release -name '*universal*.apk') --output android/build/compatibility/api-${{ matrix.api }} --seconds 600 --disposable --expect-console --expect-exemption-ui --full-ui
+          script: python android/ci/test_compatibility.py --serial emulator-5554 --apk $(find android/build/release -name '*universal*.apk') --output android/build/compatibility/api-${{ matrix.api }}-${{ matrix.pages }} --seconds 600 --expect-page-size ${{ matrix.pages }} --disposable --expect-console --expect-exemption-ui --full-ui
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: android-compatibility-${{ matrix.api }}
+          name: android-compatibility-${{ matrix.api }}-${{ matrix.pages }}
           path: android/build/compatibility/*
           if-no-files-found: error
 

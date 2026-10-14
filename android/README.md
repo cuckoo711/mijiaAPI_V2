@@ -74,3 +74,22 @@ Linux CI 从固定提交获取交叉编译器，按 `ci/inputs.json` 的 SHA256 
 发布门禁另外在 API 24、31、33、34、35、36（Android 7.0、12–16）上检查同一通用 APK：真实网页登录与导航、无测试仪器附着的连续 600 秒锁屏 HTTP 探测、进程/前台服务/唤醒锁、系统后台授权入口、强制 Doze 网络与解锁后管理台。Android 7 专门选用 WebView 53，避免仅验证系统另带的 Chrome 69。`android-compatibility.json` 记录每个环境、APK SHA256、逐次采样和准确时长；这些检查通过后才生成最终发布附件。
 
 后台探测会在每次请求前建立独立 ADB 通道，避免共享 SDK 客户端重置端口映射造成误报。休眠网络检查使用应用 UID 连接受控本机端点，不连接真实米家。真机、厂商电池管理、多日运行及 16 KiB 内存页设备仍需独立验证。
+
+
+## 16 KiB 与 24 小时锁屏验收
+
+发布构建递归扫描 APK 与 Chaquopy `.imy` 内的 ELF，要求所有 ARM64 / x86_64 的 LOAD 段满足 16 KiB 对齐，并使用 `zipalign -c -P 16 4` 检查 APK。RELRO 端点单独记录供排查；静态检查不能替代运行时验证。CI 增加 API 36 的 `google_apis_ps16k` 镜像，必须实测用户空间页大小为 16384，并记录内核页大小；x86_64 镜像在 4 KiB 内核上模拟 16 KiB 用户空间，执行与 4 KiB 环境相同的启动、登录、权限、后台、Doze 和解锁检查。
+
+24 小时长测使用服务器上独立的一次性模拟器，由 systemd 托管测试进程，避免终端关闭中断。示例（仅限隔离模拟器，测试会清空应用数据）：
+
+```sh
+python android/ci/test_compatibility.py --serial emulator-5590 --apk /path/to/test.apk \
+  --output /path/to/evidence --seconds 86400 --expect-page-size 16384 \
+  --disposable --expect-console --expect-exemption-ui --full-ui
+```
+
+每 30 秒记录 UTC 时间、实际经过时间、内核启动标识、系统运行时间、后端 PID、HTTP 就绪、锁屏与唤醒锁状态，并原子写入 `compatibility.json`。任一失败立即结束且记录失败；必须完成至少 86400 秒并通过解锁后管理台检查才标记通过。重启或修复后从零计时，不能拼接多段短测。报告的 APK 哈希绑定实际受测文件；旧包的长测结果不能套用于新包。长测不在 GitHub 托管任务中等待一天，CI 的 600 秒门禁与独立长测报告分别发布。
+
+测试进度保存在隔离测试目录的 `compatibility.json`；只有 `state=passed`、受测 APK 哈希匹配且实际时长达标才算通过。模拟器结果不代表 ARM 真机或各厂商后台策略。
+
+API 35 的 16 KiB 镜像内置 WebView 124，在管理台加载时会于 WebView MemoryInfra 线程原生崩溃。应用会在创建 WebView 前阻止此组合并提示更新组件，后台服务可以独立启动。完整管理台与长测使用 API 36 的 16 KiB 镜像，报告中记录实际 WebView 版本。

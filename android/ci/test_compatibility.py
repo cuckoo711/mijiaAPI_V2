@@ -14,6 +14,7 @@ import socketserver
 import subprocess
 import threading
 import time
+from datetime import datetime, timezone
 from urllib.request import urlopen
 import xml.etree.ElementTree as ET
 
@@ -26,6 +27,7 @@ parser.add_argument('--disposable', action='store_true', required=True)
 parser.add_argument('--expect-console', action='store_true')
 parser.add_argument('--expect-exemption-ui', action='store_true')
 parser.add_argument('--full-ui', action='store_true')
+parser.add_argument('--expect-page-size', type=int, choices=(4096, 16384))
 args = parser.parse_args()
 assert args.serial.startswith('emulator-'), 'Disposable emulators only'
 assert args.seconds >= 60
@@ -33,6 +35,16 @@ out = args.output
 out.mkdir(parents=True, exist_ok=True)
 adb = ['adb', '-s', args.serial]
 package = 'com.cuckoo.mijia.standalone'
+if args.expect_page_size == 16384:
+    # Disable Android's 4 KiB backcompat fallback on this disposable userdebug
+    # image. Root is only for system properties; the app keeps its normal UID.
+    subprocess.run(adb+['root'], check=True, timeout=45)
+    subprocess.run(adb+['wait-for-device'], check=True, timeout=90)
+    for name, value in [('bionic.linker.16kb.app_compat.enabled', 'false'),
+                        ('pm.16kb.app_compat.disabled', 'true')]:
+        subprocess.run(adb+['shell', 'setprop', name, value], check=True, timeout=45)
+        actual = subprocess.check_output(adb+['shell', 'getprop', name], text=True, timeout=45).strip()
+        assert actual == value, 'Could not disable page-size backcompat fallback'
 logcat_sink = (out/'logcat-full.txt').open('wb')
 live_logcat = subprocess.Popen(adb+['logcat', '-v', 'threadtime', 'ActivityManager:I',
                                     'AndroidRuntime:E', 'MijiaServer:V', 'MijiaSmoke:V',
@@ -92,6 +104,7 @@ def health():
     return True
 
 report = {'passed': False, 'serial': args.serial, 'samples': [],
+          'state': 'preflight', 'requested_seconds': args.seconds,
           'commit': os.environ.get('GITHUB_SHA', ''),
           'apk_sha256': hashlib.sha256(args.apk.read_bytes()).hexdigest()}
 initial_idle = run('shell', 'dumpsys', 'deviceidle')
@@ -103,6 +116,15 @@ try:
         smaps = run('shell', 'cat', '/proc/self/smaps')
         page_size = str(int(re.search(r'KernelPageSize:\s+(\d+) kB', smaps).group(1))*1024)
     report['page_size'] = int(page_size)
+    report['page_size_backcompat_disabled'] = args.expect_page_size == 16384
+    smaps = run('shell', 'cat', '/proc/self/smaps')
+    report['kernel_page_sizes_kib'] = sorted({int(value) for value in re.findall(r'KernelPageSize:\s+(\d+) kB', smaps)})
+    # x86_64 Google's 16 KiB image simulates 16 KiB userspace on a 4 KiB kernel.
+    # Preserve both facts rather than describing it as an ARM 16 KiB kernel.
+    report['page_size_environment'] = ('simulated_16k_userspace' if report['page_size'] == 16384
+                                      and 16 not in report['kernel_page_sizes_kib'] else 'kernel_pages')
+    if args.expect_page_size:
+        assert report['page_size'] == args.expect_page_size, 'Unexpected kernel page size'
     report['abis'] = run('shell', 'getprop', 'ro.product.cpu.abilist').strip()
     report['webview'] = run('shell', 'dumpsys', 'webviewupdate').strip()
     if report['api'] == 24:
@@ -209,21 +231,40 @@ try:
     run('shell', 'settings', 'put', 'global', 'stay_on_while_plugged_in', '0')
     run('shell', 'input', 'keyevent', '223')
     started = time.monotonic()
+    report['state'] = 'screen_off_running'
+    report['screen_off_started_utc'] = datetime.now(timezone.utc).isoformat()
+    boot_id = run('shell', 'cat', '/proc/sys/kernel/random/boot_id').strip()
+    report['guest_boot_id'] = boot_id
+    previous_uptime = 0.0
     while True:
-        sample = {'elapsed_seconds': round(time.monotonic()-started, 1)}
+        sample = {'elapsed_seconds': round(time.monotonic()-started, 1),
+                  'utc': datetime.now(timezone.utc).isoformat()}
         try:
             sample['http_ready'] = health()
         except Exception as error:
             sample['http_ready'] = False
             sample['error'] = type(error).__name__
         sample['pid'] = run('shell', 'pidof', package+':server').strip()
+        sample['boot_id'] = run('shell', 'cat', '/proc/sys/kernel/random/boot_id').strip()
+        sample['guest_uptime'] = float(run('shell', 'cat', '/proc/uptime').split()[0])
+        power = run('shell', 'dumpsys', 'power')
+        sample['screen_off'] = 'mWakefulness=Asleep' in power or 'mWakefulness=Dozing' in power
+        sample['wake_lock'] = 'mijia:server' in power
         report['samples'].append(sample)
-        (out/'compatibility.json').write_text(json.dumps(report, indent=2))
+        checkpoint = out/'compatibility.pending.json'
+        checkpoint.write_text(json.dumps(report, indent=2), encoding='utf-8')
+        checkpoint.replace(out/'compatibility.json')
         print(f"API {report['api']}: screen off {sample['elapsed_seconds']}s, HTTP={sample['http_ready']}, pid={sample['pid']}", flush=True)
+        assert sample['http_ready'] and sample['pid'] == original_pid, 'Background service interrupted'
+        assert sample['boot_id'] == boot_id and sample['guest_uptime'] >= previous_uptime, 'Guest rebooted'
+        assert sample['screen_off'] and sample['wake_lock'], 'Screen or wake lock changed during endurance test'
+        previous_uptime = sample['guest_uptime']
         if time.monotonic()-started >= args.seconds:
             break
         time.sleep(min(30, args.seconds-(time.monotonic()-started)))
     report['screen_off_seconds'] = round(time.monotonic()-started, 1)
+    report['screen_off_finished_utc'] = datetime.now(timezone.utc).isoformat()
+    report['state'] = 'postflight'
     power = run('shell', 'dumpsys', 'power')
     services = run('shell', 'dumpsys', 'activity', 'services', package)
     (out/'power.txt').write_text(power)
@@ -305,7 +346,11 @@ try:
                         and report['forced_idle_confirmed']
                         and report['network_before_idle'] and report['network_idle_exempted']
                         and (report['console_rendered'] or not args.expect_console))
+except Exception as error:
+    report['error'] = f'{type(error).__name__}: {error}'
+    raise
 finally:
+    report['state'] = 'passed' if report['passed'] else 'failed'
     try:
         run('shell', 'dumpsys', 'deviceidle', 'unforce', check=False)
         run('shell', 'dumpsys', 'deviceidle', 'whitelist', '-'+package, check=False)

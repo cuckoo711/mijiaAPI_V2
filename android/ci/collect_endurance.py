@@ -1,0 +1,45 @@
+"""Publishable summary only after uninterrupted, completed 24-hour runs."""
+import argparse
+from datetime import datetime, timezone
+import hashlib
+import json
+from pathlib import Path
+
+parser = argparse.ArgumentParser()
+parser.add_argument('--apk', type=Path, required=True)
+parser.add_argument('--reports', type=Path, nargs='+', required=True)
+parser.add_argument('--output', type=Path, required=True)
+args = parser.parse_args()
+digest = hashlib.sha256(args.apk.read_bytes()).hexdigest()
+environments = {}
+for path in args.reports:
+    report = json.loads(path.read_text(encoding='utf-8'))
+    assert report['passed'] and report['state'] == 'passed', f'Incomplete: {path}'
+    assert report['apk_sha256'] == digest, 'APK mismatch'
+    assert report['screen_off_seconds'] >= 86400 and report['requested_seconds'] >= 86400
+    assert all(report[key] for key in ('console_after_unlock', 'background_passed',
+                                      'forced_idle_confirmed', 'http_idle_exempted',
+                                      'ui_process_termination_survived', 'ui_process_recreated'))
+    samples = report['samples']
+    assert samples[0]['elapsed_seconds'] <= 5 and samples[-1]['elapsed_seconds'] >= 86400
+    for previous, sample in zip(samples, samples[1:]):
+        assert 0 < sample['elapsed_seconds'] - previous['elapsed_seconds'] < 120
+        assert sample['guest_uptime'] >= previous['guest_uptime']
+    assert samples[-1]['guest_uptime'] - samples[0]['guest_uptime'] >= 86390
+    assert all(s['http_ready'] and s['screen_off'] and s['wake_lock']
+               and s['pid'] == report['initial_pid'] and s['boot_id'] == report['guest_boot_id']
+               for s in samples)
+    key = f"{report['api']}-{report['page_size']}"
+    assert key not in environments
+    if report['page_size'] == 16384:
+        assert report['page_size_backcompat_disabled']
+    environments[key] = report
+assert {'24-4096', '36-16384'} <= environments.keys(), 'Both old Android and 16 KiB runs required'
+args.output.write_text(json.dumps({
+    'passed': True, 'apk_sha256': digest, 'generated_utc': datetime.now(timezone.utc).isoformat(),
+    'environments': environments,
+    'limitations': ['Disposable emulators; x86_64 simulates 16 KiB userspace on 4 KiB kernel',
+                    'Availability sampled every 30 seconds; not a continuous request stream',
+                    'No physical ARM phones, OEM battery management, Xiaomi cloud or real device actions'],
+}, indent=2), encoding='utf-8')
+print(f'24-hour endurance passed: {sorted(environments)}; APK SHA256 {digest}')

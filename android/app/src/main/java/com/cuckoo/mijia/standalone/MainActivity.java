@@ -30,13 +30,14 @@ public class MainActivity extends Activity {
     private boolean webReset;
     public volatile int rendererRecoveries;
     private boolean pageOpened;
+    private String webViewIssue = "";
     private final Runnable refresh = new Runnable() {
         @Override public void run() {
             server.refresh();
             status.setText(server.status + (lan.isChecked() ? "\n局域网：" + addresses() : "\n仅允许本机访问") + (webReset ? "\n管理台已重置，请重新打开" : ""));
             start.setEnabled(!server.active);
             stop.setEnabled(server.active);
-            open.setEnabled(server.ready && web != null);
+            open.setEnabled(server.ready && (web != null || !webViewIssue.isEmpty()));
             lan.setEnabled(!server.active);
             handler.postDelayed(this, 1000);
         }
@@ -87,6 +88,17 @@ public class MainActivity extends Activity {
                 .setMessage("停止后，本机管理台和局域网 API 暂时不可用。数据会保留。")
                 .setNegativeButton("取消",null).setPositiveButton("停止",(d,w) -> startService(new Intent(this,ServerService.class).setAction(ServerService.STOP))).show());
         open = button(controls, "打开管理台", v -> {
+            if (!webViewIssue.isEmpty()) {
+                new AlertDialog.Builder(this).setTitle("请更新系统 WebView")
+                        .setMessage(webViewIssue)
+                        .setNegativeButton("关闭",null)
+                        .setPositiveButton("前往更新",(d,w) -> {
+                            try { startActivity(new Intent(Intent.ACTION_VIEW,
+                                    Uri.parse("https://play.google.com/store/apps/details?id=com.google.android.webview"))); }
+                            catch (ActivityNotFoundException error) { Toast.makeText(this,"请通过系统应用商店更新 Android System WebView",Toast.LENGTH_LONG).show(); }
+                        }).show();
+                return;
+            }
             if (web == null || !server.connected || server.ownerToken.isEmpty()) return;
             webReset = false;
             java.util.regex.Matcher chrome = java.util.regex.Pattern.compile("Chrome/(\\d+)").matcher(web.getSettings().getUserAgentString());
@@ -111,6 +123,20 @@ public class MainActivity extends Activity {
     }
 
     private void installWebView() {
+        if (Build.VERSION.SDK_INT >= 26 && android.system.Os.sysconf(android.system.OsConstants._SC_PAGESIZE) == 16384) {
+            android.content.pm.PackageInfo provider = WebView.getCurrentWebViewPackage();
+            if (provider != null && provider.versionName != null) {
+                java.util.regex.Matcher version = java.util.regex.Pattern.compile("^(\\d+)").matcher(provider.versionName);
+                if (version.find() && Integer.parseInt(version.group(1)) <= 124) {
+                    // The API 35 16 KiB image's WebView 124 crashes in native
+                    // MemoryInfra, before a renderer recovery callback can run.
+                    webViewIssue = "此设备使用 16 KiB 内存页，当前系统 WebView " + provider.versionName
+                            + " 存在兼容问题，打开页面可能崩溃。请先更新 Android System WebView，再重新打开应用。后台 API 服务仍可独立运行。";
+                    android.util.Log.w("MijiaBrowser", "Blocked incompatible WebView on 16 KiB pages: " + provider.versionName);
+                    return;
+                }
+            }
+        }
         web = new WebView(this); web.setVisibility(View.GONE);
         web.getSettings().setJavaScriptEnabled(true); web.getSettings().setDomStorageEnabled(true);
         web.getSettings().setAllowFileAccess(false); web.getSettings().setAllowContentAccess(false);
