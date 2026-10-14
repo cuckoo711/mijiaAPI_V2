@@ -1,9 +1,29 @@
 pluginManagement {
-    repositories { google(); mavenCentral(); gradlePluginPortal() }
+    repositories {
+        if (System.getenv('MIJIA_MAVEN_LOCAL')) {
+            maven { url uri(System.getenv('MIJIA_MAVEN_LOCAL')) }
+        }
+        if (System.getenv('MIJIA_MAVEN_MIRROR')) {
+            for (String repo : ['google', 'central', 'gradle-plugin']) {
+                maven { url System.getenv('MIJIA_MAVEN_MIRROR') + '/' + repo }
+            }
+        }
+        google(); mavenCentral(); gradlePluginPortal()
+    }
 }
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
-    repositories { google(); mavenCentral() }
+    repositories {
+        if (System.getenv('MIJIA_MAVEN_LOCAL')) {
+            maven { url uri(System.getenv('MIJIA_MAVEN_LOCAL')) }
+        }
+        if (System.getenv('MIJIA_MAVEN_MIRROR')) {
+            for (String repo : ['google', 'central']) {
+                maven { url System.getenv('MIJIA_MAVEN_MIRROR') + '/' + repo }
+            }
+        }
+        google(); mavenCentral()
+    }
 }
 rootProject.name = 'MijiaStandalone'
 include ':app'

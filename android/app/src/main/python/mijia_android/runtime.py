@@ -24,9 +24,12 @@ def settings_for(data_dir, lan=False):
     root.mkdir(parents=True, exist_ok=True)
     bundle = Path(__file__).resolve().parent
     return ServerSettings(
-        host="0.0.0.0" if lan else "127.0.0.1", port=8123,
-        data_dir=root, database_path=root / "server/server.sqlite3",
-        credential_path=root / "credential.json", config_file_path=root / "server.toml",
+        host="0.0.0.0" if lan else "127.0.0.1",
+        port=8123,
+        data_dir=root,
+        database_path=root / "server/server.sqlite3",
+        credential_path=root / "credential.json",
+        config_file_path=root / "server.toml",
         config_template_path=bundle / "assets/server.toml.template",
         web_dist_dir=bundle / "ui",
     )
@@ -48,11 +51,20 @@ def run(data_dir, lan=False):
     store = ServerStore(settings)
     store.initialize()
     store.set_config("ALLOW_LAN_ACCESS", bool(lan), source="android")
-    server = uvicorn.Server(uvicorn.Config(
-        create_app(settings, store=store), host=settings.host, port=settings.port,
-        loop="asyncio", http="h11", ws="none", proxy_headers=False,
-        access_log=False, log_level="warning", timeout_graceful_shutdown=8,
-    ))
+    server = uvicorn.Server(
+        uvicorn.Config(
+            create_app(settings, store=store),
+            host=settings.host,
+            port=settings.port,
+            loop="asyncio",
+            http="h11",
+            ws="none",
+            proxy_headers=False,
+            access_log=False,
+            log_level="warning",
+            timeout_graceful_shutdown=8,
+        )
+    )
     with _lock:
         _server = server
         server.should_exit = _stop_requested

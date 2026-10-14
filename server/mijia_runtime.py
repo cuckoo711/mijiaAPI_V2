@@ -52,7 +52,15 @@ def render_qr_data_url(content: str, *, box_size: int = 6, border: int = 2) -> s
     )
     qr.add_data(content)
     qr.make(fit=True)
-    image = qr.make_image(fill_color="black", back_color="white")
+    try:
+        from PIL import Image  # noqa: F401
+    except ImportError:
+        # Embedded Android builds use pypng instead of Pillow's native libraries.
+        from qrcode.image.pure import PyPNGImage
+
+        image = qr.make_image(image_factory=PyPNGImage)
+    else:
+        image = qr.make_image(fill_color="black", back_color="white")
     buffer = io.BytesIO()
     image.save(buffer)
     encoded = base64.b64encode(buffer.getvalue()).decode("ascii")

@@ -34,6 +34,7 @@ chaquopy {
         if (project.hasProperty('buildPython')) buildPython project.property('buildPython')
         extractPackages 'mijia_android', 'Crypto'
         pip {
+            options '--no-index'
             options '--find-links', rootProject.file('wheels/dist').absolutePath
             install '-r', rootProject.file('requirements.txt').absolutePath
         }

@@ -11,7 +11,9 @@ import android.provider.Settings;
 import android.view.*;
 import android.webkit.*;
 import android.widget.*;
-import java.net.*;
+import java.net.Inet4Address;
+import java.net.InetAddress;
+import java.net.NetworkInterface;
 import java.util.*;
 
 public class MainActivity extends Activity {

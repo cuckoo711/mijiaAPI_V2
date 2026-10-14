@@ -1,5 +1,7 @@
 """Build the two native dependencies with a pinned Chaquopy cross-compiler."""
+
 import argparse
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -10,29 +12,36 @@ parser.add_argument("--chaquopy-source", type=Path, required=True)
 parser.add_argument("--abis", nargs="+", default=["armeabi-v7a", "arm64-v8a", "x86_64"])
 parser.add_argument("--source-cache", type=Path)
 args = parser.parse_args()
+os.environ.setdefault("SOURCE_DATE_EPOCH", "315532800")
 chaquopy = args.chaquopy_source.resolve()
 if (chaquopy / ".source-sha").exists():
     revision = (chaquopy / ".source-sha").read_text().strip()
 else:
-    revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=chaquopy, text=True).strip()
+    revision = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=chaquopy, text=True
+    ).strip()
 assert revision == CHAQUOPY_COMMIT, "Review the cross-compiler before changing its pinned revision"
 driver = chaquopy / "server/pypi/build-wheel.py"
 text = driver.read_text()
-text = text.replace('                if link_filename != filename:',
-                    '                if link_filename != filename and not exists(f"{reqs_lib_dir}/{link_filename}"):')
-text = text.replace('"CARGO_BUILD_TARGET": tool_prefix,',
-                    '"CARGO_BUILD_TARGET": "armv7-linux-androideabi" if self.abi == "armeabi-v7a" else tool_prefix,')
+text = text.replace(
+    "                if link_filename != filename:",
+    '                if link_filename != filename and not exists(f"{reqs_lib_dir}/{link_filename}"):',
+)
+text = text.replace(
+    '"CARGO_BUILD_TARGET": tool_prefix,',
+    '"CARGO_BUILD_TARGET": "armv7-linux-androideabi" if self.abi == "armeabi-v7a" else tool_prefix,',
+)
 old = '        run(f"rustup target add {tool_prefix}")'
-new = '''        # The caller installs official Rust components for all requested targets.
+new = """        # The caller installs official Rust components for all requested targets.
         config = Path(self.host_env) / "pyo3-cross.txt"
         config.write_text("\\n".join([
             "implementation=CPython", "version=" + self.python, "shared=true", "abi3=false",
             "lib_name=python" + self.python, "lib_dir=" + self.host_env + "/chaquopy/lib",
             "pointer_width=" + ("32" if self.abi in ["armeabi-v7a", "x86"] else "64"),
         ]) + "\\n")
-        env["PYO3_CONFIG_FILE"] = str(config.resolve())'''
+        env["PYO3_CONFIG_FILE"] = str(config.resolve())"""
 if old in text:
-    text = text.replace(old, new).replace('            "PYO3_NO_PYTHON": "1",', '')
+    text = text.replace(old, new).replace('            "PYO3_NO_PYTHON": "1",', "")
 driver.write_text(text)
 assert 'env["PYO3_CONFIG_FILE"]' in driver.read_text()
 
@@ -59,6 +68,10 @@ for package in ["pycryptodome", "pydantic-core"]:
     for abi in args.abis:
         if any(output.glob(f"{package.replace('-', '_')}-*{abi.replace('-', '_')}.whl")):
             continue
-        subprocess.run([str(driver), "--python", "3.11", "--abi", abi, str(recipe)], cwd=driver.parent, check=True)
+        subprocess.run(
+            [str(driver), "--python", "3.11", "--abi", abi, str(recipe)],
+            cwd=driver.parent,
+            check=True,
+        )
         for wheel in (driver.parent / "dist" / package).glob(f"*{abi.replace('-', '_')}.whl"):
             shutil.copy2(wheel, output / wheel.name)

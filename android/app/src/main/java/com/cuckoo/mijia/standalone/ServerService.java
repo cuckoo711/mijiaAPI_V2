@@ -54,7 +54,7 @@ public class ServerService extends Service {
                         .callAttr("run", getFilesDir().getAbsolutePath() + "/service", lan);
             } catch (Throwable error) {
                 // Do not put potentially credential-bearing exception messages into notifications.
-                status = "启动失败：" + error.getClass().getSimpleName() + "（请导出诊断日志）";
+                status = "启动失败：" + error.getClass().getSimpleName() + "（请重试或提供测试反馈）";
                 android.util.Log.e("MijiaServer", "Embedded runtime failed", error);
             } finally {
                 active = false; ready = false;
