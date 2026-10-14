@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { CopyDocument } from "@element-plus/icons-vue";
+import ResourceAuthorizationActions from "../components/ResourceAuthorizationActions.vue";
 import { computed, onBeforeUnmount } from "vue";
 import { buildSceneExecuteCurl } from "../apiExamples";
 import type { HomeItem, SceneItem } from "../types/admin";
@@ -15,12 +16,15 @@ const props = defineProps<{
   pendingIds: string[];
   request: AdminRequest;
   controlMemory?: SceneControlMemory;
+  bulkBusy?: boolean;
+  syncing?: boolean;
 }>();
 
 const emit = defineEmits<{
   "auto-save-executable": [scene: SceneItem, value: string | number | boolean];
   "auto-save-hidden": [scene: SceneItem, value: string | number | boolean];
   "check-devices": [];
+  "bulk-authorize": [enabled: boolean];
 }>();
 const { selected, visible, outcome, busy, canExecute, openScene, closeScene, acknowledgeUnknown, executeScene } = useSceneControl({ request: props.request, getScene: (id) => props.scenes.find((scene) => scene.id === id), memory: props.controlMemory });
 onBeforeUnmount(closeScene);
@@ -46,6 +50,7 @@ async function copySceneExecuteCurl(sceneId: string): Promise<void> {
 
 <template>
   <section>
+    <ResourceAuthorizationActions label="场景执行" :count="scenes.length" :busy="bulkBusy" :disabled="syncing || Boolean(pendingIds.length)" @change="emit('bulk-authorize', $event)" />
     <el-table :data="scenes" border>
       <el-table-column prop="name" label="名称" min-width="180" />
       <el-table-column label="家庭" min-width="160">
@@ -71,7 +76,7 @@ async function copySceneExecuteCurl(sceneId: string): Promise<void> {
         <template #default="{ row }">
           <el-switch
             v-model="row.executable"
-            :disabled="pendingIds.includes(row.id)"
+            :disabled="bulkBusy || pendingIds.includes(row.id)"
             @change="(value: string | number | boolean) => emit('auto-save-executable', row, value)"
           />
         </template>
@@ -80,7 +85,7 @@ async function copySceneExecuteCurl(sceneId: string): Promise<void> {
         <template #default="{ row }">
           <el-switch
             v-model="row.hidden"
-            :disabled="pendingIds.includes(row.id)"
+            :disabled="bulkBusy || pendingIds.includes(row.id)"
             @change="(value: string | number | boolean) => emit('auto-save-hidden', row, value)"
           />
         </template>

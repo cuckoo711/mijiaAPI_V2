@@ -27,16 +27,16 @@ function disabledDate(date: Date): boolean {
       <el-date-picker
         v-if="mode === 'custom'"
         :model-value="value"
-        type="datetime"
-        value-format="YYYY-MM-DDTHH:mm:ss"
-        format="YYYY-MM-DD HH:mm:ss"
-        placeholder="选择过期日期和时间"
-        aria-label="过期日期和时间"
+        type="date"
+        value-format="YYYY-MM-DD"
+        format="YYYY-MM-DD"
+        placeholder="选择到期日期"
+        aria-label="到期日期"
         :disabled-date="disabledDate"
         @update:model-value="emit('update:value', $event || '')"
       />
     </el-config-provider>
-    <span v-if="mode === '30' || mode === '90' || mode === '180'" class="expiry-hint">从提交时起计算有效期</span>
+    <span v-if="mode !== 'never' && mode !== 'inherit'" class="expiry-hint">到期日期当天有效，次日零点失效</span>
   </div>
 </template>
 

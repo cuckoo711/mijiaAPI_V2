@@ -163,7 +163,7 @@ function onRotate(): void {
         </template>
       </el-table-column>
       <el-table-column label="过期时间" min-width="180">
-        <template #default="{ row }">{{ row.expires_at ? new Date(row.expires_at).toLocaleString() : '不过期' }}</template>
+        <template #default="{ row }">{{ row.expires_at ? new Date(new Date(row.expires_at).getTime() - 1).toLocaleDateString() : '不过期' }}</template>
       </el-table-column>
       <el-table-column label="状态" width="100">
         <template #default="{ row }">

@@ -6,10 +6,18 @@ export function expiryForMode(mode: ExpiryMode, value: string): string | null | 
   if (mode === "inherit") return undefined;
   if (mode === "never") return null;
   if (mode === "custom") {
-    if (!value.trim()) throw new Error("请选择过期时间");
-    return futureExpiry(value);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) throw new Error("请选择到期日期");
+    const date = new Date(`${value}T00:00:00`);
+    if (!Number.isFinite(date.getTime()) || date.getFullYear() !== Number(value.slice(0, 4)) || date.getMonth() + 1 !== Number(value.slice(5, 7)) || date.getDate() !== Number(value.slice(8, 10))) {
+      throw new Error("请选择有效的到期日期");
+    }
+    date.setDate(date.getDate() + 1);
+    return futureExpiry(date.toISOString());
   }
-  return new Date(Date.now() + Number(mode) * 86_400_000).toISOString();
+  const date = new Date();
+  date.setDate(date.getDate() + Number(mode) + 1);
+  date.setHours(0, 0, 0, 0);
+  return date.toISOString();
 }
 
 export function futureExpiry(value: string): string | null {

@@ -18,7 +18,7 @@ const deferred = () => {
 const settle = () => new Promise((resolve) => setImmediate(resolve));
 
 /** Run the actual TS/SFC script with isolated browser I/O; no generated files. */
-function harness(fetchImpl = async () => reply({ items: [] })) {
+function harness(fetchImpl = async () => reply({ items: [] }), confirm = async () => {}) {
   const storage = new Map([["mijia_admin_expires_at", expiry()]]);
   const timers = new Map();
   const calls = [];
@@ -50,7 +50,7 @@ function harness(fetchImpl = async () => reply({ items: [] })) {
     const code = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
     const requireModule = (specifier) => {
       if (specifier === "vue") return { ...vue, onMounted() {}, onBeforeUnmount() {} };
-      if (specifier === "element-plus") return { ElMessageBox: { confirm: async () => {} } };
+      if (specifier === "element-plus") return { ElMessageBox: { confirm } };
       if (specifier === "@element-plus/icons-vue") return {};
       if (specifier.endsWith(".vue")) return {};
       if (specifier.startsWith(".")) {
@@ -173,19 +173,24 @@ test("API Key form sends restricted IDs and a UTC expiry, rejects an empty restr
   assert.throws(() => futureExpiry("2000-01-01T00:00"), /晚于当前时间/);
 });
 
-test("API Key expiry presets use submission time and custom expiry cannot be empty or past", () => {
+test("API Key date expiry lasts through the selected local day and rejects invalid dates", () => {
   const { expiryForMode } = harness().load("src/utils/apiKeyForm.ts");
   for (const days of [30, 90, 180]) {
-    const before = Date.now();
     const expiry = Date.parse(expiryForMode(String(days), "2000-01-01"));
-    const after = Date.now();
-    assert.ok(expiry >= before + days * 86_400_000);
-    assert.ok(expiry <= after + days * 86_400_000);
+    const expected = new Date();
+    expected.setDate(expected.getDate() + days + 1);
+    expected.setHours(0, 0, 0, 0);
+    assert.equal(expiry, expected.getTime());
   }
   assert.equal(expiryForMode("never", "2099-01-01"), null);
   assert.equal(expiryForMode("inherit", "2099-01-01"), undefined);
-  assert.throws(() => expiryForMode("custom", ""), /请选择过期时间/);
+  assert.throws(() => expiryForMode("custom", ""), /请选择到期日期/);
   assert.throws(() => expiryForMode("custom", "2000-01-01"), /晚于当前时间/);
+  assert.throws(() => expiryForMode("custom", "2099-02-30"), /有效的到期日期/);
+  assert.equal(expiryForMode("custom", "2099-01-01"), new Date(2099, 0, 2).toISOString());
+  const today = new Date();
+  const localDay = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+  assert.ok(Date.parse(expiryForMode("custom", localDay)) > Date.now());
 });
 
 test("Key create and rotate submit the selected expiry mode without stale custom dates", () => {
@@ -195,9 +200,9 @@ test("Key create and rotate submit the selected expiry mode without stale custom
   setup.createExpiryMode.value = "custom";
   setup.onCreate();
   assert.equal(emissions.length, 0);
-  setup.keyForm.expiresAt = "2099-01-01T10:00";
+  setup.keyForm.expiresAt = "2099-01-01";
   setup.onCreate();
-  assert.equal(emissions[0][1].expires_at, new Date("2099-01-01T10:00").toISOString());
+  assert.equal(emissions[0][1].expires_at, new Date(2099, 0, 2).toISOString());
   setup.createExpiryMode.value = "never";
   setup.onCreate();
   assert.equal(emissions[1][1].expires_at, null);
@@ -211,6 +216,55 @@ test("Key create and rotate submit the selected expiry mode without stale custom
   setup.rotateExpiryMode.value = "never";
   setup.onRotate();
   assert.equal(emissions[4][2].expires_at, null);
+});
+
+test("batch authorization waits for confirmation and sends one request without overwriting drafts", async () => {
+  const confirmation = deferred();
+  const h = harness(async () => reply({ count: 2 }), () => confirmation.promise);
+  const app = h.component("src/App.vue").setup;
+  app.devices.value = [
+    { id: "a", access_mode: "read", slug: "unsaved", hidden: true },
+    { id: "b", access_mode: "read", slug: "other", hidden: false },
+  ];
+  const pending = app.bulkAuthorize("devices", true);
+  assert.equal(app.bulkAuthorizationBusy.value, true);
+  assert.equal(h.calls.length, 0);
+  await app.bulkAuthorize("devices", false);
+  confirmation.resolve();
+  await pending;
+  const writes = h.calls.filter(c => c.options?.method === "POST");
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].url, "/api/admin/devices/authorization/batch");
+  assert.deepEqual(JSON.parse(writes[0].options.body), { ids: ["a", "b"], enabled: true });
+  assert.equal(app.devices.value[0].slug, "unsaved");
+  assert.equal(app.devices.value[0].hidden, true);
+  assert.ok(app.devices.value.every(d => d.access_mode === "write"));
+  assert.equal(app.bulkAuthorizationBusy.value, false);
+});
+
+test("batch cancel and failure preserve permissions and release the busy state", async () => {
+  for (const cancel of [true, false]) {
+    const h = harness(async () => reply({ error: { message: "资源列表已变化" } }, 404), async () => {
+      if (cancel) throw new Error("cancel");
+    });
+    const app = h.component("src/App.vue").setup;
+    app.scenes.value = [{ id: "scene", executable: true }];
+    await app.bulkAuthorize("scenes", false);
+    assert.equal(app.scenes.value[0].executable, true);
+    assert.equal(app.bulkAuthorizationBusy.value, false);
+    assert.equal(h.calls.length, cancel ? 0 : 1);
+    assert.equal(h.messages.some(m => m.kind === "success"), false);
+  }
+});
+
+test("batch scene authorization disables all confirmed scenes in one request", async () => {
+  const h = harness(async () => reply({ count: 1 }));
+  const app = h.component("src/App.vue").setup;
+  app.scenes.value = [{ id: "scene", executable: true, hidden: true }];
+  await app.bulkAuthorize("scenes", false);
+  assert.equal(app.scenes.value[0].executable, false);
+  assert.equal(app.scenes.value[0].hidden, true);
+  assert.deepEqual(JSON.parse(h.calls[0].options.body), { ids: ["scene"], enabled: false });
 });
 
 test("Key and config views keep entered values until a successful creation", () => {

@@ -93,6 +93,38 @@ class UpdateSceneRequest(BaseModel):
     executable: Optional[bool] = None
 
 
+class BulkAuthorizationRequest(BaseModel):
+    ids: list[str] = Field(min_length=1, max_length=10000)
+    enabled: bool = Field(strict=True)
+
+    @field_validator("ids")
+    @classmethod
+    def nonempty_ids(cls, value: list[str]) -> list[str]:
+        if any(not item.strip() for item in value):
+            raise ValueError("资源标识不能为空")
+        return list(dict.fromkeys(value))
+
+
+@router.post("/api/admin/{kind}/authorization/batch")
+def admin_bulk_authorization(
+    kind: Literal["devices", "scenes"],
+    payload: BulkAuthorizationRequest,
+    admin: dict[str, Any] = Depends(require_admin),
+    current_store: ServerStore = Depends(get_store),
+) -> dict[str, Any]:
+    result = current_store.set_resource_authorization(kind, payload.ids, payload.enabled)
+    _audit_admin(
+        current_store,
+        admin,
+        "resource.authorization.batch",
+        kind=kind,
+        ids=result["ids"],
+        count=result["count"],
+        enabled=payload.enabled,
+    )
+    return result
+
+
 @router.get("/api/admin/system/check")
 def admin_system_check(
     _admin: dict[str, Any] = Depends(require_admin),

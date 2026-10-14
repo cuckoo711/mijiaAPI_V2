@@ -5,6 +5,7 @@ import type { AdminRequest, DeviceState } from "../types/control";
 import { useDeviceControl, type DeviceControlMemory } from "../composables/useDeviceControl";
 import { actionKey, parameterKey, propertyKey } from "../utils/controlForm";
 import SpecValueInput from "../components/SpecValueInput.vue";
+import ResourceAuthorizationActions from "../components/ResourceAuthorizationActions.vue";
 
 const props = defineProps<{
   devices: DeviceItem[];
@@ -13,6 +14,7 @@ const props = defineProps<{
   pendingIds: string[];
   request: AdminRequest;
   controlMemory?: DeviceControlMemory;
+  bulkBusy?: boolean;
 }>();
 
 const {
@@ -54,6 +56,7 @@ function stateReadLabel(item: DeviceState): string {
 
 const emit = defineEmits<{
   sync: [];
+  "bulk-authorize": [enabled: boolean];
   "update-device": [device: DeviceItem];
   "auto-save-access": [device: DeviceItem, value: string | number | boolean];
   "auto-save-hidden": [device: DeviceItem, value: string | number | boolean];
@@ -143,7 +146,7 @@ function deviceStatusTag(status: string): "success" | "danger" | "warning" | "in
 <template>
   <section class="devices-page">
     <div class="device-filter-bar">
-      <el-button :loading="syncing" :disabled="syncing" @click="emit('sync')">
+      <el-button :loading="syncing" :disabled="syncing || bulkBusy" @click="emit('sync')">
         {{ syncing ? "同步中..." : "重新同步" }}
       </el-button>
       <el-select v-model="deviceFilters.home" clearable placeholder="家庭" class="filter-control">
@@ -164,6 +167,7 @@ function deviceStatusTag(status: string): "success" | "danger" | "warning" | "in
       </el-select>
       <el-button @click="resetDeviceFilters">重置</el-button>
     </div>
+    <ResourceAuthorizationActions label="设备控制" :count="devices.length" :busy="bulkBusy" :disabled="syncing || Boolean(pendingIds.length)" @change="emit('bulk-authorize', $event)" />
     <el-table :data="paginatedDevices" border height="100%" class="devices-table">
       <el-table-column label="显示名" min-width="180">
         <template #default="{ row }">
@@ -172,7 +176,7 @@ function deviceStatusTag(status: string): "success" | "danger" | "warning" | "in
       </el-table-column>
       <el-table-column label="Slug" min-width="180">
         <template #default="{ row }">
-          <el-input v-model="row.slug" :disabled="pendingIds.includes(row.id)" />
+          <el-input v-model="row.slug" :disabled="bulkBusy || pendingIds.includes(row.id)" />
         </template>
       </el-table-column>
       <el-table-column label="家庭" min-width="160">
@@ -198,7 +202,7 @@ function deviceStatusTag(status: string): "success" | "danger" | "warning" | "in
             inactive-text="只读"
             inline-prompt
             class="access-switch"
-            :disabled="pendingIds.includes(row.id)"
+            :disabled="bulkBusy || pendingIds.includes(row.id)"
             @change="(value: string | number | boolean) => emit('auto-save-access', row, value)"
           />
         </template>
@@ -207,14 +211,14 @@ function deviceStatusTag(status: string): "success" | "danger" | "warning" | "in
         <template #default="{ row }">
           <el-switch
             v-model="row.hidden"
-            :disabled="pendingIds.includes(row.id)"
+            :disabled="bulkBusy || pendingIds.includes(row.id)"
             @change="(value: string | number | boolean) => emit('auto-save-hidden', row, value)"
           />
         </template>
       </el-table-column>
       <el-table-column label="操作" width="220" fixed="right">
         <template #default="{ row }">
-          <el-button size="small" :loading="pendingIds.includes(row.id)" :disabled="pendingIds.includes(row.id)" @click="emit('update-device', row)">保存</el-button>
+          <el-button size="small" :loading="pendingIds.includes(row.id)" :disabled="bulkBusy || pendingIds.includes(row.id)" @click="emit('update-device', row)">保存</el-button>
           <el-button size="small" @click="openDevice(row)">状态与控制</el-button>
         </template>
       </el-table-column>

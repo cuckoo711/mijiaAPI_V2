@@ -97,6 +97,7 @@ const creatingApiKey = ref(false);
 const busyKeyId = ref("");
 const pendingDeviceIds = ref<string[]>([]);
 const pendingSceneIds = ref<string[]>([]);
+const bulkAuthorizationBusy = ref(false);
 const savingConfig = ref(false);
 const logoutError = ref("");
 const deviceControlMemory = ref(createDeviceControlMemory());
@@ -580,7 +581,7 @@ async function updateDevice(device: DeviceItem, message = "设备已更新"): Pr
 }
 
 async function saveDevice(device: DeviceItem, patch: Partial<DeviceItem>, message: string): Promise<boolean> {
-  if (pendingDeviceIds.value.includes(device.id)) return false;
+  if (bulkAuthorizationBusy.value || pendingDeviceIds.value.includes(device.id)) return false;
   pendingDeviceIds.value = [...pendingDeviceIds.value, device.id];
   try {
     await request(`/api/admin/devices/${device.id}`, { method: "PATCH", body: JSON.stringify(patch) });
@@ -616,7 +617,7 @@ async function autoSaveDeviceHidden(device: DeviceItem, value: string | number |
 }
 
 async function saveScene(scene: SceneItem, patch: Partial<SceneItem>, message: string): Promise<boolean> {
-  if (pendingSceneIds.value.includes(scene.id)) return false;
+  if (bulkAuthorizationBusy.value || pendingSceneIds.value.includes(scene.id)) return false;
   pendingSceneIds.value = [...pendingSceneIds.value, scene.id];
   try {
     await request(`/api/admin/scenes/${scene.id}`, { method: "PATCH", body: JSON.stringify(patch) });
@@ -646,6 +647,43 @@ async function autoSaveSceneHidden(scene: SceneItem, value: string | number | bo
   const previousValue = !Boolean(value);
   if (!await saveScene(scene, { hidden: Boolean(value) }, "隐藏状态已保存")) {
     scene.hidden = previousValue;
+  }
+}
+
+async function bulkAuthorize(kind: "devices" | "scenes", enabled: boolean): Promise<void> {
+  if (bulkAuthorizationBusy.value || syncing.value || pendingDeviceIds.value.length || pendingSceneIds.value.length) return;
+  const resources = kind === "devices" ? devices.value : scenes.value;
+  const ids = resources.map((resource) => resource.id);
+  if (!ids.length) return;
+  const label = kind === "devices" ? "设备控制" : "场景执行";
+  const verb = enabled ? "开启" : "关闭";
+  bulkAuthorizationBusy.value = true;
+  try {
+    try {
+      await ElMessageBox.confirm(
+        `将${verb}全部 ${ids.length} 项${label}权限（含隐藏项，不受筛选和分页影响）。${enabled ? "开启后，具备对应权限和资源范围的 API Key 可以控制这些资源。" : "关闭后，管理台与 API 均不能控制这些资源；设备状态读取不受影响。"}此操作只修改权限，不会立即执行设备或场景。`,
+        `一键${verb}${label}`,
+        { type: "warning", confirmButtonText: `确认${verb}`, cancelButtonText: "取消", autofocus: false },
+      );
+    } catch { return; }
+    if (!isAuthed.value) return;
+    await request(`/api/admin/${kind}/authorization/batch`, {
+      method: "POST", body: JSON.stringify({ ids, enabled }),
+    });
+    if (!isAuthed.value) return;
+    // Only update the saved permission; preserve other rows' unsaved edits.
+    const confirmed = new Set(ids);
+    if (kind === "devices") {
+      for (const device of devices.value) if (confirmed.has(device.id)) device.access_mode = enabled ? "write" : "read";
+    } else {
+      for (const scene of scenes.value) if (confirmed.has(scene.id)) scene.executable = enabled;
+    }
+    ElMessage.success(`已${verb} ${ids.length} 项${label}权限`);
+    await refreshAuditData();
+  } catch (error) {
+    ElMessage.error(errorMessage(error, "批量权限更新失败，请刷新列表核对当前状态"));
+  } finally {
+    bulkAuthorizationBusy.value = false;
   }
 }
 
@@ -876,12 +914,14 @@ onBeforeUnmount(() => {
           :homes="homes"
           :syncing="syncing"
           :pending-ids="pendingDeviceIds"
+          :bulk-busy="bulkAuthorizationBusy"
           :request="request"
           :control-memory="deviceControlMemory"
           @sync="syncMijia"
           @update-device="updateDevice"
           @auto-save-access="autoSaveDeviceAccess"
           @auto-save-hidden="autoSaveDeviceHidden"
+          @bulk-authorize="bulkAuthorize('devices', $event)"
         />
         <ScenesView
           v-else-if="activeMenu === 'scenes'"
@@ -890,11 +930,14 @@ onBeforeUnmount(() => {
           :api-base-url="apiBaseUrl"
           :one-time-api-key="oneTimeApiKey"
           :pending-ids="pendingSceneIds"
+          :bulk-busy="bulkAuthorizationBusy"
+          :syncing="syncing"
           :request="request"
           :control-memory="sceneControlMemory"
           @check-devices="selectPage('devices')"
           @auto-save-executable="autoSaveSceneExecutable"
           @auto-save-hidden="autoSaveSceneHidden"
+          @bulk-authorize="bulkAuthorize('scenes', $event)"
         />
         <ApiKeysView
           v-else-if="activeMenu === 'keys'"

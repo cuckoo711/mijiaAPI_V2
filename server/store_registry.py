@@ -12,6 +12,29 @@ from server.store import isoformat, utc_now
 class RegistryMixin:
     """Mixin providing synced home/device/scene registry helpers."""
 
+    def set_resource_authorization(
+        self, kind: str, ids: list[str], enabled: bool
+    ) -> dict[str, Any]:
+        """Update a confirmed set of internal IDs atomically, preserving other metadata."""
+        if kind not in {"devices", "scenes"}:
+            raise ValueError("Unknown resource kind")
+        table, column, value = (
+            ("device_registry", "access_mode", "write" if enabled else "read")
+            if kind == "devices"
+            else ("scene_registry", "executable", int(enabled))
+        )
+        unique_ids = list(dict.fromkeys(ids))
+        with self._database.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            existing = {row[0] for row in conn.execute(f"SELECT id FROM {table}")}
+            if any(resource_id not in existing for resource_id in unique_ids):
+                raise KeyError("资源列表已变化，请刷新后重试")
+            conn.executemany(
+                f"UPDATE {table} SET {column} = ? WHERE id = ?",
+                [(value, resource_id) for resource_id in unique_ids],
+            )
+        return {"ids": unique_ids, "enabled": enabled, "count": len(unique_ids)}
+
     def replace_synced_snapshot(
         self,
         homes: list[dict[str, Any]],
