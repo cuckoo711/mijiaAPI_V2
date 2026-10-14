@@ -53,11 +53,11 @@ adb -s emulator-5580 shell am instrument -w com.cuckoo.mijia.standalone/.SmokeIn
 
 验收覆盖原生 AES、Pydantic、二维码生成、真实 HTTP 服务、前端资源、管理员初始化/登录、API Key 权限与撤销，以及停止重启后的 SQLite 数据保留。ARM 指令转换器上的结果与 ARM 真机结果需分别记录。真实米家登录、同步、物理设备控制、旧系统和长时间后台运行不能由这些离线用例证明。
 
-## 本次测试包验收范围
+## test.1 的历史验收范围
 
 `3.9.1-android-test.1` 的 ARM 32 位、ARM 64 位、x86、x86_64 和通用包均已在 Android 11 / API 30、WebView 83 的隔离模拟器中完成检查。ARM 两项使用系统指令转换，x86 两项原生执行；解释器位数、APK 内 ABI 资源、签名和哈希分别核对。凭据使用离线虚构数据验证加密及重启后的密钥对保留，未复用服务器的真实米家凭据。
 
-随 APK 提供 `validation-report.json` 和 `SHA256SUMS`。Android 7–10 的实际运行、ARM 真机、真实米家云与设备动作、长时间锁屏，以及 Android 12 及以上的前台服务策略仍待对应设备验证。测试签名包不等于正式稳定发布。
+test.1 的发布附件提供 `android-validation.json` 和 `ANDROID_SHA256SUMS`。该轮尚未覆盖 Android 7–10、12 及以上的运行与锁屏；以上是 test.1 的历史范围。后续测试包增加的六系统、锁屏与渲染进程恢复检查见下方发布门禁和对应 Release 的 `android-compatibility.json`。ARM 真机、真实米家云与设备动作、厂商省电策略及多日运行仍需单独验证。
 
 ## GitHub 自动构建与发布
 
