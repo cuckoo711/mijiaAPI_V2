@@ -171,8 +171,14 @@ try:
     # Kill only the UI process, as Android may do after a font/provider failure.
     # No package-wide force-stop: the dedicated foreground service must survive.
     run('shell', 'input', 'keyevent', '3')
-    run('shell', 'run-as', package, 'kill', '-9', ui_pid)
+    killed = subprocess.run(adb+['shell', 'run-as', package, 'kill', '-9', ui_pid],
+                            capture_output=True, text=True, timeout=45)
     time.sleep(2)
+    remaining_ui = run('shell', 'pidof', package, check=False).strip().split()
+    assert ui_pid not in remaining_ui, 'The original UI process is still running'
+    # A provider can already have killed the UI between the PID read and signal.
+    # Both paths must demonstrate the same strict outcome: UI gone, server alive.
+    report['ui_termination_method'] = 'signal' if killed.returncode == 0 else 'already_exited'
     report['ui_process_termination_survived'] = health() and run('shell', 'pidof', package+':server').strip() == original_pid
     assert report['ui_process_termination_survived']
     run('shell', 'am', 'start', '-W', '-n', package+'/.MainActivity')

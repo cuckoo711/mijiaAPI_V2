@@ -63,7 +63,7 @@ test.1 的发布附件提供 `android-validation.json` 和 `ANDROID_SHA256SUMS`�
 
 ## GitHub 自动构建与发布
 
-推送 `v3.9.1-android-test.6` 这类标签会单独构建、验收并发布 Android 预发布版本。后续常规 `vX.Y.Z` 发布会同时构建桌面程序和 Android 测试 APK，全部通过后统一发布到同一 Release。手动运行 `Android Test APK` 工作流仅构建验收，不创建 Release。
+推送 `v3.9.1-android-test.7` 这类标签会单独构建、验收并发布 Android 预发布版本。后续常规 `vX.Y.Z` 发布会同时构建桌面程序和 Android 测试 APK，全部通过后统一发布到同一 Release。手动运行 `Android Test APK` 工作流仅构建验收，不创建 Release。
 
 优先安装 `mijia-server-android-universal-<版本>.apk`；确认手机架构后也可选择体积较小的 `arm32` 或 `arm64` 包。CI 附件包含 `ANDROID_SHA256SUMS`、`android-validation.json` 和签名/架构校验报告。ARM 模拟器测试使用指令转换，不能替代真机验证。
 
