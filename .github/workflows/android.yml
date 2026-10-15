@@ -95,6 +95,7 @@ jobs:
       - name: Verify signatures, ABI resources and collect release assets
         run: |
           python android/ci/test_page_size.py
+          python android/ci/test_endurance_duration.py
           python android/ci/collect.py
       - uses: actions/upload-artifact@v4
         with:

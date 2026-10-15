@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
+from endurance_duration import validate_duration
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--apk', type=Path, required=True)
@@ -16,16 +17,14 @@ for path in args.reports:
     report = json.loads(path.read_text(encoding='utf-8'))
     assert report['passed'] and report['state'] == 'passed', f'Incomplete: {path}'
     assert report['apk_sha256'] == digest, 'APK mismatch'
-    assert report['screen_off_seconds'] >= 86400 and report['requested_seconds'] >= 86400
+    validate_duration(report)
     assert all(report[key] for key in ('console_after_unlock', 'background_passed',
                                       'forced_idle_confirmed', 'http_idle_exempted',
                                       'ui_process_termination_survived', 'ui_process_recreated'))
     samples = report['samples']
-    assert samples[0]['elapsed_seconds'] <= 5 and samples[-1]['elapsed_seconds'] >= 86400
     for previous, sample in zip(samples, samples[1:]):
         assert 0 < sample['elapsed_seconds'] - previous['elapsed_seconds'] < 120
         assert sample['guest_uptime'] >= previous['guest_uptime']
-    assert samples[-1]['guest_uptime'] - samples[0]['guest_uptime'] >= 86390
     assert all(s['http_ready'] and s['screen_off'] and s['wake_lock']
                and s['pid'] == report['initial_pid'] and s['boot_id'] == report['guest_boot_id']
                for s in samples)
