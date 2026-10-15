@@ -65,6 +65,8 @@ test.1 的发布附件提供 `android-validation.json` 和 `ANDROID_SHA256SUMS`�
 
 推送 `v3.9.1-android-test.8` 这类标签会单独构建、验收并发布 Android 预发布版本。后续常规 `vX.Y.Z` 发布会同时构建桌面程序和 Android 测试 APK，全部通过后统一发布到同一 Release。手动运行 `Android Test APK` 工作流仅构建验收，不创建 Release。
 
+构建产物以 GitHub Release 为准，并自动镜像到 Gitee Release（<https://gitee.com/cuckoo711/mijiaAPI/releases>），便于国内下载。CI 需要仓库 Secret `GITEE_TOKEN`。
+
 优先安装 `mijia-server-android-universal-<版本>.apk`；确认手机架构后也可选择体积较小的 `arm32` 或 `arm64` 包。CI 附件包含 `ANDROID_SHA256SUMS`、`android-validation.json` 和签名/架构校验报告。ARM 模拟器测试使用指令转换，不能替代真机验证。
 
 构建版本默认跟随 `pyproject.toml`，发布标签必须与后端版本匹配；测试序号支持 1–99。`versionCode` 按主版本、次版本、补丁和测试序号递增，正式版本使用序号 99。仓库 Secret `ANDROID_TEST_KEYSTORE` 保存 Base64 编码的现有测试签名库（标准 Android debug 别名与口令），缺失时构建失败，禁止每次随机换签名。迁移仓库或备份时需单独安全保存该密钥，不能提交到 Git。

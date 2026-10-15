@@ -92,6 +92,29 @@ uv run python deploy/scripts/show_device_spec.py "设备名称"
 uv run python deploy/scripts/show_device_spec.py "yeelink.light.lamp4"
 ```
 
+### 3. Gitee Release 镜像
+
+把本地/CI 构建产物发布到 Gitee Release，与 GitHub Release 对齐（同 tag、同附件）。CI 在正式发布与 Android 测试预发布里会自动调用；也可手动补同步：
+
+```bash
+export GITEE_TOKEN=...   # Gitee 私人令牌，需 projects 权限
+
+uv run python deploy/scripts/publish_gitee_release.py \
+  --tag v3.9.1 \
+  --notes-file release-notes.md \
+  --owner cuckoo711 \
+  --repo mijiaAPI \
+  dist/mijia-server-* dist/SHA256SUMS
+```
+
+要点：
+
+- 环境变量 `GITEE_TOKEN` 必填，不会从命令行读取令牌。
+- 默认仓库 `cuckoo711/mijiaAPI`（与 GitHub 的 `cuckoo711/mijiaAPI_V2` 名称不同）。
+- 可重跑：已存在的 Release 会复用；同名附件先删后传，避免重复。
+- `--prerelease` 用于 Android 测试包等预发布。
+- GitHub Actions 需在仓库 Secret 配置 `GITEE_TOKEN`；可用 `GITEE_OWNER` / `GITEE_REPO` 覆盖目标仓库。
+
 ## 其他 Makefile 命令
 
 ```bash

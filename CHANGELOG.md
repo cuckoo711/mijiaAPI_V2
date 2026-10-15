@@ -4,6 +4,7 @@
 
 ## 未发布
 
+- 仓库增加 Gitee 镜像 `cuckoo711/mijiaAPI`：本地配置 `gitee`（SSH）与 `gitee-https` 两个远程；文档克隆地址同时给出 GitHub / Gitee。正式版与 Android 测试预发布在 GitHub Release 创建后，用 `deploy/scripts/publish_gitee_release.py` 将同一套产物镜像到 Gitee Release（需 Secret `GITEE_TOKEN`）。
 - Android 发布门禁增加 16 KiB 用户空间模拟器、APK 对齐及 Python 归档内部原生库扫描；锁屏工具支持至少 24 小时持续采样、原子进度、重启与后台中断检测，长测完成前不标记通过。
 - Android 16 KiB 环境创建管理台前检测 WebView 124 及更旧版本，提示更新系统组件，避免已复现的原生崩溃影响启动界面；完整网页验收使用较新 WebView。
 - Android 测试包接入 GitHub Release：安卓测试标签独立发布，后续正式版本联合桌面与安卓构建验收后发布；保留测试签名，提供五种架构 APK、SHA256 和运行验收报告。

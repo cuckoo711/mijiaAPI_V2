@@ -191,6 +191,10 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - uses: actions/download-artifact@v4
         with:
           name: android-release
@@ -212,3 +216,16 @@ jobs:
           使用持续维护的测试签名，可覆盖升级同签名测试包。附件包含 APK、ANDROID_SHA256SUMS 和验收报告。源码版本以本 Release 标签为准。
           EOF
           gh release create "$GITHUB_REF_NAME" artifacts/* --verify-tag --prerelease --latest=false --title "$GITHUB_REF_NAME · Android 独立服务测试版" --notes-file notes.md
+      - name: Mirror Android test release to Gitee
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+        run: |
+          set -e
+          python deploy/scripts/publish_gitee_release.py \
+            --tag "$GITHUB_REF_NAME" \
+            --notes-file notes.md \
+            --prerelease \
+            --title "$GITHUB_REF_NAME · Android 独立服务测试版" \
+            --owner "${GITEE_OWNER:-cuckoo711}" \
+            --repo "${GITEE_REPO:-mijiaAPI}" \
+            artifacts/*

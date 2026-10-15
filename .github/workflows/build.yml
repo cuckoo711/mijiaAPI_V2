@@ -220,3 +220,18 @@ jobs:
           # body_path 提供的 CHANGELOG 摘要会被放到自动生成的 issue/PR 列表前面
           body_path: ${{ steps.notes.outputs.body_file }}
           generate_release_notes: true
+
+      # Gitee 仓库名与 GitHub 不同（cuckoo711/mijiaAPI）。令牌放 Secret GITEE_TOKEN。
+      - name: Mirror release assets to Gitee
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+        run: |
+          set -e
+          python deploy/scripts/publish_gitee_release.py \
+            --tag "${GITHUB_REF#refs/tags/}" \
+            --notes-file "${{ steps.notes.outputs.body_file }}" \
+            --owner "${GITEE_OWNER:-cuckoo711}" \
+            --repo "${GITEE_REPO:-mijiaAPI}" \
+            artifacts/mijia-server-* \
+            artifacts/SHA256SUMS \
+            android-artifacts/*

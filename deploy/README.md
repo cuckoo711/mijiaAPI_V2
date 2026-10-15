@@ -2,6 +2,15 @@
 
 本目录集中存放 Docker、systemd、可执行文件打包和运维脚本。
 
+源码可从 GitHub 或 Gitee 镜像克隆（国内推荐 Gitee，目录名为 `mijiaAPI`）：
+
+```bash
+git clone https://github.com/cuckoo711/mijiaAPI_V2.git
+# 或 https://gitee.com/cuckoo711/mijiaAPI.git
+```
+
+二进制与 APK 见 [GitHub Release](https://github.com/cuckoo711/mijiaAPI_V2/releases) / [Gitee Release](https://gitee.com/cuckoo711/mijiaAPI/releases)。
+
 > 部署前请阅读 [DISCLAIMER.md](../DISCLAIMER.md)：本项目为第三方非官方软件，建议自托管。请勿以小米/米家官方名义对外提供服务，勿托管他人账号进行商业代控。
 
 ## Docker Compose
@@ -162,7 +171,7 @@ python deploy/packaging/build.py
 
 ## 运维脚本
 
-见 [`scripts/`](scripts/)：`clean`、`extract_release_notes`、`show_device_spec`。
+见 [`scripts/`](scripts/)：`clean`、`extract_release_notes`、`publish_gitee_release`、`show_device_spec`。
 
 ## 依赖就绪与审计恢复
 

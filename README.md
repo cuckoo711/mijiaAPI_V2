@@ -26,8 +26,14 @@
 ### 一键启动
 
 ```bash
+# GitHub（海外网络）
 git clone git@github.com:cuckoo711/mijiaAPI_V2.git
 cd mijiaAPI_V2
+
+# 或 Gitee 镜像（国内网络；克隆目录名为 mijiaAPI）
+# git clone https://gitee.com/cuckoo711/mijiaAPI.git
+# git clone git@gitee.com:cuckoo711/mijiaAPI.git
+# cd mijiaAPI
 
 # 安装依赖 & 构建前端
 uv sync && cd web && npm ci && npm run build && cd ..
@@ -302,18 +308,32 @@ uv run pyinstaller --clean --noconfirm deploy/packaging/mijia-server.spec
 
 产物是 PyInstaller 单文件可执行程序，直接挂在 Release 上，不额外打包成压缩包。Release 同时提供 `SHA256SUMS`，用于核对下载文件的 SHA-256。
 
-Android 手机独立运行服务的测试 APK 见 [Android 测试版下载](https://github.com/cuckoo711/mijiaAPI_V2/releases/tag/v3.9.1-android-test.8)。Android 7.0 起，优先下载 `universal` 通用包；安装使用、兼容性与验收范围见 [Android 说明](android/README.md)。后续版本会自动构建并附带安卓测试包。
+- **GitHub Release**（构建与验收的主入口）：<https://github.com/cuckoo711/mijiaAPI_V2/releases>
+- **Gitee Release**（国内下载镜像，CI 自动同步同一套产物）：<https://gitee.com/cuckoo711/mijiaAPI/releases>
+
+Android 手机独立运行服务的测试 APK 见 [Android 测试版下载](https://github.com/cuckoo711/mijiaAPI_V2/releases/tag/v3.9.1-android-test.8)（Gitee 同标签镜像：<https://gitee.com/cuckoo711/mijiaAPI/releases/tag/v3.9.1-android-test.8>）。Android 7.0 起，优先下载 `universal` 通用包；安装使用、兼容性与验收范围见 [Android 说明](android/README.md)。后续版本会自动构建并附带安卓测试包。
 
 > macOS Intel（x64）不再随版本发布：标准运行器里最后一个 Intel macOS 镜像
 > `macos-13` 已于 2025 年 12 月停止支持，而 PyInstaller 无法交叉编译。Intel Mac
 > 用户请用 `uv sync` 从源码运行，或自行在本机执行上面的打包命令。
 
-推送版本标签后会自动触发 GitHub Actions 构建：
+推送版本标签后会自动触发 GitHub Actions 构建与验收，通过后创建 GitHub Release，并把同一套产物镜像到 Gitee Release：
 
 ```bash
 git tag v3.9.1
 git push origin v3.9.1
+git push gitee v3.9.1    # 同步标签，便于 Gitee 源码与产物对齐
 ```
+
+本地已配置远程：`origin` → GitHub，`gitee` → Gitee SSH，`gitee-https` → Gitee HTTPS。双推可用：
+
+```bash
+git push origin main && git push gitee main
+# SSH 公钥未绑定 Gitee 时改用：
+# git push gitee-https main
+```
+
+CI 向 Gitee 同步附件需要在 GitHub 仓库 Secret 配置 `GITEE_TOKEN`（Gitee 个人设置 → 私人令牌，勾选 `projects`）。仓库属主/名称默认 `cuckoo711/mijiaAPI`，可用 Actions 变量 `GITEE_OWNER` / `GITEE_REPO` 覆盖。脚本见 [`deploy/scripts/publish_gitee_release.py`](deploy/scripts/publish_gitee_release.py)。
 
 ### 运行可执行文件
 
