@@ -8,6 +8,8 @@ on:
     secrets:
       ANDROID_TEST_KEYSTORE:
         required: true
+      GITEE_TOKEN:
+        required: false
 
 permissions:
   contents: read
