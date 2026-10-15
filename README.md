@@ -325,7 +325,7 @@ git push origin v3.9.1
 git push gitee v3.9.1    # 同步标签，便于 Gitee 源码与产物对齐
 ```
 
-本地已配置远程：`origin` → GitHub，`gitee` → Gitee SSH，`gitee-https` → Gitee HTTPS。双推可用：
+本地已配置远程：`origin` → GitHub，`gitee` → Gitee SSH，`gitee-https` → Gitee HTTPS。推送到 GitHub 后，`mirror-gitee` 工作流会自动把 `main` 与 `v*` 标签同步到 Gitee；也可手动双推：
 
 ```bash
 git push origin main && git push gitee main

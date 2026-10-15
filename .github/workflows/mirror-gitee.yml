@@ -1,0 +1,44 @@
+name: Mirror to Gitee
+
+# 代码自动镜像：GitHub 推送 main 或版本标签后，同步到 Gitee 镜像仓库。
+# Release 附件镜像见 build.yml / android.yml 的 Gitee 步骤（同样依赖 Secret GITEE_TOKEN）。
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Push main and tags to Gitee
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          GITEE_OWNER: ${{ vars.GITEE_OWNER || 'cuckoo711' }}
+          GITEE_REPO: ${{ vars.GITEE_REPO || 'mijiaAPI' }}
+        run: |
+          set -e
+          if [ -z "$GITEE_TOKEN" ]; then
+            echo "::error::缺少 Secret GITEE_TOKEN，无法镜像代码到 Gitee。请在仓库 Secret 配置具备 projects 权限的 Gitee 私人令牌。"
+            exit 1
+          fi
+
+          # 令牌只出现在内存 remote URL，不写入磁盘配置
+          git remote add gitee "https://cuckoo711:${GITEE_TOKEN}@gitee.com/${GITEE_OWNER}/${GITEE_REPO}.git"
+
+          echo "Mirroring main to gitee/${GITEE_OWNER}/${GITEE_REPO} ..."
+          git push gitee "HEAD:main"
+
+          echo "Mirroring tags ..."
+          git push gitee --tags
+
+          echo "Gitee mirror updated."
