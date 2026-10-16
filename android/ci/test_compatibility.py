@@ -18,6 +18,8 @@ from datetime import datetime, timezone
 from urllib.request import urlopen
 import xml.etree.ElementTree as ET
 import adb_probe
+from background_postflight import run_postflight
+from observation_evidence import analyze_samples
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--serial', required=True)
@@ -209,6 +211,7 @@ try:
     report['console_accessibility_text'] = '创建管理员' in ui
     report['legacy_update_prompt'] = '请更新系统 WebView' in ui
     original_pid = probe('shell', 'pidof', package+':server').strip()
+    report['process_start_ticks'] = probe('shell', 'cat', f'/proc/{original_pid}/stat').rsplit(')', 1)[1].split()[19]
     assert original_pid.isdigit(), 'Expected one dedicated server process'
     report['initial_pid'] = original_pid
     report['background_process'] = package+':server'
@@ -240,38 +243,66 @@ try:
     run('shell', 'dumpsys', 'battery', 'unplug')
     run('shell', 'settings', 'put', 'global', 'stay_on_while_plugged_in', '0')
     run('shell', 'input', 'keyevent', '223')
+    boot_id = probe('shell', 'cat', '/proc/sys/kernel/random/boot_id').strip()
+    report['guest_boot_id'] = boot_id
+    report['guest_uptime_at_start'] = float(probe('shell', 'cat', '/proc/uptime').split()[0])
     started = time.monotonic()
     report['state'] = 'screen_off_running'
     report['screen_off_started_utc'] = datetime.now(timezone.utc).isoformat()
-    boot_id = probe('shell', 'cat', '/proc/sys/kernel/random/boot_id').strip()
-    report['guest_boot_id'] = boot_id
     previous_uptime = 0.0
+    pending_gaps = []
     while True:
         sample = {'elapsed_seconds': round(time.monotonic()-started, 1),
                   'utc': datetime.now(timezone.utc).isoformat()}
         try:
-            sample['http_ready'] = health()
-        except Exception as error:
-            sample['http_ready'] = False
-            sample['error'] = type(error).__name__
-        sample['pid'] = probe('shell', 'pidof', package+':server').strip()
-        sample['boot_id'] = probe('shell', 'cat', '/proc/sys/kernel/random/boot_id').strip()
-        sample['guest_uptime'] = float(probe('shell', 'cat', '/proc/uptime').split()[0])
-        power = probe('shell', 'dumpsys', 'power')
-        sample['screen_off'] = 'mWakefulness=Asleep' in power or 'mWakefulness=Dozing' in power
-        sample['wake_lock'] = 'mijia:server' in power
+            try:
+                sample['http_ready'] = health()
+            except adb_probe.TransportObservationError:
+                raise
+            except Exception as error:
+                sample.update(http_ready=False, error=type(error).__name__)
+            sample['pid'] = probe('shell', 'pidof', package+':server').strip()
+            sample['boot_id'] = probe('shell', 'cat', '/proc/sys/kernel/random/boot_id').strip()
+            assert sample['pid'] == original_pid, 'Service process changed'
+            assert sample['boot_id'] == boot_id, 'Guest restarted'
+            sample['process_start_ticks'] = probe('shell', 'cat', f'/proc/{original_pid}/stat').rsplit(')', 1)[1].split()[19]
+            sample['guest_uptime'] = float(probe('shell', 'cat', '/proc/uptime').split()[0])
+            power = probe('shell', 'dumpsys', 'power')
+            sample['screen_off'] = 'mWakefulness=Asleep' in power or 'mWakefulness=Dozing' in power
+            sample['wake_lock'] = 'mijia:server' in power
+            sample['kind'] = 'healthy'
+        except adb_probe.TransportObservationError as error:
+            # Keep elapsed time and disclose the gap. Only a subsequent matching
+            # boot/PID/start-time fingerprint can support process continuity.
+            sample.update(kind='observation_gap', reason_category='adb_transport',
+                          error=str(error), continuity='unresolved',
+                          http_availability='observed_ready' if sample.get('http_ready') is True else 'unobserved')
+            pending_gaps.append(len(report['samples']))
+        except AssertionError as error:
+            sample.update(kind='application_incident', error=str(error))
+            report['samples'].append(sample)
+            raise
         report['samples'].append(sample)
+        if sample.get('http_ready') is False:
+            report['application_incident'] = 'HTTP readiness failed; investigate before deciding any retest'
+        if sample['kind'] == 'healthy':
+            assert sample['http_ready'] and sample['pid'] == original_pid, 'Application HTTP or service identity changed'
+            assert sample['boot_id'] == boot_id and sample['guest_uptime'] >= previous_uptime, 'Guest rebooted'
+            assert sample['process_start_ticks'] == report['process_start_ticks'], 'PID was reused'
+            assert sample['screen_off'] and sample['wake_lock'], 'Screen or wake lock changed'
+            previous_uptime = sample['guest_uptime']
+            for index in pending_gaps:
+                report['samples'][index].update(continuity='process_identity_confirmed', recovered_utc=sample['utc'])
+            pending_gaps.clear()
         checkpoint = out/'compatibility.pending.json'
         checkpoint.write_text(json.dumps(report, indent=2), encoding='utf-8')
         checkpoint.replace(out/'compatibility.json')
-        print(f"API {report['api']}: screen off {sample['elapsed_seconds']}s, HTTP={sample['http_ready']}, pid={sample['pid']}", flush=True)
-        assert sample['http_ready'] and sample['pid'] == original_pid, 'Background service interrupted'
-        assert sample['boot_id'] == boot_id and sample['guest_uptime'] >= previous_uptime, 'Guest rebooted'
-        assert sample['screen_off'] and sample['wake_lock'], 'Screen or wake lock changed during endurance test'
-        previous_uptime = sample['guest_uptime']
-        if time.monotonic()-started >= args.seconds:
+        print(f"API {report['api']}: {sample['kind']} at {sample['elapsed_seconds']}s, HTTP={sample.get('http_ready')}, pid={sample.get('pid')}", flush=True)
+        assert sample.get('http_ready') is not False, 'Application HTTP failed; requires review'
+        if time.monotonic()-started >= args.seconds and sample['kind'] == 'healthy':
             break
-        time.sleep(min(30, args.seconds-(time.monotonic()-started)))
+        remaining = args.seconds-(time.monotonic()-started)
+        time.sleep(min(30, remaining) if remaining > 0 else 30)
     report['screen_off_seconds'] = round(time.monotonic()-started, 1)
     report['screen_off_finished_utc'] = datetime.now(timezone.utc).isoformat()
     report['state'] = 'postflight'
@@ -282,75 +313,9 @@ try:
     report['screen_off_confirmed'] = 'mWakefulness=Asleep' in power or 'mWakefulness=Dozing' in power
     report['foreground_service'] = 'isForeground=true' in services
     report['wake_lock_held'] = 'mijia:server' in power
-    report['background_passed'] = all(s['http_ready'] and s['pid'] == original_pid for s in report['samples'])
-    # Test the app UID's network access during forced idle using a controlled
-    # local endpoint, without contacting Xiaomi or any external service.
-    class Probe(socketserver.StreamRequestHandler):
-        def handle(self):
-            self.rfile.readline()
-            self.wfile.write(b'compat-ok\n')
-    with socketserver.ThreadingTCPServer(('127.0.0.1', 0), Probe) as server:
-        threading.Thread(target=server.serve_forever, daemon=True).start()
-        def network():
-            script = f'echo compat | toybox nc -w 3 10.0.2.2 {server.server_address[1]}'
-            return 'compat-ok' in run('shell', f'run-as {package} sh -c {shlex.quote(script)}', check=False)
-        run('shell', 'input', 'keyevent', '224')
-        run('shell', 'wm', 'dismiss-keyguard', check=False)
-        run('shell', 'input', 'keyevent', '82')
-        time.sleep(2)
-        report['network_before_idle'] = network()
-        run('shell', 'input', 'keyevent', '3')
-        run('shell', 'input', 'keyevent', '223')
-        report['idle_enable_result'] = run('shell', 'dumpsys', 'deviceidle', 'enable', check=False).strip()
-        report['force_idle_result'] = run('shell', 'dumpsys', 'deviceidle', 'force-idle', check=False).strip()
-        time.sleep(5)
-        report['network_in_idle'] = network()
-        idle = run('shell', 'dumpsys', 'deviceidle')
-        (out/'idle-before-exemption.txt').write_text(idle)
-        report['forced_idle_confirmed'] = 'mState=IDLE' in idle
-        if args.expect_exemption_ui:
-            run('shell', 'dumpsys', 'deviceidle', 'unforce', check=False)
-            run('shell', 'input', 'keyevent', '224')
-            run('shell', 'wm', 'dismiss-keyguard', check=False)
-            run('shell', 'input', 'keyevent', '82')
-            run('shell', 'am', 'start', '-W', '-n', package+'/.MainActivity')
-            time.sleep(2)
-            await_click('后台运行帮助')
-            await_click('设置后台运行')
-            time.sleep(2)
-            (out/'battery-permission.xml').write_text(hierarchy())
-            assert click_text(None, 'android:id/button1'), 'System battery exemption confirmation missing'
-            time.sleep(2)
-            whitelist = run('shell', 'dumpsys', 'deviceidle', 'whitelist')
-            assert package in whitelist, 'System did not grant requested battery exemption'
-            report['user_exemption_flow'] = True
-            run('shell', 'input', 'keyevent', '3')
-            run('shell', 'input', 'keyevent', '223')
-            run('shell', 'dumpsys', 'deviceidle', 'force-idle')
-        else:
-            run('shell', 'dumpsys', 'deviceidle', 'whitelist', '+'+package)
-            report['user_exemption_flow'] = False
-        time.sleep(3)
-        report['network_idle_exempted'] = network()
-        report['http_idle_exempted'] = health()
-        server.shutdown()
-    run('shell', 'dumpsys', 'deviceidle', 'unforce', check=False)
-    run('shell', 'dumpsys', 'battery', 'reset')
-    run('shell', 'input', 'keyevent', '224')
-    run('shell', 'wm', 'dismiss-keyguard', check=False)
-    run('shell', 'am', 'start', '-W', '-n', package + '/.MainActivity')
-    time.sleep(2)
-    report['http_after_unlock'] = health()
-    if args.expect_console:
-        await_click('打开管理台')
-        # Some system WebViews omit DOM children from accessibility snapshots.
-        # Attach only after background sampling to read the actual DOM.
-        inspected = subprocess.run(adb+['shell', 'am', 'instrument', '-w', '-e', 'mode', 'inspect',
-                                        package+'/.SmokeInstrumentation'], capture_output=True, text=True, timeout=180)
-        (out/'webview-after-unlock.log').write_text(inspected.stdout+inspected.stderr)
-        report['console_after_unlock'] = 'INSTRUMENTATION_CODE: -1' in inspected.stdout and 'webview_ui=passed' in inspected.stdout
-        assert report['console_after_unlock'], inspected.stdout
-    report['console_rendered'] = bool(report.get('browser_login_navigation') and report.get('console_after_unlock'))
+    report['observation_summary'] = analyze_samples(report)
+    report['background_passed'] = report['observation_summary']['unresolved_gap_count'] == 0
+    run_postflight(adb, run, health, report, out, package, args.expect_exemption_ui, args.expect_console)
     report['passed'] = (report['background_passed'] and report['screen_off_confirmed']
                         and report['foreground_service'] and report['wake_lock_held']
                         and report['forced_idle_confirmed']

@@ -2,6 +2,11 @@
 from datetime import datetime, timezone
 import subprocess
 import time
+import re
+
+
+class TransportObservationError(RuntimeError):
+    """Missing measurement; the application outcome is not known from this error."""
 
 
 ALLOWED = {
@@ -17,7 +22,9 @@ ALLOWED = {
 
 def probe(adb, command, on_failure):
     command = tuple(command)
-    assert command in ALLOWED, 'Only explicit metadata reads and ephemeral HTTP transport setup may retry'
+    process_stat = (len(command) == 3 and command[:2] == ('shell', 'cat')
+                    and re.fullmatch(r'/proc/[1-9][0-9]*/stat', command[2]))
+    assert command in ALLOWED or process_stat, 'Only explicit metadata reads and ephemeral HTTP transport setup may retry'
     for attempt in range(1, 4):
         record = {'command': list(command), 'attempt': attempt,
                   'utc': datetime.now(timezone.utc).isoformat(), 'will_retry': attempt < 3}
@@ -31,4 +38,4 @@ def probe(adb, command, on_failure):
         on_failure(record)
         if attempt < 3:
             time.sleep(1)
-    raise RuntimeError(f'ADB probe failed after 3 attempts: {record}')
+    raise TransportObservationError(f'ADB probe failed after 3 attempts: {record}')

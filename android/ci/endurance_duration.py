@@ -16,4 +16,7 @@ def validate_duration(report):
     assert 0 <= report['screen_off_seconds'] - samples[-1]['elapsed_seconds'] <= 5
     last_started = datetime.fromisoformat(samples[-1]['utc'])
     assert 0 <= (finished - last_started).total_seconds() <= 5
-    assert samples[-1]['guest_uptime'] - samples[0]['guest_uptime'] >= 86390
+    healthy = [s for s in samples if s.get('kind') != 'observation_gap']
+    assert healthy
+    baseline = report.get('guest_uptime_at_start', healthy[0]['guest_uptime'])
+    assert healthy[-1]['guest_uptime'] - baseline >= 86390

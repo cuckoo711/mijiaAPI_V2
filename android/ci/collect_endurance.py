@@ -5,6 +5,7 @@ import hashlib
 import json
 from pathlib import Path
 from endurance_duration import validate_duration
+from observation_evidence import analyze_samples
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--apk', type=Path, required=True)
@@ -22,12 +23,7 @@ for path in args.reports:
                                       'forced_idle_confirmed', 'http_idle_exempted',
                                       'ui_process_termination_survived', 'ui_process_recreated'))
     samples = report['samples']
-    for previous, sample in zip(samples, samples[1:]):
-        assert 0 < sample['elapsed_seconds'] - previous['elapsed_seconds'] < 120
-        assert sample['guest_uptime'] >= previous['guest_uptime']
-    assert all(s['http_ready'] and s['screen_off'] and s['wake_lock']
-               and s['pid'] == report['initial_pid'] and s['boot_id'] == report['guest_boot_id']
-               for s in samples)
+    assert analyze_samples(report)['unresolved_gap_count'] == 0
     key = f"{report['api']}-{report['page_size']}"
     assert key not in environments
     if report['page_size'] == 16384:
