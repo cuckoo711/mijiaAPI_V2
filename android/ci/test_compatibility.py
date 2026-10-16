@@ -17,6 +17,7 @@ import time
 from datetime import datetime, timezone
 from urllib.request import urlopen
 import xml.etree.ElementTree as ET
+import adb_probe
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--serial', required=True)
@@ -56,8 +57,11 @@ live_logcat = subprocess.Popen(adb+['logcat', '-v', 'threadtime', 'ActivityManag
 def run(*command, check=True):
     result = subprocess.run(adb + list(command), capture_output=True, text=True, timeout=45)
     if check and result.returncode:
-        raise RuntimeError(result.stderr or result.stdout)
+        raise RuntimeError(f'ADB {command[0]} failed (exit {result.returncode}): {result.stderr or result.stdout or "no output"}')
     return result.stdout
+
+def probe(*command):
+    return adb_probe.probe(adb, command, lambda failure: report.setdefault('transport_failures', []).append(failure))
 
 def hierarchy():
     for attempt in range(3):
@@ -97,7 +101,7 @@ def await_click(text):
         time.sleep(1)
 
 def health():
-    forwarded = run('forward', 'tcp:0', 'tcp:8123').strip()
+    forwarded = probe('forward', 'tcp:0', 'tcp:8123').strip()
     try:
         with urlopen(f'http://127.0.0.1:{forwarded}/readyz', timeout=6) as response:
             assert json.load(response)['status'] == 'ready'
@@ -109,10 +113,11 @@ report = {'passed': False, 'serial': args.serial, 'samples': [],
           'adb_server_port': args.adb_server_port,
           'harness_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
           'harness_commit': os.environ.get('MIJIA_TEST_HARNESS_COMMIT', ''),
+          'transport_helper_sha256': hashlib.sha256(Path(adb_probe.__file__).read_bytes()).hexdigest(),
           'state': 'preflight', 'requested_seconds': args.seconds,
           'commit': os.environ.get('GITHUB_SHA', ''),
           'apk_sha256': hashlib.sha256(args.apk.read_bytes()).hexdigest()}
-initial_idle = run('shell', 'dumpsys', 'deviceidle')
+initial_idle = probe('shell', 'dumpsys', 'deviceidle')
 try:
     report['api'] = int(run('shell', 'getprop', 'ro.build.version.sdk').strip())
     report['android'] = run('shell', 'getprop', 'ro.build.version.release').strip()
@@ -203,7 +208,7 @@ try:
         subprocess.run(adb+['exec-out', 'screencap', '-p'], stdout=image, check=True)
     report['console_accessibility_text'] = '创建管理员' in ui
     report['legacy_update_prompt'] = '请更新系统 WebView' in ui
-    original_pid = run('shell', 'pidof', package+':server').strip()
+    original_pid = probe('shell', 'pidof', package+':server').strip()
     assert original_pid.isdigit(), 'Expected one dedicated server process'
     report['initial_pid'] = original_pid
     report['background_process'] = package+':server'
@@ -224,7 +229,7 @@ try:
             break
     assert ui_pid not in remaining_ui, 'The original UI process is still running'
     report['ui_termination_method'] = 'activity_manager_background_reclamation'
-    report['ui_process_termination_survived'] = health() and run('shell', 'pidof', package+':server').strip() == original_pid
+    report['ui_process_termination_survived'] = health() and probe('shell', 'pidof', package+':server').strip() == original_pid
     assert report['ui_process_termination_survived']
     run('shell', 'am', 'start', '-W', '-n', package+'/.MainActivity')
     await_click('打开管理台')
@@ -238,7 +243,7 @@ try:
     started = time.monotonic()
     report['state'] = 'screen_off_running'
     report['screen_off_started_utc'] = datetime.now(timezone.utc).isoformat()
-    boot_id = run('shell', 'cat', '/proc/sys/kernel/random/boot_id').strip()
+    boot_id = probe('shell', 'cat', '/proc/sys/kernel/random/boot_id').strip()
     report['guest_boot_id'] = boot_id
     previous_uptime = 0.0
     while True:
@@ -249,10 +254,10 @@ try:
         except Exception as error:
             sample['http_ready'] = False
             sample['error'] = type(error).__name__
-        sample['pid'] = run('shell', 'pidof', package+':server').strip()
-        sample['boot_id'] = run('shell', 'cat', '/proc/sys/kernel/random/boot_id').strip()
-        sample['guest_uptime'] = float(run('shell', 'cat', '/proc/uptime').split()[0])
-        power = run('shell', 'dumpsys', 'power')
+        sample['pid'] = probe('shell', 'pidof', package+':server').strip()
+        sample['boot_id'] = probe('shell', 'cat', '/proc/sys/kernel/random/boot_id').strip()
+        sample['guest_uptime'] = float(probe('shell', 'cat', '/proc/uptime').split()[0])
+        power = probe('shell', 'dumpsys', 'power')
         sample['screen_off'] = 'mWakefulness=Asleep' in power or 'mWakefulness=Dozing' in power
         sample['wake_lock'] = 'mijia:server' in power
         report['samples'].append(sample)
@@ -270,8 +275,8 @@ try:
     report['screen_off_seconds'] = round(time.monotonic()-started, 1)
     report['screen_off_finished_utc'] = datetime.now(timezone.utc).isoformat()
     report['state'] = 'postflight'
-    power = run('shell', 'dumpsys', 'power')
-    services = run('shell', 'dumpsys', 'activity', 'services', package)
+    power = probe('shell', 'dumpsys', 'power')
+    services = probe('shell', 'dumpsys', 'activity', 'services', package)
     (out/'power.txt').write_text(power)
     (out/'services.txt').write_text(services)
     report['screen_off_confirmed'] = 'mWakefulness=Asleep' in power or 'mWakefulness=Dozing' in power
