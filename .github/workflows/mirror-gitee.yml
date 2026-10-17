@@ -1,7 +1,7 @@
 name: Mirror to Gitee
 
 # 代码自动镜像：GitHub 推送 main 或版本标签后，同步到 Gitee 镜像仓库。
-# Release 附件镜像见 build.yml / android.yml 的 Gitee 步骤（同样依赖 Secret GITEE_TOKEN）。
+# Release 附件由 sync-gitee-releases.yml 在发布完成后统一同步。
 
 on:
   push:
@@ -10,6 +10,10 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+
+concurrency:
+  group: gitee-code-mirror
+  cancel-in-progress: false
 
 jobs:
   mirror:

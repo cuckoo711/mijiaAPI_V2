@@ -221,19 +221,4 @@ jobs:
           body_path: ${{ steps.notes.outputs.body_file }}
           generate_release_notes: true
 
-      # Gitee 仓库名与 GitHub 不同（cuckoo711/mijiaAPI）。令牌放 Secret GITEE_TOKEN。
-      - name: Mirror release assets to Gitee
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
-          GITEE_OWNER: ${{ vars.GITEE_OWNER || 'cuckoo711' }}
-          GITEE_REPO: ${{ vars.GITEE_REPO || 'mijiaAPI' }}
-          GITEE_UPLOAD_TRANSPORT: curl
-          GITEE_UPLOAD_MAX_SECONDS: '7200'
-        run: |
-          set -e
-          python deploy/scripts/sync_gitee_releases.py \
-            --github-repo "$GITHUB_REPOSITORY" \
-            --tag "${GITHUB_REF#refs/tags/}" \
-            --owner "$GITEE_OWNER" \
-            --repo "$GITEE_REPO"
+      # Gitee is handled by the trusted main workflow after this publisher completes.

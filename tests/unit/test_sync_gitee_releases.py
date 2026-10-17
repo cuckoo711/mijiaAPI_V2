@@ -103,6 +103,14 @@ def test_missing_target_tag_blocks_download_and_creation(monkeypatch):
         sync.sync_release(release(), "source/repo", "target", "repo", "secret")
 
 
+def test_release_without_attachments_is_not_published_as_complete(monkeypatch):
+    source = {**release(), "assets": []}
+    monkeypatch.setattr(sync, "verify_tag", lambda *args: pytest.fail("no tag mutation"))
+    monkeypatch.setattr(sync, "_api", lambda *a, **k: pytest.fail("no empty release"))
+    with pytest.raises(sync.SyncError, match="no verifiable attachments"):
+        sync.sync_release(source, "source/repo", "target", "repo", "secret")
+
+
 @pytest.fixture
 def target(monkeypatch):
     source = release()
@@ -468,3 +476,51 @@ def test_api_failure_retains_http_status_without_response_secrets(monkeypatch, c
     error = capsys.readouterr().err
     assert "HTTP 403" in error
     assert "secret" not in error
+
+
+def test_queued_older_release_is_skipped_before_any_remote_write(monkeypatch, tmp_path):
+    report = tmp_path / "report.json"
+    monkeypatch.setenv("GITEE_TOKEN", "secret")
+    monkeypatch.setattr(
+        sys, "argv", ["sync", "--tag", "v1.0.0", "--latest-only", "--report", str(report)]
+    )
+    older = {
+        **release(),
+        "tag_name": "v1.0.0",
+        "draft": False,
+        "prerelease": False,
+        "published_at": "2026-01-01T00:00:00Z",
+    }
+    newer = {**older, "tag_name": "v2.0.0", "id": 2}
+    monkeypatch.setattr(sync, "source_releases", lambda *args: [older])
+    monkeypatch.setattr(sync, "github_pages", lambda *args: [older, newer])
+    monkeypatch.setattr(sync, "sync_release", lambda *a, **k: pytest.fail("stale version write"))
+    assert sync.main() == 0
+    assert json.loads(report.read_text())[0]["status"] == "superseded"
+
+
+def test_latest_only_still_runs_full_attachment_verification(monkeypatch, tmp_path):
+    report = tmp_path / "report.json"
+    monkeypatch.setenv("GITEE_TOKEN", "secret")
+    monkeypatch.setattr(
+        sys, "argv", ["sync", "--tag", "v2.0.0", "--latest-only", "--report", str(report)]
+    )
+    current = {
+        **release(),
+        "tag_name": "v2.0.0",
+        "draft": False,
+        "prerelease": False,
+        "published_at": "2026-01-01T00:00:00Z",
+    }
+    monkeypatch.setattr(sync, "source_releases", lambda *args: [current])
+    monkeypatch.setattr(sync, "github_pages", lambda *args: [current])
+    calls = []
+
+    def checked(*args):
+        calls.append(args[0]["tag_name"])
+        return {"status": "verified", "verified": 1}
+
+    monkeypatch.setattr(sync, "sync_release", checked)
+    assert sync.main() == 0
+    assert calls == ["v2.0.0"]
+    assert json.loads(report.read_text())[0]["status"] == "verified"

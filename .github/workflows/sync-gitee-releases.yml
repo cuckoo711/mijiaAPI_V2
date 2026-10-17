@@ -1,15 +1,18 @@
-name: Sync existing releases to Gitee
+name: Sync latest releases to Gitee
 
 on:
+  workflow_run:
+    workflows: ['Build Multi-Platform Release', 'Android Test APK']
+    types: [completed]
+  release:
+    types: [published, edited]
+  schedule:
+    # Asia/Shanghai 03:37: recover missed events and incomplete transfers.
+    - cron: '37 19 * * *'
   workflow_dispatch:
     inputs:
-      tag:
-        description: 'latest=最新正式版和最新预发行版；也可指定标签，all 按需补齐历史版本'
-        required: true
-        default: latest
-        type: string
       dry_run:
-        description: '仅检查源清单及标签，不发布发行版或上传附件'
+        description: '仅检查最新正式版与最新 Android 测试版，不写入 Gitee'
         required: true
         default: false
         type: boolean
@@ -18,7 +21,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: gitee-release-backfill
+  group: gitee-release-sync
   cancel-in-progress: false
 
 jobs:
@@ -28,6 +31,8 @@ jobs:
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
       source_sha: ${{ steps.plan.outputs.source_sha }}
+      has_releases: ${{ steps.plan.outputs.has_releases }}
+      dry_run: ${{ steps.plan.outputs.dry_run }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -38,91 +43,23 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Plan published releases from source main
+      - name: Validate event and select latest releases
         id: plan
         env:
           GH_TOKEN: ${{ github.token }}
-          SYNC_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          python - <<'PY'
-          import json
-          import os
-          import subprocess
-          from pathlib import Path
-
-          requested = os.environ["SYNC_TAG"]
-          if not requested.strip():
-              raise SystemExit("::error::tag 不能为空；填写 latest、已发布版本标签或 all。")
-          repository = os.environ["GITHUB_REPOSITORY"]
-          result = subprocess.run(
-              ["gh", "api", "--paginate", "--slurp", f"repos/{repository}/releases?per_page=100"],
-              check=True, capture_output=True, text=True, encoding="utf-8",
-          )
-          releases = [release for page in json.loads(result.stdout) for release in page]
-          published = [
-              release for release in releases
-              if not release.get("draft") and release.get("published_at")
-          ]
-          if requested == "latest":
-              selected = []
-              for prerelease in (False, True):
-                  candidates = [
-                      release for release in published
-                      if bool(release.get("prerelease")) is prerelease
-                  ]
-                  if candidates:
-                      selected.append(max(
-                          candidates, key=lambda release: (release["published_at"], release["id"])
-                      ))
-          else:
-              selected = [
-                  release for release in published
-                  if requested == "all" or release["tag_name"] == requested
-              ]
-          if not selected:
-              raise SystemExit("::error::未找到匹配的 GitHub 已发布发行版；草稿和仅有标签的版本不参与同步。")
-          selected.sort(key=lambda release: (release["created_at"], release["tag_name"]))
-          include = [{"tag": release["tag_name"], "release_id": release["id"]} for release in selected]
-          source_sha = subprocess.check_output(
-              ["git", "rev-parse", "refs/remotes/origin/main"], text=True,
-          ).strip()
-          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
-              output.write("matrix=" + json.dumps({"include": include}, separators=(",", ":")) + "\n")
-              output.write("source_sha=" + source_sha + "\n")
-          print(json.dumps({"source_main": source_sha, "release_count": len(include), "include": include}))
-          PY
-
-      - name: Synchronize source main and tags
-        if: ${{ !inputs.dry_run }}
-        env:
-          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
-          GITEE_OWNER: ${{ vars.GITEE_OWNER || 'cuckoo711' }}
-          GITEE_REPO: ${{ vars.GITEE_REPO || 'mijiaAPI' }}
-        run: |
-          set -euo pipefail
-          if [ -z "$GITEE_TOKEN" ]; then
-            echo "::error::缺少仓库 Secret GITEE_TOKEN（需 projects 权限）。"
-            exit 1
-          fi
-          # 通过进程环境传递 Git HTTP 凭据，不写入仓库配置或命令行 URL。
-          auth=$(printf 'cuckoo711:%s' "$GITEE_TOKEN" | base64 -w0)
-          echo "::add-mask::$auth"
-          export GIT_CONFIG_COUNT=1
-          export GIT_CONFIG_KEY_0=http.https://gitee.com/.extraheader
-          export GIT_CONFIG_VALUE_0="Authorization: Basic $auth"
-          target="https://gitee.com/${GITEE_OWNER}/${GITEE_REPO}.git"
-          git push "$target" refs/remotes/origin/main:refs/heads/main
-          git push "$target" --tags
+          python deploy/scripts/gitee_release_policy.py --github-repo "$GITHUB_REPOSITORY"
 
   sync:
     name: Sync ${{ matrix.tag }}
     needs: plan
+    if: needs.plan.outputs.has_releases == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 360
     strategy:
       fail-fast: false
-      max-parallel: 6
+      max-parallel: 2
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v4
@@ -140,16 +77,46 @@ jobs:
           GITEE_OWNER: ${{ vars.GITEE_OWNER || 'cuckoo711' }}
           GITEE_REPO: ${{ vars.GITEE_REPO || 'mijiaAPI' }}
           SYNC_TAG: ${{ matrix.tag }}
-          SYNC_DRY_RUN: ${{ inputs.dry_run }}
+          SYNC_DRY_RUN: ${{ needs.plan.outputs.dry_run }}
           GITEE_UPLOAD_TRANSPORT: curl
           GITEE_UPLOAD_MAX_SECONDS: '7200'
         run: |
           set -euo pipefail
-          args=(--github-repo "$GITHUB_REPOSITORY" --owner "$GITEE_OWNER" --repo "$GITEE_REPO" --tag "$SYNC_TAG" --report "$RUNNER_TEMP/gitee-release-sync.json")
+          args=(--github-repo "$GITHUB_REPOSITORY" --owner "$GITEE_OWNER" --repo "$GITEE_REPO" --tag "$SYNC_TAG" --latest-only --report "$RUNNER_TEMP/gitee-release-sync.json")
           if [ "$SYNC_DRY_RUN" = true ]; then
             args+=(--dry-run)
+          else
+            if [ -z "$GITEE_TOKEN" ]; then
+              echo "::error::缺少仓库 Secret GITEE_TOKEN（需 projects 权限）。"
+              exit 1
+            fi
+            # Token and its encoded form stay out of Git URLs and disk config.
+            auth=$(printf 'cuckoo711:%s' "$GITEE_TOKEN" | base64 -w0)
+            echo "::add-mask::$auth"
+            export GIT_CONFIG_COUNT=1
+            export GIT_CONFIG_KEY_0=http.https://gitee.com/.extraheader
+            export GIT_CONFIG_VALUE_0="Authorization: Basic $auth"
           fi
-          python -u deploy/scripts/sync_gitee_releases.py "${args[@]}"
+          target="https://gitee.com/${GITEE_OWNER}/${GITEE_REPO}.git"
+          ref="refs/tags/${SYNC_TAG}"
+          sync_once() {
+            if [ "$SYNC_DRY_RUN" != true ]; then
+              git fetch --no-tags origin "$ref:$ref" || return 1
+              git push "$target" "$ref:$ref" || return 1
+            fi
+            python -u deploy/scripts/sync_gitee_releases.py "${args[@]}"
+          }
+          # Retry from a fresh inventory, never blindly repeat a multipart POST.
+          for attempt in 1 2 3; do
+            if sync_once; then
+              exit 0
+            fi
+            if [ "$attempt" = 3 ]; then
+              exit 1
+            fi
+            echo "Synchronization attempt $attempt failed; retrying after 30 seconds."
+            sleep 30
+          done
 
       - name: Save per-release synchronization report
         if: always()

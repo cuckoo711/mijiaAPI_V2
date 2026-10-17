@@ -313,29 +313,17 @@ uv run pyinstaller --clean --noconfirm deploy/packaging/mijia-server.spec
 - **GitHub Release**（构建与验收的主入口）：<https://github.com/cuckoo711/mijiaAPI_V2/releases>
 - **Gitee Release**（国内下载镜像，CI 自动同步同一套产物）：<https://gitee.com/cuckoo711/mijiaAPI/releases>
 
-Android 手机独立运行服务的测试 APK 见 [Android 测试版下载](https://github.com/cuckoo711/mijiaAPI_V2/releases/tag/v3.9.1-android-test.8)（Gitee 同标签镜像：<https://gitee.com/cuckoo711/mijiaAPI/releases/tag/v3.9.1-android-test.8>）。Android 7.0 起，优先下载 `universal` 通用包；安装使用、兼容性与验收范围见 [Android 说明](android/README.md)。后续版本会自动构建并附带安卓测试包。
+Android 手机独立运行服务的测试 APK 见 [GitHub 发行版](https://github.com/cuckoo711/mijiaAPI_V2/releases) 或 [Gitee 发行版](https://gitee.com/cuckoo711/mijiaAPI/releases)，选择最新 `android-test` 测试版。Android 7.0 起，优先下载 `universal` 通用包；安装使用、兼容性与验收范围见 [Android 说明](android/README.md)。后续版本会自动构建并附带安卓测试包。
 
 > macOS Intel（x64）不再随版本发布：标准运行器里最后一个 Intel macOS 镜像
 > `macos-13` 已于 2025 年 12 月停止支持，而 PyInstaller 无法交叉编译。Intel Mac
 > 用户请用 `uv sync` 从源码运行，或自行在本机执行上面的打包命令。
 
-推送版本标签后会自动触发 GitHub Actions 构建与验收，通过后创建 GitHub Release，并把同一套产物镜像到 Gitee Release：
+推送版本标签到 GitHub 后会自动构建与验收，通过后创建 GitHub Release。**Sync latest releases to Gitee** 随发布完成自动同步最高版本号的正式版和最新 Android 测试版，包括全部附件、完整说明和 SHA-256 校验；补发旧标签不会补传历史版本。手工发布或修改说明也会触发同步，每天北京时间 03:37 自动核对和补偿失败，正常发版无需手动操作 Gitee。
 
-```bash
-git tag v3.9.1
-git push origin v3.9.1
-git push gitee v3.9.1    # 同步标签，便于 Gitee 源码与产物对齐
-```
+`mirror-gitee` 工作流自动同步 `main` 与 `v*` 标签。Release 同步统一执行，失败会重新读取清单并自动尝试，已有正确附件核对后复用。详情与排障入口见 [Gitee Release 镜像说明](deploy/scripts/README.md#3-gitee-release-镜像)。
 
-本地已配置远程：`origin` → GitHub，`gitee` → Gitee SSH，`gitee-https` → Gitee HTTPS。推送到 GitHub 后，`mirror-gitee` 工作流会自动把 `main` 与 `v*` 标签同步到 Gitee；也可手动双推：
-
-```bash
-git push origin main && git push gitee main
-# SSH 公钥未绑定 Gitee 时改用：
-# git push gitee-https main
-```
-
-CI 向 Gitee 同步附件需要在 GitHub 仓库 Secret 配置 `GITEE_TOKEN`（Gitee 个人设置 → 私人令牌，勾选 `projects`）。仓库属主/名称默认 `cuckoo711/mijiaAPI`，可用 Actions 变量 `GITEE_OWNER` / `GITEE_REPO` 覆盖。脚本见 [`deploy/scripts/publish_gitee_release.py`](deploy/scripts/publish_gitee_release.py)。
+CI 使用仓库 Secret `GITEE_TOKEN`（Gitee 私人令牌的 `projects` 权限）；仓库属主/名称默认 `cuckoo711/mijiaAPI`，可用 Actions 变量 `GITEE_OWNER` / `GITEE_REPO` 覆盖。令牌保持有效即可，无需在本机重复提供。
 
 ### 运行可执行文件
 

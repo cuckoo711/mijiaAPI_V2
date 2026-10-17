@@ -19,6 +19,7 @@ from urllib.error import HTTPError
 from urllib.parse import quote, urlencode
 from urllib.request import urlopen
 
+from gitee_release_policy import latest_releases
 from publish_gitee_release import (
     API_BASE,
     DEFAULT_OWNER,
@@ -342,6 +343,8 @@ def sync_release(
             assets_by_name(release["assets"], source=True).items(), key=lambda item: item[1]["size"]
         )
     )
+    if not assets:
+        raise SyncError("Published release has no verifiable attachments yet")
     target_commitish = verify_tag(repository, owner, repo, tag)
     summary = {
         "tag": tag,
@@ -428,17 +431,40 @@ def sync_release(
     return summary
 
 
+def sync_selected_release(
+    release: dict[str, Any],
+    repository: str,
+    owner: str,
+    repo: str,
+    token: str,
+    dry_run: bool,
+    latest_only: bool,
+) -> dict[str, Any]:
+    """Recheck selection after queueing or a failed attempt before writing anything."""
+    if latest_only:
+        current_tags = {
+            item["tag_name"]
+            for item in latest_releases(github_pages(f"repos/{repository}/releases?per_page=100"))
+        }
+        if release["tag_name"] not in current_tags:
+            return {"status": "superseded", "verified": 0, "uploaded": 0, "skipped": 0}
+    return sync_release(release, repository, owner, repo, token, dry_run)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     selection = parser.add_mutually_exclusive_group(required=True)
     selection.add_argument("--tag")
     selection.add_argument("--all", action="store_true")
+    parser.add_argument("--latest-only", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--report", type=Path)
     parser.add_argument("--github-repo", default="cuckoo711/mijiaAPI_V2")
     parser.add_argument("--owner", default=DEFAULT_OWNER)
     parser.add_argument("--repo", default=DEFAULT_REPO)
     args = parser.parse_args()
+    if args.latest_only and not args.tag:
+        parser.error("--latest-only requires --tag")
     token = os.environ.get("GITEE_TOKEN", "").strip()
     report: list[dict[str, Any]] = []
     try:
@@ -457,8 +483,14 @@ def main() -> int:
             report.append(entry)
             try:
                 entry.update(
-                    sync_release(
-                        release, args.github_repo, args.owner, args.repo, token, args.dry_run
+                    sync_selected_release(
+                        release,
+                        args.github_repo,
+                        args.owner,
+                        args.repo,
+                        token,
+                        args.dry_run,
+                        args.latest_only,
                     )
                 )
             finally:

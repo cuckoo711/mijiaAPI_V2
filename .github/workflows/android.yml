@@ -221,18 +221,4 @@ jobs:
           使用持续维护的测试签名，可覆盖升级同签名测试包。附件包含 APK、ANDROID_SHA256SUMS 和验收报告。源码版本以本 Release 标签为准。
           EOF
           gh release create "$GITHUB_REF_NAME" artifacts/* --verify-tag --prerelease --latest=false --title "$GITHUB_REF_NAME · Android 独立服务测试版" --notes-file notes.md
-      - name: Mirror Android test release to Gitee
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
-          GITEE_OWNER: ${{ vars.GITEE_OWNER || 'cuckoo711' }}
-          GITEE_REPO: ${{ vars.GITEE_REPO || 'mijiaAPI' }}
-          GITEE_UPLOAD_TRANSPORT: curl
-          GITEE_UPLOAD_MAX_SECONDS: '7200'
-        run: |
-          set -e
-          python deploy/scripts/sync_gitee_releases.py \
-            --github-repo "$GITHUB_REPOSITORY" \
-            --tag "$GITHUB_REF_NAME" \
-            --owner "$GITEE_OWNER" \
-            --repo "$GITEE_REPO"
+      # Gitee is handled by the trusted main workflow after this publisher completes.
