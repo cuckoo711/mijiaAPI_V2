@@ -1,6 +1,6 @@
 # 配置文件说明
 
-本目录是 **默认数据目录**（`MIJIA_SERVER_DATA_DIR=configs`），同时存放 SDK / Server 的 TOML 模板。
+本目录存放 SDK / Server 的 TOML 模板，也是默认数据目录（`MIJIA_SERVER_DATA_DIR=configs`）。
 
 ## 运行时文件（勿提交）
 
@@ -31,8 +31,6 @@ cp configs/mijiaAPI.toml.template configs/mijiaAPI.toml   # 如需自定义 SDK
 2. 项目根目录 `config.toml`
 3. `~/.mijia/config.toml`（可选：多项目共享的用户级配置）
 4. SDK 内置默认值
-
-默认凭据路径：`configs/credential.json`；默认缓存：`configs/cache`。
 
 ## 敏感信息
 

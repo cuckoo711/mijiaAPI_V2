@@ -11,7 +11,7 @@ git clone https://github.com/cuckoo711/mijiaAPI_V2.git
 
 二进制与 APK 见 [GitHub Release](https://github.com/cuckoo711/mijiaAPI_V2/releases) / [Gitee Release](https://gitee.com/cuckoo711/mijiaAPI/releases)。
 
-> 部署前请阅读 [DISCLAIMER.md](../DISCLAIMER.md)：本项目为第三方非官方软件，建议自托管。请勿以小米/米家官方名义对外提供服务，勿托管他人账号进行商业代控。
+使用边界见[免责声明](../DISCLAIMER.md)。
 
 ## Docker Compose
 
@@ -31,9 +31,7 @@ docker compose -f deploy/docker-compose.yml up -d --build
 - `/data/cache/`：SDK 磁盘缓存
 - `/data/audit-pending/`：审计补写队列及异常记录；整卷备份时一并保留
 
-`deploy/Dockerfile` 内置健康检查，容器状态可用以下命令查看：
-
-该检查访问 `/healthz`，用于 HTTP 存活；不单独验证依赖就绪。业务就绪应另外检查 `/readyz`，见下方运维说明。
+Docker 内置 `/healthz` 存活检查，依赖就绪另查 `/readyz`。查看容器状态和日志：
 
 ```bash
 docker compose -f deploy/docker-compose.yml ps
@@ -52,12 +50,7 @@ docker compose -f deploy/docker-compose.yml run --rm mijia-server mijia-server i
 
 ### 配置端口和安全选项
 
-Compose 默认只监听本机。需要局域网访问时，在 **`deploy/` 目录**（compose 文件旁边）创建未提交的 `.env`：
-
-> `.env` 必须和 compose 文件放在一起。Compose 查找 `.env` 的目录依次是
-> `--project-directory`、第一个 `-f` 指定的 compose 文件所在目录、最后才是当前目录。
-> 用 `-f deploy/docker-compose.yml` 启动时该目录就是 `deploy/`，
-> 放在仓库根目录的 `.env` 不会被读取，`MIJIA_BIND_ADDRESS` 会静默回落到 `127.0.0.1`。
+Compose 默认只监听本机。需要局域网访问时，创建未提交的 `deploy/.env`，并在启动命令中用 `--env-file` 指定：
 
 ```dotenv
 MIJIA_BIND_ADDRESS=0.0.0.0
@@ -68,10 +61,10 @@ MIJIA_SERVER_LOG_LEVEL=INFO
 # MIJIA_CREDENTIAL_SECRET=replace-with-a-long-random-secret
 ```
 
-然后重新创建服务：
+在仓库根目录重新创建服务：
 
 ```bash
-docker compose -f deploy/docker-compose.yml up -d --build
+docker compose --env-file deploy/.env -f deploy/docker-compose.yml up -d --build
 ```
 
 将绑定地址改为 `0.0.0.0` 后，建议关闭网络首次创建入口，先执行容器内 `init --admin admin --allow-lan` 明确创建管理员并启用局域网访问策略。
@@ -84,9 +77,7 @@ docker compose -f deploy/docker-compose.yml up -d --build
 python tests/docker/smoke.py --image mijia-server:latest --report docker-smoke-report.json
 ```
 
-脚本使用已构建镜像创建隔离的随机名称容器、回环端口和数据/备份/恢复卷。它从宿主 HTTP 验证首次创建、管理员 Cookie 与 CSRF、API Key 创建/启停/轮换/撤销、restart 与 recreate 持久化，并将停机后的完整数据卷备份到新卷恢复。假米家凭据只用于核对加密文件和 `.credential_key` 配套恢复，不连接米家云或控制物理设备。
-
-脚本输出不含密码、Cookie、API Key 或米家凭据的 JSON 报告，并只清理它创建的临时资源。CI 的 Docker job 会运行该脚本；镜像构建成功不会单独算作运行验证通过。
+脚本创建隔离容器、回环端口和临时卷，从宿主 HTTP 检查首次创建、Cookie 与 CSRF、API Key 生命周期、重启持久化及整卷备份恢复。使用虚构米家凭据检查加密文件和 `.credential_key` 配套恢复，不连接米家云。输出脱敏 JSON 报告，只清理本次创建的资源；CI 的 Docker job 运行同一脚本。
 
 ### 停止、更新和备份
 
@@ -111,13 +102,7 @@ docker run --rm -v mijia-data:/data -v <本机备份目录>:/backup alpine tar x
 
 ### 从旧卷名迁移（仅影响 v3.7.3 及更早已部署的实例）
 
-早期 compose 文件没有显式声明 project name 和卷名，Compose 会用 project directory
-的目录名作前缀，实际卷名是 **`deploy_mijia-data`**，而文档里一直写的是 `mijia-data`。
-两个后果：
-
-- 上面的备份命令会挂到一个**新建的空卷**上，备份出来的是空文件。
-- 现在加了显式卷名 `mijia-data`，直接 `up -d` 会挂空卷，看起来像数据丢了
-  （旧卷仍在，没有被删除）。
+旧配置的默认卷名为 `deploy_mijia-data`，新配置显式使用 `mijia-data`。未迁移就启动或执行新卷的备份命令，会挂载新建的空卷；原数据仍在旧卷。
 
 先确认自己是否有旧卷：
 
@@ -194,7 +179,7 @@ curl -i http://127.0.0.1:8123/healthz
 curl -i http://127.0.0.1:8123/readyz
 ```
 
-`/healthz` 正常返回 200、`{"status":"ok","version":"..."}`。`/readyz` 检查 SQLite 的回滚写入探测、前端 `web_dist_dir/index.html` 存在和审计状态；全部通过返回 200、`status=ready`，否则返回 503、`status=degraded`，`checks.sqlite/frontend/audit` 指出对应依赖。若读取存储配置即失败，503 响应会是标准 `STORAGE_UNAVAILABLE` 错误对象。它不连接米家云验证授权，也不检查真实设备在线或动作效果。Docker 当前使用存活检查；容器 `healthy` 不等同于业务就绪或物理设备验收。
+`/healthz` 正常返回 200、`{"status":"ok","version":"..."}`。`/readyz` 检查 SQLite 回滚写入、前端 `web_dist_dir/index.html` 和审计状态；全部通过返回 200、`status=ready`，否则返回 503、`status=degraded`，`checks.sqlite/frontend/audit` 指出对应依赖。若读取存储配置即失败，返回标准 503 `STORAGE_UNAVAILABLE` 错误对象。这些检查不探测米家授权、真实设备在线或动作效果。
 
 控制响应的 `X-Operation-ID` 对应一次操作的审计事件；`X-Audit-Delivery` 为 `stored`（已写 SQLite）、`queued`（已存文件队列）、`unavailable`（两处都未能保存）。审计失败不会把已经返回的控制结果改成失败，也不能通过重新执行设备操作来补日志。回执可从管理员 `GET /api/admin/operations/{operation_id}` 查询；API Key 可从 `GET /api/v1/operations/{operation_id}` 查询自己发起的操作，须使用仍有效的同一个 Key。回执缺失不证明控制没有执行。
 
@@ -214,9 +199,9 @@ curl -i http://127.0.0.1:8123/readyz
 docker compose -f deploy/docker-compose.yml restart mijia-server
 ```
 
-重启不会恢复丢失的审计事件，也不证明设备执行成功；重启后需再次检查 `/readyz` 与管理员审计健康接口。备份/恢复应保留整个数据目录及原凭据密钥，不能只备份 SQLite 而遗漏仍待补写的事件。
+重启不会恢复丢失的审计事件；重启后再次检查 `/readyz` 与管理员审计健康接口。
 
 控制出现 `409 EXECUTION_UNKNOWN`（`retry_safe=false`）或客户端丢失写入响应时，不得自动重试。先查询最新属性、查操作回执并核对实际设备/场景效果，再明确决定新的请求。审计自动补写只重试记录保存，不重试设备操作；读取请求和确认尚未发送控制的连接失败仍可按 SDK 策略重试。
 
-本项目的单元测试、模拟浏览器和隔离 Docker smoke 不连接真实米家设备；它们验证软件接口与部署生命周期，不替代目标环境的授权、具体规格、共享家庭 owner、实时状态和物理执行效果验收。管理员手动操作接口与参数见 [API Server 开发启动](../docs/开发指南/05-API-Server-开发启动.md#管理员手动控制与操作回执)。
+管理员手动操作接口与参数见 [API Server 开发启动](../docs/开发指南/05-API-Server-开发启动.md#管理员手动控制与操作回执)。
 

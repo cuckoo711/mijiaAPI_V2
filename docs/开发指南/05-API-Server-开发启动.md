@@ -1,6 +1,6 @@
 # API Server 开发启动
 
-本项目在 SDK 外提供 `server/`（FastAPI）与 `web/`（Vue3 管理台）。以下接口以当前源码为准（默认数据目录 `configs/`，部署资产在 `deploy/`）。
+后端位于 `server/`（FastAPI），管理台位于 `web/`（Vue3），默认数据目录为 `configs/`。
 
 ## 后端
 
@@ -72,15 +72,7 @@ proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 proxy_set_header X-Forwarded-Proto $scheme;
 ```
 
-同仓库部署资产见 [`deploy/`](../../deploy/)（Docker、`systemd`、打包脚本、运维脚本），说明见 [`deploy/README.md`](../../deploy/README.md)。
-
-常用命令：
-
-```bash
-docker compose -f deploy/docker-compose.yml up -d --build
-uv run python deploy/packaging/build.py
-uv run python deploy/scripts/show_device_spec.py
-```
+Docker、systemd、打包与运维见[部署说明](../../deploy/README.md)。
 
 ## 管理台会话（Cookie + CSRF）
 
@@ -137,18 +129,6 @@ server/
 └── store_registry.py      # 家庭/设备/场景注册表
 ```
 
-## 当前能力摘要
-
-- 管理员初始化、登录、改密、logout、会话刷新
-- 米家扫码登录（同源二维码图片）、凭据加密落盘与定时刷新
-- 家庭/设备/场景同步（非阻塞 + `task_id` 进度）
-- API Key 作用域与资源策略；校验有短 TTL 缓存
-- 对外 REST：状态、家庭、设备、属性/动作、场景、缓存、审计
-- 设备列表默认不带重型 `raw`/`spec`；需要时传 `include_raw=1` / `include_spec=1`
-- 审计保留清理、磁盘缓存清理、系统自检
-- 管理员按规格手动控制、按操作 ID 查询回执、审计队列补写与依赖就绪检查
-- OpenAPI/Swagger 可开关；开启后仍受网络 ACL 与文档鉴权策略约束
-
 ## 常用接口
 
 管理台（Cookie 或 Bearer）：
@@ -183,7 +163,9 @@ server/
 - `POST /api/v1/cache/clear`
 - `GET  /api/v1/logs`
 
-管理台「API 使用」页有完整示例；交互式文档可在「系统安全」开启。
+设备列表默认不带 `raw`/`spec`，需要时传 `include_raw=1` / `include_spec=1`。API Key 权限校验使用短 TTL 缓存。
+
+管理台「API 使用」页有完整示例；交互式文档可在「系统安全」开启，仍受网络 ACL 和文档鉴权策略约束。
 
 ### 批量属性
 
@@ -234,12 +216,6 @@ curl -H "Authorization: Bearer YOUR_API_KEY" \
 
 `409 EXECUTION_UNKNOWN` 返回 `error.details.outcome="unknown"` 和 `retry_safe=false`，可能还包含已收到的批量结果数量 `completed_count`。这表示请求可能已经执行、回执缺失或后续批次未确认，不能自动重试。先查询最新设备状态或核对场景实际效果；管理台保留输入并要求明确核查后才允许新的手动操作。若浏览器丢失写入响应，也按结果未知处理；查询操作回执返回 404 本身不证明命令未执行。
 
-## 审计恢复、就绪与验收
+## 审计恢复与就绪
 
-审计队列位于 `<data_dir>/audit-pending/`，正常待补写文件为 `.json`，无效记录隔离为 `.invalid`。初始化时尝试补写，服务运行中约每 10 秒再次尝试；每轮默认最多成功补写 100 条。事件 ID 保持不变，重复补写不会产生同 ID 的重复审计行。
-
-`pending` 是待补写文件数量；`invalid` 是异常/隔离记录数量（队列无法检查时也会报告异常）；`unavailable` 是**本进程未能保存的事件历史计数**，不是当前目录可访问性的布尔值。补写可继续处理已有 `pending`，但无法恢复完全未保存的事件，也不会清零 `unavailable`。应核对日志、磁盘空间、权限、SQLite 与队列文件，保留排查证据；故障排查完成后重启进程才会重置这一历史计数，重启本身不会找回缺失记录。
-
-`GET /healthz` 正常返回 `status=ok` 与版本，用于 HTTP 存活检测；`GET /readyz` 检查 SQLite 可写（回滚探测）、前端 `index.html` 存在、审计三个计数均为零，全部通过返回 200，否则 `status=degraded` 和 503。若读取存储配置即失败，会返回标准 503 `STORAGE_UNAVAILABLE` 错误对象。两者仍受全站网络 ACL 约束，不探测真实米家授权或设备动作。`unavailable>0` 会让就绪持续降级，直至完成排查并重启；详细步骤见 [部署运维说明](../../deploy/README.md#依赖就绪与审计恢复)。
-
-单元测试、模拟浏览器与隔离 Docker 验证不使用真实米家设备，只证明所覆盖的软件路径。上线前仍需在目标部署核对真实授权、规格、只读/可控边界、共享家庭 owner、实时属性错误码与实际设备/场景效果；控制 ACK、回执和就绪均不代替物理验收。
+`/healthz` 检查 HTTP 存活，`/readyz` 检查 SQLite、前端文件和审计状态；两者均受全站网络 ACL 约束。审计队列、健康计数、自动补写和存储故障恢复见[部署运维说明](../../deploy/README.md#依赖就绪与审计恢复)。

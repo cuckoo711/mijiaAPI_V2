@@ -1,10 +1,8 @@
 # 更新日志
 
-本项目遵循“面向部署和使用者可读”的更新记录。最新变化放在最前面。
-
 ## 未发布
 
-- 仓库增加 Gitee 镜像 `cuckoo711/mijiaAPI`：本地配置 `gitee`（SSH）与 `gitee-https` 两个远程；文档克隆地址同时给出 GitHub / Gitee。正式版与 Android 测试预发布在 GitHub Release 创建后，用 `deploy/scripts/publish_gitee_release.py` 将同一套产物镜像到 Gitee Release（需 Secret `GITEE_TOKEN`）。新增 `mirror-gitee` 工作流，推送 `main` 或 `v*` 标签后自动同步代码到 Gitee。
+- 新增 Gitee 代码与发行版镜像，自动同步最新正式版、最新 Android 测试版的发行说明与全部附件。
 - Android 发布门禁增加 16 KiB 用户空间模拟器、APK 对齐及 Python 归档内部原生库扫描；锁屏工具支持至少 24 小时持续采样、原子进度、重启与后台中断检测，长测完成前不标记通过。
 - Android 16 KiB 环境创建管理台前检测 WebView 124 及更旧版本，提示更新系统组件，避免已复现的原生崩溃影响启动界面；完整网页验收使用较新 WebView。
 - Android 测试包接入 GitHub Release：安卓测试标签独立发布，后续正式版本联合桌面与安卓构建验收后发布；保留测试签名，提供五种架构 APK、SHA256 和运行验收报告。
@@ -20,8 +18,8 @@
 
 - 16 KiB 环境创建管理台前检测已知不兼容的旧 WebView，提示更新，后台服务仍可独立启动；APK 与嵌套 Python 原生库增加 16 KiB 对齐检查。
 - 七个系统/页大小组合及五种架构构建通过验收；16 KiB 模拟环境完成实际 24 小时锁屏、Doze 网络与解锁后管理台检查。
-- 稳定性验收区分应用故障和 ADB 采集缺口，保留有效观测与进程身份，停止因工具瞬断反复清零。Android 7 采用约 18 小时健康观测、独立观测段和休眠/网络/管理台复验评审，不宣称连续 24 小时。
-- 发布原始受测 test.9 APK，并附来源绑定的稳定性评审报告。ARM 真机、厂商省电策略及真实米家账号/设备动作未由本次离线模拟器证明。
+- 稳定性报告区分应用故障和 ADB 采集中断。Android 7 包含约 18 小时观测及休眠、网络、管理台复验，不包含连续 24 小时结果。
+- APK 附带稳定性报告；兼容性范围不包含 ARM 真机、厂商省电策略及真实米家设备操作。
 
 ## v3.9.1-android-test.8 - 2026-10-15
 
@@ -310,17 +308,8 @@
 
 ### 改进
 
-- GitHub Release 页面现在会自动展示 CHANGELOG 中对应版本的详细更新内容。
-  之前只有 `generate_release_notes: true` 生成的 issue/PR 列表，用户看不到本次
-  版本的实际改动。现在会把 CHANGELOG 里对应段落作为 release body 主要内容，
-  自动生成的 commit / PR 列表附在后面。
-- 新增 `scripts/extract_release_notes.py`：从 `CHANGELOG.md` 提取指定版本段落，
-  供 CI release 步骤使用；命令行也可以直接调用（例如本地校验）。
-
-### 内部改动
-
-- `.github/workflows/build.yml` 的 release 任务补充 checkout + Python 环境，
-  新增 "Extract release notes from CHANGELOG" 步骤生成 body 文件。
+- GitHub Release 自动展示 CHANGELOG 对应版本的更新内容，并附提交与 PR 列表。
+- 新增发行说明提取脚本，支持从 `CHANGELOG.md` 提取指定版本段落。
 
 ## v3.2.1 - 2026-07-05
 
@@ -347,7 +336,7 @@
 
 ### 内部改动
 
-- 新增 `server/updater.py`：`UpdateChecker` 使用 httpx 拉取 `api.github.com/repos/{owner}/{repo}/releases/latest`，支持进程内 TTL 缓存、宽松版本号解析、切换仓库地址（未来做 fork 支持）。
+- 新增 `server/updater.py`：`UpdateChecker` 使用 httpx 拉取 `api.github.com/repos/{owner}/{repo}/releases/latest`，支持进程内 TTL 缓存、宽松版本号解析和切换仓库地址。
 - 新增单元测试覆盖版本比较、缓存命中、网络错误静默降级；集成测试覆盖两个新端点的鉴权与响应结构。
 
 ## v3.1.2 - 2026-07-05

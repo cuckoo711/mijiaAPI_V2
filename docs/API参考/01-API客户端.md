@@ -1,6 +1,6 @@
 # API客户端参考
 
-本文描述 Python SDK。HTTP 管理员手动控制、操作回执、Cookie/CSRF 和审计恢复接口见 [API Server 开发启动](../开发指南/05-API-Server-开发启动.md#管理员手动控制与操作回执)。控制遇到 `ExecutionUnknownError` 时须先核对状态，不能自动重发，见 [异常处理](03-异常处理.md#executionunknownerror)。
+本文描述 Python SDK。HTTP 接口见 [API Server 文档](../开发指南/05-API-Server-开发启动.md)。控制遇到 `ExecutionUnknownError` 时须先核对状态，不能自动重发，见 [异常处理](03-异常处理.md#executionunknownerror)。
 
 ## MijiaAPI（同步）
 
@@ -151,7 +151,7 @@ def control_device(
 - `NetworkError`: 网络错误
 
 **缓存刷新**：
-控制设备后默认会自动刷新该设备所属家庭的缓存，确保下次获取的是最新状态。如果需要高频控制设备（如连续调节亮度），可以设置 `refresh_cache=False` 以提高性能，然后在操作完成后手动调用 `refresh_cache()` 刷新缓存。
+默认刷新设备所属家庭的缓存。高频控制时可设置 `refresh_cache=False`，结束后调用 `refresh_cache()`。
 
 **示例**：
 ```python
@@ -206,7 +206,7 @@ def call_device_action(
 - `NetworkError`: 网络错误
 
 **缓存刷新**：
-调用设备操作后默认会自动刷新该设备所属家庭的缓存，确保下次获取的是最新状态。
+默认刷新设备所属家庭的缓存。
 
 **示例**：
 ```python
@@ -256,7 +256,7 @@ def batch_control_devices(
 - `NetworkError`: 网络错误
 
 **缓存刷新**：
-批量控制设备后默认会自动刷新所有涉及家庭的缓存，确保下次获取的是最新状态。如果需要高频批量操作，可以设置 `refresh_cache=False` 以提高性能。
+默认刷新所有涉及家庭的缓存；高频操作时可设置 `refresh_cache=False`。
 
 **示例**：
 ```python
@@ -521,35 +521,6 @@ def clear_all_cache(self) -> None
 **示例**：
 ```python
 api.clear_all_cache()
-```
-
-#### 自动刷新缓存
-
-SDK 在设备控制操作后会自动刷新缓存，这是标准做法，确保下次获取的是最新状态：
-
-```python
-# 控制设备后自动刷新缓存（默认行为）
-api.control_device("device_123", 2, 1, True)
-
-# 下次获取设备状态时会得到最新数据
-device = api.get_device("device_123")
-```
-
-对于高频操作场景，可以禁用自动刷新以提高性能：
-
-```python
-# 连续调节亮度（禁用自动刷新）
-for brightness in range(0, 100, 10):
-    api.control_device(
-        "light_123", 
-        2, 
-        2, 
-        brightness, 
-        refresh_cache=False
-    )
-
-# 操作完成后手动刷新
-api.refresh_cache(home_id="123456")
 ```
 
 ---

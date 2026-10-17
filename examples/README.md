@@ -1,12 +1,12 @@
 # 示例代码
 
-米家 API SDK 示例，从基础到高级。运行前先 `uv sync`，并完成一次扫码登录。
+运行前先执行 `uv sync`，再按下方步骤扫码登录。
 
 ## 示例列表
 
 **基础**
 
-1. [01_authentication.py](01_authentication.py) - 认证与凭据（首次必读）
+1. [01_authentication.py](01_authentication.py) - 认证与凭据
 2. [02_quick_start.py](02_quick_start.py) - 快速开始
 3. [03_device_control.py](03_device_control.py) - 设备控制与批量操作
 4. [04_device_spec.py](04_device_spec.py) - 设备规格查询与中文翻译
@@ -32,7 +32,7 @@ uv run python examples/01_authentication.py
 uv run python examples/02_quick_start.py
 ```
 
-数据目录统一为 `configs/`。凭据默认约 7 天有效，过期可先 `refresh_credential()`，或删除后重新登录。
+默认数据目录为 `configs/`。凭据过期后可尝试 `refresh_credential()`，失败时重新扫码登录。
 
 查看设备规格（siid / piid）：
 

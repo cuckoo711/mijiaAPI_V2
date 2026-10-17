@@ -1,35 +1,39 @@
 # Android 独立服务测试版
 
-在手机内运行现有 Python 后端、SQLite、加密凭据存储和 Vue 管理台，无需外部服务器。米家云登录、同步和设备控制仍需联网。
+在手机内运行 Python 后端、SQLite、加密凭据存储和 Vue 管理台，无需外部服务器。米家登录、同步和设备控制需要联网。
 
-Python 由独立的 `:server` 前台服务进程运行，管理台通过不导出的同 UID IPC 获取状态和初始化令牌；界面、WebView 或其字体供应进程退出时，服务进程可继续运行。停止服务和退出界面是不同操作。
+后端运行在独立的 `:server` 前台服务进程中，管理台通过不导出的同 UID IPC 获取状态和初始化令牌。退出界面不会停止服务。
 
-## 兼容目标
+## 兼容范围
 
-- Android 7.0 / API 24 起；ARM 32 位 `armeabi-v7a`、ARM 64 位 `arm64-v8a`，另含 `x86`、`x86_64` 供模拟器验证。
-- 使用 Python 3.11，避免新 Python 版本仅支持 64 位。原生依赖单独编译；`verify_wheels.py` 核对 ELF 位数与机器架构，构建结果不能替代设备运行验收。
-- APK 附带现代和旧版两套前端，旧内核自动加载兼容包及必要的 JavaScript/DOM 补充实现。Android 7.0 的 WebView 53 与默认 Chrome 69 内核均纳入网页登录和导航检查；低于 Chromium 49 时提示更新。
-- 当前产物为持续维护的 debug 测试签名；GitHub Actions 使用仓库加密 Secret 保留同一签名，可以覆盖升级测试包。不要混用不同签名升级。
+- Android 7.0 / API 24 起；支持 `armeabi-v7a`、`arm64-v8a`，另含供模拟器测试的 `x86`、`x86_64`。
+- 使用 Python 3.11；`verify_wheels.py` 核对原生依赖的 ELF 位数与机器架构。
+- APK 包含现代与旧版前端，旧内核自动加载兼容包；低于 Chromium 49 时提示更新。
+- 测试 APK 使用固定 debug 签名，可以覆盖升级同签名测试包。
+
+优先安装 `mijia-server-android-universal-<版本>.apk`，确认手机架构后也可选择体积较小的 `arm32` 或 `arm64` 包。各版本已检查的环境见 Release 附件 `android-validation.json`、`android-compatibility.json` 和签名/架构报告；文件校验见 `ANDROID_SHA256SUMS`。
 
 ## 使用
 
-1. 安装测试 APK，打开应用并点击“启动服务”；按需允许显示常驻服务通知。
-2. 服务就绪后点击“打开管理台”，首次使用创建自己的管理员账号，再登录米家。
-3. 局域网访问默认关闭。若需其他设备调用 API，停止服务、勾选局域网访问，再启动；其他设备仍需管理员或 API Key 鉴权。
-4. 手机上的米家扫码登录，可通过另一台设备打开局域网管理台展示二维码，再用手机米家扫码。
-5. 停止或正常升级保留数据；卸载、清除应用数据会删除本机 SQLite 和凭据。测试版暂不提供一键备份与恢复入口。
+1. 安装 APK，打开应用并点击“启动服务”，按需允许显示常驻服务通知。
+2. 服务就绪后点击“打开管理台”，首次创建管理员账号，再登录米家。
+3. 局域网访问默认关闭。需要其他设备调用时，先停止服务、勾选局域网访问，再启动；调用仍需管理员或 API Key 鉴权。
+4. 手机米家扫码可借助另一台设备打开局域网管理台展示二维码。
+5. 停止或正常升级保留数据；卸载、清除应用数据会删除本机 SQLite 和凭据。测试版暂无一键备份恢复入口。
 
-后台服务使用常驻通知和运行期间的 CPU 唤醒锁；退出界面不等于停止服务。可从应用或通知停止。长时间锁屏进入 Doze 后系统可能暂停网络；请点击“后台运行帮助 → 设置后台运行”，在系统弹窗中确认允许持续后台运行。应用会展示当前电池优化状态；不支持该系统入口时可进入应用设置手动调整。
+后台服务使用常驻通知和 CPU 唤醒锁，可从应用或通知停止。锁屏进入 Doze 后系统可能暂停网络；点击“后台运行帮助 → 设置后台运行”并确认系统授权。应用会显示电池优化状态；不支持该入口时可进入应用设置调整。
 
-Android 8 及以上在管理台显示进程被回收或崩溃时会重建视图，后端服务继续运行；显示“管理台已重置”后可重新打开管理台。未提交的网页输入可能丢失，已保存的服务数据保留。发布门禁在支持的平台主动终止渲染进程，验证后端进程、HTTP 和页面恢复；Android 7 缺少此系统回调。
+Android 8 及以上可在 WebView 渲染进程被回收或崩溃后重建管理台。看到“管理台已重置”后重新打开即可，未提交的输入可能丢失，已保存数据保留。Android 7 不支持此系统回调。
 
-专用服务手机建议持续供电。厂商省电策略、系统强制停止或重启仍可能中断服务；本版未提供开机自启。模拟器上的十分钟检查不等于真机多日稳定性证明。
+专用服务手机建议持续供电。厂商省电策略、强制停止和系统重启仍可能中断服务，本版未提供开机自启。
 
 ## 构建
 
-需要 JDK 17、Android SDK 35 / Build Tools 35.0.0、Python 3.11 和 Node.js。Gradle Wrapper 带发行包 SHA256 校验。
+需要 JDK 17、Android SDK 35 / Build Tools 35.0.0、Python 3.11、Node.js 和 npm。Gradle Wrapper 校验发行包 SHA256。
 
-原生依赖交叉编译使用 Linux x86_64、NDK 27.3.13750724，以及固定的 Chaquopy 源码提交 `884ec5f14591d69844e20c9dc6a6a9c5d1ba0a41`。Python target 为 `3.11.17-0`。安装 Rust 编译器及 `armv7-linux-androideabi`、`aarch64-linux-android`、`i686-linux-android`、`x86_64-linux-android` 标准库，并将 `rustc`、`cargo` 加入 PATH。
+原生依赖交叉编译使用 Linux x86_64、NDK `27.3.13750724`、Chaquopy 固定提交 `884ec5f14591d69844e20c9dc6a6a9c5d1ba0a41`，Python target 为 `3.11.17-0`。安装 Rust 编译器与 `armv7-linux-androideabi`、`aarch64-linux-android`、`i686-linux-android`、`x86_64-linux-android` 标准库，将 `rustc`、`cargo` 加入 PATH。
+
+在 `android/` 目录执行：
 
 ```sh
 python3.11 wheels/build.py --chaquopy-source /path/to/chaquopy
@@ -38,51 +42,52 @@ python3.11 verify_wheels.py
 BUILD_PYTHON=/absolute/path/to/python3.11 sh build.sh
 ```
 
-`wheels/build.py` 对固定交叉编译器应用两项兼容修正：避免稳定 ABI 库重复创建符号链接，并显式提供 PyO3 交叉配置及 ARMv7 Rust 目标。上游源码或版本改变时需重新审核这些修正。`vendor.py` 预下载纯 Python 依赖，APK 组装时禁用 pip 网络访问。构建产物、wheel 和设备数据均不提交到仓库。
+`wheels/build.py` 对交叉编译器修正稳定 ABI 库重复符号链接，并提供 PyO3 交叉配置及 ARMv7 Rust 目标；升级上游时需复核。`vendor.py` 预下载纯 Python 依赖，APK 组装时禁用 pip 网络访问。可用 `MIJIA_MAVEN_MIRROR=https://maven.aliyun.com/repository` 为本次构建启用 Maven 镜像。
 
-可选环境变量 `MIJIA_MAVEN_MIRROR=https://maven.aliyun.com/repository` 仅为当前构建启用 Maven 镜像，不修改机器全局设置。
+APK 输出到 `app/build/outputs/apk/<架构>/debug/`。架构包使用独立 product flavor；不要改为标准 ABI splits，Python 资源和原生库必须按同一组 ABI 构建。`prepare.py` 只打包指定源码、前端产物和公开模板，排除 `configs/` 运行数据。`build-info.json` 记录基础提交与源码内容哈希；构建产物、wheel 和设备数据不提交到仓库。
 
-APK 位于 `app/build/outputs/apk/<架构>/debug/`：通用包供安装使用，按独立 product flavor 构建的架构包用于兼容性测试。不要改为标准 ABI splits：Python 资源与原生库必须按同一组 ABI 构建。`prepare.py` 只打包指定 Python 源码、前端构建输出及公开模板，不包含 `configs/` 下的运行数据或真实米家凭据。APK 中的 `build-info.json` 记录基础提交和源码内容哈希。
+## 自动运行测试
 
-## 自动运行验收
-
-仅在**全新的一次性测试模拟器**中运行，测试会创建虚构管理员与 API Key，不接入真实米家账号：
+以下命令在 `android/` 目录运行，仅用于全新的一次性模拟器，测试会创建虚构管理员和 API Key：
 
 ```sh
 adb -s emulator-5580 install -t app/build/outputs/apk/x64/debug/app-x64-debug.apk
 adb -s emulator-5580 shell am instrument -w com.cuckoo.mijia.standalone/.SmokeInstrumentation
 ```
 
-验收覆盖原生 AES、Pydantic、二维码生成、真实 HTTP 服务、前端资源、管理员初始化/登录、API Key 权限与撤销，以及停止重启后的 SQLite 数据保留。ARM 指令转换器上的结果与 ARM 真机结果需分别记录。真实米家登录、同步、物理设备控制、旧系统和长时间后台运行不能由这些离线用例证明。
-
-## test.1 的历史验收范围
-
-`3.9.1-android-test.1` 的 ARM 32 位、ARM 64 位、x86、x86_64 和通用包均已在 Android 11 / API 30、WebView 83 的隔离模拟器中完成检查。ARM 两项使用系统指令转换，x86 两项原生执行；解释器位数、APK 内 ABI 资源、签名和哈希分别核对。凭据使用离线虚构数据验证加密及重启后的密钥对保留，未复用服务器的真实米家凭据。
-
-test.1 的发布附件提供 `android-validation.json` 和 `ANDROID_SHA256SUMS`。该轮尚未覆盖 Android 7–10、12 及以上的运行与锁屏；以上是 test.1 的历史范围。后续测试包增加的六系统、锁屏与渲染进程恢复检查见下方发布门禁和对应 Release 的 `android-compatibility.json`。ARM 真机、真实米家云与设备动作、厂商省电策略及多日运行仍需单独验证。
+测试覆盖原生 AES、Pydantic、二维码生成、HTTP 服务、前端资源、管理员初始化/登录、API Key 权限与撤销，以及重启后的 SQLite 数据保留，不接入真实米家账号。ARM 指令转换结果须与 ARM 真机结果分别记录。
 
 ## GitHub 自动构建与发布
 
-推送 `v3.9.1-android-test.8` 这类标签会单独构建、验收并发布 Android 预发布版本。后续常规 `vX.Y.Z` 发布会同时构建桌面程序和 Android 测试 APK，全部通过后统一发布到同一 Release。手动运行 `Android Test APK` 工作流仅构建验收，不创建 Release。
+推送 `vX.Y.Z-android-test.N` 标签会构建、检查并发布 Android 预发布版本；常规 `vX.Y.Z` 标签同时构建桌面程序与 Android APK，通过检查后统一发布。手动运行 **Android Test APK** 只构建检查，不创建 Release。最新正式版和最新 Android 测试版自动[同步到 Gitee](../deploy/scripts/README.md#3-gitee-release-镜像)。
 
-构建产物以 GitHub Release 为准，并自动镜像到 Gitee Release（<https://gitee.com/cuckoo711/mijiaAPI/releases>），便于国内下载。CI 需要仓库 Secret `GITEE_TOKEN`。
+标签版本须与 `pyproject.toml` 一致，测试序号支持 1–99。`versionCode` 按主版本、次版本、补丁和测试序号递增，正式版使用序号 99。仓库 Secret `ANDROID_TEST_KEYSTORE` 保存 Base64 编码的现有测试签名库，使用标准 Android debug 别名与口令；缺失时构建失败。迁移仓库时需单独安全备份签名库，不能提交到 Git 或随机更换签名。
 
-优先安装 `mijia-server-android-universal-<版本>.apk`；确认手机架构后也可选择体积较小的 `arm32` 或 `arm64` 包。CI 附件包含 `ANDROID_SHA256SUMS`、`android-validation.json` 和签名/架构校验报告。ARM 模拟器测试使用指令转换，不能替代真机验证。
+Linux CI 按 `ci/inputs.json` 的 SHA256 核验 Python target 与依赖源码，使用上述 NDK 和 Rust `1.99.0` 构建 wheel；恢复缓存后仍重新校验 ELF，APK 组装使用预下载的 wheel。
 
-构建版本默认跟随 `pyproject.toml`，发布标签必须与后端版本匹配；测试序号支持 1–99。`versionCode` 按主版本、次版本、补丁和测试序号递增，正式版本使用序号 99。仓库 Secret `ANDROID_TEST_KEYSTORE` 保存 Base64 编码的现有测试签名库（标准 Android debug 别名与口令），缺失时构建失败，禁止每次随机换签名。迁移仓库或备份时需单独安全保存该密钥，不能提交到 Git。
+### 兼容检查
 
-Linux CI 从固定提交获取交叉编译器，按 `ci/inputs.json` 的 SHA256 核验 Python target 与依赖源码，使用 NDK 27.3.13750724、Rust 1.99.0 构建原生 wheel。wheel 缓存恢复后仍重新校验 ELF；APK 组装全程使用预下载的 Python wheel。
+发布门禁在 API 24、31、33、34、35、36（Android 7.0、12–16）上检查同一通用 APK，API 24 使用 WebView 53。检查包含：
 
-发布门禁另外在 API 24、31、33、34、35、36（Android 7.0、12–16）上检查同一通用 APK：真实网页登录与导航、无测试仪器附着的连续 600 秒锁屏 HTTP 探测、进程/前台服务/唤醒锁、系统后台授权入口、强制 Doze 网络与解锁后管理台。Android 7 专门选用 WebView 53，避免仅验证系统另带的 Chrome 69。`android-compatibility.json` 记录每个环境、APK SHA256、逐次采样和准确时长；这些检查通过后才生成最终发布附件。
+- 网页登录、导航与解锁后管理台。
+- 不附着 instrumentation 的连续 600 秒锁屏 HTTP 探测。
+- 后端进程、前台服务、唤醒锁及系统后台授权入口。
+- 强制 Doze 与应用 UID 到受控本机端点的网络连接。
+- 支持的平台主动终止渲染进程，检查后端、HTTP 与页面恢复。
 
-后台探测会在每次请求前建立独立 ADB 通道，避免共享 SDK 客户端重置端口映射造成误报。休眠网络检查使用应用 UID 连接受控本机端点，不连接真实米家。真机、厂商电池管理、多日运行及 16 KiB 内存页设备仍需独立验证。
+`android-compatibility.json` 记录环境、APK SHA256、采样和时长，通过后生成发布附件。真实米家登录、同步、设备动作、ARM 真机、厂商省电策略和多日后台稳定性需单独验证。
 
+## 16 KiB 页兼容检查
 
-## 16 KiB 与 24 小时锁屏验收
+构建时递归扫描 APK 及 Chaquopy `.imy` 内的 ELF，要求 ARM64 / x86_64 LOAD 段满足 16 KiB 对齐，并运行 `zipalign -c -P 16 4`；RELRO 端点另行记录。
 
-发布构建递归扫描 APK 与 Chaquopy `.imy` 内的 ELF，要求所有 ARM64 / x86_64 的 LOAD 段满足 16 KiB 对齐，并使用 `zipalign -c -P 16 4` 检查 APK。RELRO 端点单独记录供排查；静态检查不能替代运行时验证。CI 增加 API 36 的 `google_apis_ps16k` 镜像，必须实测用户空间页大小为 16384，并记录内核页大小；x86_64 镜像在 4 KiB 内核上模拟 16 KiB 用户空间，执行与 4 KiB 环境相同的启动、登录、权限、后台、Doze 和解锁检查。
+运行检查使用 API 36 的 `google_apis_ps16k` 镜像，要求用户空间页大小为 16384，报告同时记录内核页大小和 WebView 版本。x86_64 镜像可在 4 KiB 内核上模拟 16 KiB 用户空间，仍须执行启动、登录、权限、后台、Doze 和解锁检查。
 
-24 小时长测使用服务器上独立的一次性模拟器，由 systemd 托管测试进程，避免终端关闭中断。示例（仅限隔离模拟器，测试会清空应用数据）：
+API 35 的 16 KiB 镜像内置 WebView 124 存在 MemoryInfra 原生崩溃，应用会在创建 WebView 前阻止此组合并提示更新；后端仍可独立启动。模拟器配置至少 4096 MiB 内存，避免首次启动和 WebView 加载时因内存不足回收进程。
+
+## 24 小时锁屏测试
+
+仅用于隔离的一次性模拟器，测试会清空应用数据。在仓库根目录运行：
 
 ```sh
 python android/ci/test_compatibility.py --serial emulator-5584 --adb-server-port 5039 --apk /path/to/test.apk \
@@ -90,25 +95,22 @@ python android/ci/test_compatibility.py --serial emulator-5584 --adb-server-port
   --disposable --expect-console --expect-exemption-ui --full-ui
 ```
 
-每 30 秒记录 UTC 时间、实际经过时间、内核启动标识、系统运行时间、后端 PID、HTTP 就绪、锁屏与唤醒锁状态，并原子写入 `compatibility.json`。应用故障停止并保留记录供复核；ADB 元数据异常保留为观测缺口并继续采集。声明完整 24 小时时必须实际达到 86400 秒及通过解锁后管理台检查；应用修复、人工重启形成独立观测段，不能拼接短测冒充连续一天。报告的 APK 哈希绑定实际受测文件；旧包的长测结果不能套用于新包。长测不在 GitHub 托管任务中等待一天，CI 的 600 秒门禁与独立长测报告分别发布。
+每 30 秒采集 UTC 时间、经过时长、启动标识、系统运行时间、后端 PID、HTTP 就绪、锁屏和唤醒锁状态，原子写入 `compatibility.json`。报告绑定受测 APK 哈希，并分别记录 APK 源提交、测试脚本提交及辅助脚本 SHA256。独立长测报告与 CI 的 600 秒报告分别发布。
 
-测试进度保存在隔离测试目录的 `compatibility.json`。采集任务状态与应用验收结论分开：采集失败的原始记录保留，不能自动视为应用失败；稳定性结论按下方证据评审生成。模拟器结果不代表 ARM 真机或各厂商后台策略。
+### 运行环境
 
-API 35 的 16 KiB 镜像内置 WebView 124，在管理台加载时会于 WebView MemoryInfra 线程原生崩溃。应用会在创建 WebView 前阻止此组合并提示更新组件，后台服务可以独立启动。完整管理台与长测使用 API 36 的 16 KiB 镜像，报告中记录实际 WebView 版本。
+- 用 systemd 分别托管模拟器和测试，模拟器保持前台运行；不要让它们随协调脚本退出而被同一控制组清理。
+- 使用专用 ADB 端口，`launch_16k.py --adb-server-port` 与测试参数一致；API 24 启动进程设置相应的 `ANDROID_ADB_SERVER_PORT` 和 `ADB_SERVER_SOCKET`。
+- 模拟器控制台使用 5554–5584 内的偶数端口，便于 ADB 重启后发现。
+- 共享主机串行执行 16 KiB 与旧系统长测，避免资源竞争。
+- ADB 元数据读取和临时 HTTP 转发最多尝试三次，每次超时 10 秒、间隔 1 秒，记录 `transport_failures`；安装、清数据、点击和服务控制不隐式重试。
 
-16 KiB 系统镜像使用 4096 MiB 内存；2048 MiB 在首次启动与 WebView 加载时可能触发系统低内存回收，不能将这类测试基础设施失败当作应用已通过。共享验收主机应串行执行 16 KiB 和旧系统长测，保留各自独立的观测记录，避免影响同机服务。
+### 结果判定
 
-长测使用专用 ADB 服务端口（例如 5039），启动模拟器时将 `launch_16k.py --adb-server-port` 与测试参数设为相同值；API 24 的启动进程也应使用对应的 `ANDROID_ADB_SERVER_PORT` 和 `ADB_SERVER_SOCKET`。模拟器控制台端口采用 5554–5584 范围内的偶数，以便 ADB 重启后自动发现。报告分别记录 APK 源提交、测试脚本提交与 SHA256，测试基础设施修正不改动受测 APK。传输中断保留为观测缺口，恢复后核对启动标识、PID、进程启动时间与运行时间，不因 ADB 偶发失败清空已有有效观测。
+HTTP 不可用、后端 PID 或启动标识变化、锁屏/唤醒锁异常会停止测试并保留记录。ADB 采集失败记为 `observation_gap`；恢复后核对启动标识、PID、进程启动时间和运行时间，缺口内的 HTTP 可用性仍为未知。人工重启、清数据或不同进程的观测段分别记录。
 
-由 systemd 协调环境切换时，模拟器与测试应各自使用独立的 systemd 单元，以前台模式运行模拟器。`Popen(start_new_session=True)` 不会移出父单元的控制组，协调脚本退出时仍可能被 systemd 清理。24 小时校验分别检查完整锁屏时长、UTC 起止和设备运行时间；最后一次请求记录的是请求开始时间，可以比锁屏结束略早，但必须在结束前 5 秒内，不能将未满 24 小时的运行标记通过。
+`collect_endurance.py` 检查单调时长、UTC 起止、设备运行时间及解锁后管理台，完整 24 小时须达到 86400 秒，末次请求开始时间须在锁屏结束前 5 秒内。不得拼接观测段或将旧 APK 的报告用于新 APK。
 
-持续采样的 ADB 元数据读取和临时 HTTP 转发建立最多尝试三次，每次超时 10 秒、间隔 1 秒。每次失败及是否重试写入 `transport_failures`，报告同时记录辅助脚本 SHA256。实际 HTTP 请求失败、服务 PID 或启动标识变化、锁屏或唤醒锁异常仍直接失败；安装、清数据、点击与服务控制不进行隐式重试。
+测试版可使用 `collect_stability.py --apk ... --review ... --output ...` 生成显式评审报告，绑定同一 APK 和源提交，记录完整 24 小时参考、旧系统观测段、采集异常、人工结束和独立复验；保留原始失败或未知状态。
 
-
-## 按证据评审稳定性
-
-应用异常与采集异常分开处理。HTTP 不可用、非预期进程重启、数据异常或管理台无法恢复需要应用故障复核与针对性验证；ADB 失败记录为 `observation_gap`。恢复后只有启动标识、PID 和进程启动时间均相符，才支持缺口前后的进程连续性；缺口内的 HTTP 可用性仍标为未知。无法确认时保留未知并补充观察，不一律清零。不同进程、人工清数据或测试重启形成独立观测段，不能相加后声称连续运行。
-
-需要证明完整一天时，`collect_endurance.py` 仍要求实际单调时长、UTC 时长和设备运行时间足够，保留严格时长语义。测试版发布可用 `collect_stability.py --apk ... --review ... --output ...` 做显式证据评审：绑定同一 APK 和源提交，保留一轮已完成的完整 24 小时参考、旧系统有效观测段、采集异常诊断、人工结束记录及独立复验。它不会把旧的失败报告改成通过，也不会把 Android 7 的约 18 小时观测伪装为连续 24 小时。报告公开范围、缺口和评审理由。
-
-`review_postflight.py` 先核对当前安装包 SHA256、PID/boot_id/进程启动时间，再执行真实系统授权、Doze、受控网络、HTTP 和解锁后 DOM 检查，不清空数据。最后的 DOM instrumentation 会主动重新附着应用，报告明确区分这一测试动作与应用自发重启。
+`review_postflight.py` 先核对安装包 SHA256、PID、boot_id 和进程启动时间，再检查系统授权、Doze、受控网络、HTTP 与解锁后 DOM，不清空数据。最后的 DOM instrumentation 会重新附着应用，报告单独记录此测试动作。
