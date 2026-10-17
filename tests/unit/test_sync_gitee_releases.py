@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import subprocess
 import sys
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -250,6 +251,147 @@ def test_local_upload_does_not_enable_traceback_timer(monkeypatch, tmp_path):
     assert sync.upload_with_diagnostics(
         token="secret", owner="owner", repo="repo", release_id=7, path=tmp_path / "server.bin"
     ) == {"id": 8}
+
+
+def curl_response(body=None, status="201", code=0, stderr=""):
+    attachment = {"id": 8, "name": "server.bin"} if body is None else body
+    payload = json.dumps(attachment) if not isinstance(attachment, str) else attachment
+    return subprocess.CompletedProcess(
+        ["curl"],
+        code,
+        payload + sync.CURL_METRICS_MARKER + f"{status}\t218\t109.5\t1.25\n",
+        stderr,
+    )
+
+
+def test_curl_upload_keeps_token_in_stdin_and_reports_only_numeric_metrics(
+    monkeypatch, tmp_path, capsys
+):
+    directory = tmp_path / "space directory"
+    directory.mkdir()
+    path = directory / "server.bin"
+    path.write_bytes(b"original")
+    monkeypatch.setenv("GITEE_UPLOAD_MAX_SECONDS", "120")
+    monkeypatch.setenv("GITEE_TOKEN", "secret")
+    calls = []
+
+    def curl(command, **kwargs):
+        calls.append((command, kwargs))
+        return curl_response(body={"id": 8, "name": path.name, "private": "secret"})
+
+    monkeypatch.setattr(sync.subprocess, "run", curl)
+    result = sync.upload_with_curl(
+        token="secret", owner="owner", repo="repo", release_id=7, path=path
+    )
+    command, arguments = calls[0]
+    assert command == ["curl", "--disable", "--config", "-"]
+    assert "secret" not in " ".join(command)
+    assert "secret" in arguments["input"]
+    assert "GITEE_TOKEN" not in arguments["env"]
+    assert arguments["timeout"] == 150
+    assert 'max-time = "120"' in arguments["input"]
+    assert 'connect-timeout = "20"' in arguments["input"]
+    assert 'proto = "=https"' in arguments["input"]
+    assert "no-location\n" in arguments["input"]
+    assert "insecure" not in arguments["input"]
+    assert "retry" not in arguments["input"]
+    assert 'form = "file=@\\"' in arguments["input"]
+    assert ';filename=\\"server.bin\\";type=application/octet-stream' in arguments["input"]
+    assert "%{json}" not in arguments["input"]
+    assert result["id"] == 8
+    output = capsys.readouterr()
+    assert "secret" not in output.out + output.err
+    metrics = json.loads(output.out)
+    assert metrics == {
+        "asset": "server.bin",
+        "transport": "curl",
+        "http_code": 201,
+        "size_upload": 218,
+        "speed_upload": 109.5,
+        "time_total": 1.25,
+    }
+
+
+@pytest.mark.parametrize("status,code", [("400", 0), ("000", 28), ("302", 0)])
+def test_curl_failures_omit_remote_body_stderr_and_authenticated_url(
+    monkeypatch, tmp_path, capsys, status, code
+):
+    leak = "https://gitee.com/?access_token=secret"
+    calls = []
+
+    def curl(command, **kwargs):
+        calls.append(command)
+        return curl_response(body=leak, stderr=leak, status=status, code=code)
+
+    monkeypatch.setattr(sync.subprocess, "run", curl)
+    with pytest.raises(sync.SyncError) as caught:
+        sync.upload_with_curl(
+            token="secret",
+            owner="owner",
+            repo="repo",
+            release_id=7,
+            path=tmp_path / "server.bin",
+        )
+    output = capsys.readouterr()
+    assert "secret" not in str(caught.value) + output.out + output.err
+    assert "https:" not in str(caught.value) + output.out + output.err
+    assert f"exit {code}" in str(caught.value)
+    assert f"HTTP {int(status)}" in str(caught.value)
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("seconds", ["0", "-1", "1.5", "nan", "120\nverbose", "100000"])
+def test_curl_rejects_invalid_absolute_timeout_before_start(monkeypatch, tmp_path, seconds):
+    monkeypatch.setenv("GITEE_UPLOAD_MAX_SECONDS", seconds)
+    monkeypatch.setattr(sync.subprocess, "run", lambda *a, **k: pytest.fail("invalid timeout"))
+    with pytest.raises(sync.SyncError, match="positive integer"):
+        sync.upload_with_curl(
+            token="secret",
+            owner="owner",
+            repo="repo",
+            release_id=7,
+            path=tmp_path / "server.bin",
+        )
+
+
+def test_curl_config_quotes_every_supported_escape():
+    assert sync.curl_config_quote('a\\b"\t\n\r\v') == '"a\\\\b\\"\\t\\n\\r\\v"'
+
+
+def test_curl_timeout_exception_omits_captured_response_and_config(monkeypatch, tmp_path, capsys):
+    def fail(*args, **kwargs):
+        raise subprocess.TimeoutExpired("secret URL", 1, output="secret", stderr="secret")
+
+    monkeypatch.setattr(sync.subprocess, "run", fail)
+    with pytest.raises(sync.SyncError, match="TimeoutExpired") as caught:
+        sync.upload_with_curl(
+            token="secret",
+            owner="owner",
+            repo="repo",
+            release_id=7,
+            path=tmp_path / "server.bin",
+        )
+    output = capsys.readouterr()
+    assert "secret" not in str(caught.value) + output.out + output.err
+
+
+def test_curl_transport_still_downloads_new_attachment_for_sha_validation(
+    target, monkeypatch, capsys
+):
+    target["attachments"] = []
+    monkeypatch.setenv("GITEE_UPLOAD_TRANSPORT", "curl")
+
+    def curl(command, **kwargs):
+        item = {"id": 8, "name": "server.bin"}
+        target["attachments"].append(item)
+        return curl_response(item)
+
+    monkeypatch.setattr(sync.subprocess, "run", curl)
+    monkeypatch.setattr(sync, "urlopen", lambda *a, **k: io.BytesIO(b"tampered"))
+    with pytest.raises(sync.SyncError, match="SHA256/size mismatch"):
+        sync.sync_release(release(), "source/repo", "target", "repo", "secret")
+    assert target["api"] == []
+    assert "secret" not in capsys.readouterr().out
 
 
 @pytest.mark.parametrize(

@@ -126,6 +126,8 @@ jobs:
           GITEE_REPO: ${{ vars.GITEE_REPO || 'mijiaAPI' }}
           SYNC_TAG: ${{ matrix.tag }}
           SYNC_DRY_RUN: ${{ inputs.dry_run }}
+          GITEE_UPLOAD_TRANSPORT: curl
+          GITEE_UPLOAD_MAX_SECONDS: '120'
         run: |
           set -euo pipefail
           args=(--github-repo "$GITHUB_REPOSITORY" --owner "$GITEE_OWNER" --repo "$GITEE_REPO" --tag "$SYNC_TAG" --report "$RUNNER_TEMP/gitee-release-sync.json")

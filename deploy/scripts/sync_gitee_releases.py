@@ -7,6 +7,7 @@ import argparse
 import faulthandler
 import hashlib
 import json
+import mimetypes
 import os
 import re
 import subprocess
@@ -32,6 +33,7 @@ from publish_gitee_release import (
 WINDOWS_RESERVED = {"CON", "PRN", "AUX", "NUL"} | {
     f"{prefix}{number}" for prefix in ("COM", "LPT") for number in range(1, 10)
 }
+CURL_METRICS_MARKER = "\n__MIJIA_GITEE_UPLOAD_METRICS__\t"
 
 
 class SyncError(RuntimeError):
@@ -199,6 +201,113 @@ def verify_remote(
         raise SyncError(f"Gitee attachment SHA256/size mismatch: {asset['name']}")
 
 
+def curl_config_quote(value: str) -> str:
+    """Quote a single curl config value, including control characters."""
+    escapes = {"\\": "\\\\", '"': '\\"', "\t": "\\t", "\n": "\\n", "\r": "\\r", "\v": "\\v"}
+    return '"' + "".join(escapes.get(character, character) for character in value) + '"'
+
+
+def curl_upload_config(
+    *, token: str, owner: str, repo: str, release_id: int, path: Path
+) -> tuple[str, int]:
+    """Keep the authenticated URL in stdin, never argv or a config file."""
+    if (
+        not all(re.fullmatch(r"[A-Za-z0-9_.-]+", value) for value in (owner, repo))
+        or type(release_id) is not int
+        or release_id <= 0
+    ):
+        raise SyncError("Curl upload failed (ValueError)")
+    assets_by_name([{"name": path.name}])
+    seconds = os.environ.get("GITEE_UPLOAD_MAX_SECONDS", "600")
+    if not re.fullmatch(r"[1-9][0-9]{0,4}", seconds):
+        raise SyncError("GITEE_UPLOAD_MAX_SECONDS must be a positive integer up to 99999")
+    url = f"{API_BASE}/repos/{owner}/{repo}/releases/{release_id}/attach_files?" + urlencode(
+        {"access_token": token}
+    )
+    # --form has its own quoting layer inside the curl config value.
+    source = str(path.resolve()).replace("\\", "\\\\").replace('"', '\\"')
+    mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    form = f'file=@"{source}";filename="{path.name}";type={mime}'
+    options = {
+        "url": url,
+        "request": "POST",
+        "header": "Accept: application/json",
+        "form": form,
+        "connect-timeout": "20",
+        "max-time": seconds,
+        "proto": "=https",
+        "max-redirs": "0",
+        "write-out": CURL_METRICS_MARKER
+        + "%{http_code}\t%{size_upload}\t%{speed_upload}\t%{time_total}\n",
+    }
+    config = "silent\nno-location\n" + "".join(
+        f"{key} = {curl_config_quote(value)}\n" for key, value in options.items()
+    )
+    return config, int(seconds)
+
+
+def curl_upload_result(result: subprocess.CompletedProcess[str], path: Path) -> dict[str, Any]:
+    body, marker, fields = result.stdout.rpartition(CURL_METRICS_MARKER)
+    numeric = re.fullmatch(r"([0-9]{3})\t([0-9]{1,20})\t([0-9.]{1,30})\t([0-9.]{1,30})\n?", fields)
+    if not marker or numeric is None:
+        raise SyncError(f"Curl upload failed (exit {result.returncode}, ValueError)")
+    try:
+        http_code, size_upload = int(numeric[1]), int(numeric[2])
+        speed_upload, time_total = float(numeric[3]), float(numeric[4])
+    except ValueError:
+        raise SyncError(f"Curl upload failed (exit {result.returncode}, ValueError)") from None
+    print(
+        json.dumps(
+            {
+                "asset": path.name,
+                "transport": "curl",
+                "http_code": http_code,
+                "size_upload": size_upload,
+                "speed_upload": speed_upload,
+                "time_total": time_total,
+            }
+        ),
+        flush=True,
+    )
+    if result.returncode != 0 or not 200 <= http_code < 300:
+        raise SyncError(f"Curl upload failed (exit {result.returncode}, HTTP {http_code})")
+    try:
+        attachment = json.loads(body)
+        if (
+            not isinstance(attachment, dict)
+            or type(attachment.get("id")) is not int
+            or attachment["id"] <= 0
+            or attachment.get("name") != path.name
+        ):
+            raise ValueError
+    except (ValueError, TypeError):
+        raise SyncError("Curl upload failed (ValueError)") from None
+    return attachment
+
+
+def upload_with_curl(
+    *, token: str, owner: str, repo: str, release_id: int, path: Path
+) -> dict[str, Any]:
+    config, seconds = curl_upload_config(
+        token=token, owner=owner, repo=repo, release_id=release_id, path=path
+    )
+    try:
+        result = subprocess.run(
+            ["curl", "--disable", "--config", "-"],
+            input=config,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=seconds + 30,
+            check=False,
+            env={key: value for key, value in os.environ.items() if key != "GITEE_TOKEN"},
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise SyncError(f"Curl upload failed ({type(exc).__name__})") from None
+    return curl_upload_result(result, path)
+
+
 def upload_with_diagnostics(
     *, token: str, owner: str, repo: str, release_id: int, path: Path
 ) -> dict[str, Any]:
@@ -207,9 +316,12 @@ def upload_with_diagnostics(
     if diagnostics:
         faulthandler.dump_traceback_later(120, repeat=True, file=sys.__stderr__)
     try:
-        return upload_attachment(
-            token=token, owner=owner, repo=repo, release_id=release_id, path=path
+        transport = (
+            upload_with_curl
+            if os.environ.get("GITEE_UPLOAD_TRANSPORT") == "curl"
+            else upload_attachment
         )
+        return transport(token=token, owner=owner, repo=repo, release_id=release_id, path=path)
     finally:
         if diagnostics:
             faulthandler.cancel_dump_traceback_later()
