@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import faulthandler
 import hashlib
 import json
 import os
@@ -198,6 +199,22 @@ def verify_remote(
         raise SyncError(f"Gitee attachment SHA256/size mismatch: {asset['name']}")
 
 
+def upload_with_diagnostics(
+    *, token: str, owner: str, repo: str, release_id: int, path: Path
+) -> dict[str, Any]:
+    """Report only stack locations for slow CI uploads, never request data or locals."""
+    diagnostics = os.environ.get("GITHUB_ACTIONS") == "true"
+    if diagnostics:
+        faulthandler.dump_traceback_later(120, repeat=True, file=sys.__stderr__)
+    try:
+        return upload_attachment(
+            token=token, owner=owner, repo=repo, release_id=release_id, path=path
+        )
+    finally:
+        if diagnostics:
+            faulthandler.cancel_dump_traceback_later()
+
+
 def sync_release(
     release: dict[str, Any],
     repository: str,
@@ -273,7 +290,7 @@ def sync_release(
                 verify_remote(token, owner, repo, release_id, existing[name], asset)
                 summary["skipped"] += 1
             else:
-                uploaded = upload_attachment(
+                uploaded = upload_with_diagnostics(
                     token=token,
                     owner=owner,
                     repo=repo,

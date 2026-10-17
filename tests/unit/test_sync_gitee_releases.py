@@ -206,6 +206,52 @@ def test_new_upload_is_also_hash_checked(target, monkeypatch):
     assert target["api"] == []
 
 
+def test_ci_upload_diagnostics_are_cancelled_even_after_upload_failure(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setattr(
+        sync.faulthandler,
+        "dump_traceback_later",
+        lambda *args, **kwargs: calls.append(("start", args, kwargs)),
+    )
+    monkeypatch.setattr(
+        sync.faulthandler, "cancel_dump_traceback_later", lambda: calls.append(("cancel",))
+    )
+    parameters = {
+        "token": "secret",
+        "owner": "owner",
+        "repo": "repo",
+        "release_id": 7,
+        "path": tmp_path / "server.bin",
+    }
+
+    def fail(**kwargs):
+        assert kwargs == parameters
+        raise sync.GiteeError("upload failed")
+
+    monkeypatch.setattr(sync, "upload_attachment", fail)
+    with pytest.raises(sync.GiteeError, match="upload failed"):
+        sync.upload_with_diagnostics(**parameters)
+    assert calls == [
+        ("start", (120,), {"repeat": True, "file": sys.__stderr__}),
+        ("cancel",),
+    ]
+
+
+def test_local_upload_does_not_enable_traceback_timer(monkeypatch, tmp_path):
+    monkeypatch.setenv("GITHUB_ACTIONS", "false")
+    monkeypatch.setattr(
+        sync.faulthandler, "dump_traceback_later", lambda *a, **k: pytest.fail("CI only")
+    )
+    monkeypatch.setattr(
+        sync.faulthandler, "cancel_dump_traceback_later", lambda: pytest.fail("no timer")
+    )
+    monkeypatch.setattr(sync, "upload_attachment", lambda **kwargs: {"id": 8})
+    assert sync.upload_with_diagnostics(
+        token="secret", owner="owner", repo="repo", release_id=7, path=tmp_path / "server.bin"
+    ) == {"id": 8}
+
+
 @pytest.mark.parametrize(
     "error",
     [
