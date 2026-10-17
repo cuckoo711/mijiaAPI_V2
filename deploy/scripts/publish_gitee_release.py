@@ -12,6 +12,7 @@
 
 行为：
 - 若 Gitee 上该 tag 的 Release 不存在则创建；已存在则复用（幂等，可重跑）。
+- Gitee 必须已有该标签；创建 Release 时绑定标签的提交，不自动创建或移动标签。
 - 附件按文件名对齐：同名附件会先删除再上传，避免重复或半截文件。
 - 只依赖标准库；令牌从环境变量 ``GITEE_TOKEN`` 读取，不写入命令行历史。
 
@@ -25,6 +26,7 @@ import argparse
 import json
 import mimetypes
 import os
+import re
 import sys
 import uuid
 from pathlib import Path
@@ -76,9 +78,7 @@ def _api(
                 ).encode("utf-8")
             )
         filename = file_path.name
-        content_type = (
-            mimetypes.guess_type(filename)[0] or "application/octet-stream"
-        )
+        content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
         body.extend(
             (
                 f"--{boundary}\r\n"
@@ -104,9 +104,7 @@ def _api(
             raw = response.read()
     except HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
-        raise GiteeError(
-            f"{method} {path} 失败 HTTP {exc.code}: {detail}"
-        ) from exc
+        raise GiteeError(f"{method} {path} 失败 HTTP {exc.code}: {detail}") from exc
     except URLError as exc:
         raise GiteeError(f"{method} {path} 网络错误: {exc.reason}") from exc
 
@@ -115,14 +113,10 @@ def _api(
     try:
         return json.loads(raw.decode("utf-8"))
     except json.JSONDecodeError as exc:
-        raise GiteeError(
-            f"{method} {path} 返回的不是 JSON: {raw[:200]!r}"
-        ) from exc
+        raise GiteeError(f"{method} {path} 返回的不是 JSON: {raw[:200]!r}") from exc
 
 
-def get_release_by_tag(
-    *, token: str, owner: str, repo: str, tag: str
-) -> dict[str, Any] | None:
+def get_release_by_tag(*, token: str, owner: str, repo: str, tag: str) -> dict[str, Any] | None:
     try:
         return _api(
             "GET",
@@ -144,15 +138,18 @@ def create_release(
     name: str,
     body: str,
     prerelease: bool,
+    target_commitish: str,
 ) -> dict[str, Any]:
+    if not re.fullmatch(r"[0-9a-fA-F]{40}", target_commitish):
+        raise GiteeError("Release target_commitish must be an existing tag commit SHA")
     form: dict[str, Any] = {
         "access_token": token,
         "tag_name": tag,
         "name": name,
         "body": body,
         "prerelease": "true" if prerelease else "false",
-        # 标签可能尚未推到 Gitee；允许由 API 自动创建指向当前默认分支的标签
-        "auto_create_tag": "true",
+        "target_commitish": target_commitish,
+        "auto_create_tag": "false",
     }
     return _api(
         "POST",
@@ -162,9 +159,30 @@ def create_release(
     )
 
 
-def list_attachments(
-    *, token: str, owner: str, repo: str, release_id: int
-) -> list[dict[str, Any]]:
+def get_tag_commit(*, token: str, owner: str, repo: str, tag: str) -> str:
+    """Resolve an existing Gitee tag to its commit without creating or moving it."""
+    page = 1
+    while True:
+        tags = _api(
+            "GET",
+            f"/repos/{owner}/{repo}/tags",
+            token=token,
+            params={"page": page, "per_page": 100},
+        )
+        if not isinstance(tags, list):
+            raise GiteeError("Gitee tag listing did not return an array")
+        for item in tags:
+            if item.get("name") == tag:
+                commit = (item.get("commit") or {}).get("sha") or ""
+                if not re.fullmatch(r"[0-9a-fA-F]{40}", commit):
+                    raise GiteeError("Gitee tag is missing its commit SHA")
+                return commit
+        if len(tags) < 100:
+            raise GiteeError("Gitee tag does not exist; synchronize tags before releases")
+        page += 1
+
+
+def list_attachments(*, token: str, owner: str, repo: str, release_id: int) -> list[dict[str, Any]]:
     data = _api(
         "GET",
         f"/repos/{owner}/{repo}/releases/{release_id}/attach_files",
@@ -195,7 +213,7 @@ def upload_attachment(
         "POST",
         f"/repos/{owner}/{repo}/releases/{release_id}/attach_files",
         token=token,
-        file_field="_file",
+        file_field="file",
         file_path=path,
         timeout=600,
     )
@@ -215,6 +233,7 @@ def publish(
     """创建/复用 Release 并对齐附件，返回最终 Release 摘要。"""
     release = get_release_by_tag(token=token, owner=owner, repo=repo, tag=tag)
     if release is None:
+        target_commitish = get_tag_commit(token=token, owner=owner, repo=repo, tag=tag)
         print(f"创建 Gitee Release {tag} ...")
         release = create_release(
             token=token,
@@ -224,6 +243,7 @@ def publish(
             name=title,
             body=body,
             prerelease=prerelease,
+            target_commitish=target_commitish,
         )
     else:
         print(f"复用已有 Gitee Release {tag} (id={release.get('id')})")
@@ -231,9 +251,7 @@ def publish(
     release_id = int(release["id"])
     existing = {
         item.get("name"): item
-        for item in list_attachments(
-            token=token, owner=owner, repo=repo, release_id=release_id
-        )
+        for item in list_attachments(token=token, owner=owner, repo=repo, release_id=release_id)
         if item.get("name")
     }
 
@@ -352,7 +370,9 @@ def main() -> int:
         return 1
 
     print(json.dumps(summary, ensure_ascii=False, indent=2))
-    print(f"已同步到 {summary.get('html_url') or f'https://gitee.com/{args.owner}/{args.repo}/releases'}")
+    print(
+        f"已同步到 {summary.get('html_url') or f'https://gitee.com/{args.owner}/{args.repo}/releases'}"
+    )
     return 0
 
 

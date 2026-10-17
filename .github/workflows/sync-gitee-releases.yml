@@ -75,7 +75,7 @@ jobs:
           if [ "$SYNC_DRY_RUN" = true ]; then
             args+=(--dry-run)
           fi
-          python deploy/scripts/sync_gitee_releases.py "${args[@]}"
+          python -u deploy/scripts/sync_gitee_releases.py "${args[@]}"
 
       - name: Save per-release synchronization report
         if: always()

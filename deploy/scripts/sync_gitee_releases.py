@@ -119,11 +119,13 @@ def tag_refs(repository_url: str, tag: str) -> dict[str, str]:
     }
 
 
-def verify_tag(repository: str, owner: str, repo: str, tag: str) -> None:
+def verify_tag(repository: str, owner: str, repo: str, tag: str) -> str:
     source = tag_refs(f"https://github.com/{repository}.git", tag)
     target = tag_refs(f"https://gitee.com/{owner}/{repo}.git", tag)
     if not source or source != target:
         raise SyncError("Exact GitHub/Gitee tag refs differ; synchronize tags before releases")
+    ref = f"refs/tags/{tag}"
+    return source.get(f"{ref}^{{}}") or source[ref]
 
 
 def file_digest(path: Path) -> str:
@@ -206,7 +208,7 @@ def sync_release(
 ) -> dict[str, Any]:
     tag = release["tag_name"]
     assets = assets_by_name(release["assets"], source=True)
-    verify_tag(repository, owner, repo, tag)
+    target_commitish = verify_tag(repository, owner, repo, tag)
     summary = {
         "tag": tag,
         "asset_count": len(assets),
@@ -221,13 +223,19 @@ def sync_release(
     with TemporaryDirectory(prefix="gitee-release-") as temporary:
         directory = Path(temporary)
         if assets:
+            print(
+                json.dumps({"tag": tag, "stage": "download", "asset_count": len(assets)}),
+                flush=True,
+            )
             run(
                 ["gh", "release", "download", tag, "--repo", repository, "--dir", str(directory)],
                 timeout=600,
             )
         verify_local(directory, assets)
+        print(json.dumps({"tag": tag, "stage": "release-metadata"}), flush=True)
         target = get_release_by_tag(token=token, owner=owner, repo=repo, tag=quote(tag, safe=""))
         metadata = {
+            "tag_name": tag,
             "name": release.get("name") or "",
             "body": release.get("body") or "",
             "prerelease": "true" if release.get("prerelease") else "false",
@@ -239,13 +247,23 @@ def sync_release(
                 "POST",
                 endpoint,
                 token=token,
-                form={**metadata, "tag_name": tag, "auto_create_tag": "false"},
+                form={
+                    **metadata,
+                    "target_commitish": target_commitish,
+                    "auto_create_tag": "false",
+                },
             )
         release_id = int(target["id"])
         existing = attachments(token, owner, repo, release_id)
         if set(existing) - set(assets):
             raise SyncError("Gitee release contains unexpected attachments; refusing to delete")
         for name, asset in assets.items():
+            print(
+                json.dumps(
+                    {"tag": tag, "stage": "verify" if name in existing else "upload", "asset": name}
+                ),
+                flush=True,
+            )
             if name in existing:
                 verify_remote(token, owner, repo, release_id, existing[name], asset)
                 summary["skipped"] += 1
@@ -260,6 +278,7 @@ def sync_release(
                 verify_remote(token, owner, repo, release_id, uploaded, asset)
                 summary["uploaded"] += 1
             summary["verified"] += 1
+            print(json.dumps({"tag": tag, "stage": "verified", "asset": name}), flush=True)
         final = attachments(token, owner, repo, release_id)
         if set(final) != set(assets):
             raise SyncError("Final Gitee attachment names differ from source")

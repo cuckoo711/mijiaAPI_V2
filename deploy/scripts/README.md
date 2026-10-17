@@ -130,6 +130,7 @@ uv run python deploy/scripts/publish_gitee_release.py \
 
 - 环境变量 `GITEE_TOKEN` 必填，不会从命令行读取令牌。
 - 默认仓库 `cuckoo711/mijiaAPI`（与 GitHub 的 `cuckoo711/mijiaAPI_V2` 名称不同）。
+- 发布前须先同步对应标签；工具按 Gitee 已有标签的提交 SHA 创建 Release，不自动创建或移动标签。
 - 可重跑：已存在的 Release 会复用；同名附件先删后传，避免重复。
 - `--prerelease` 用于 Android 测试包等预发布。
 - GitHub Actions 需在仓库 Secret 配置 `GITEE_TOKEN`；可用 `GITEE_OWNER` / `GITEE_REPO` 覆盖目标仓库。

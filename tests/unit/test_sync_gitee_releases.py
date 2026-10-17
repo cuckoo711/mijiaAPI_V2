@@ -82,6 +82,17 @@ def test_annotated_tag_object_must_match_even_when_peeled_commit_matches(monkeyp
         sync.verify_tag("source/repo", "target", "repo", "v1")
 
 
+@pytest.mark.parametrize("annotated", [True, False])
+def test_verified_tag_returns_peeled_commit_or_lightweight_commit(monkeypatch, annotated):
+    refs = {"refs/tags/v1": "a" * 40}
+    if annotated:
+        refs["refs/tags/v1^{}"] = "b" * 40
+    monkeypatch.setattr(sync, "tag_refs", lambda *args: refs)
+    assert sync.verify_tag("source/repo", "target", "repo", "v1") == (
+        "b" * 40 if annotated else "a" * 40
+    )
+
+
 def test_missing_target_tag_blocks_download_and_creation(monkeypatch):
     refs = [{"refs/tags/v1.0": "source"}, {}]
     monkeypatch.setattr(sync, "tag_refs", lambda *args: refs.pop(0))
@@ -100,7 +111,7 @@ def target(monkeypatch):
         "api": [],
         "uploads": 0,
     }
-    monkeypatch.setattr(sync, "verify_tag", lambda *args: None)
+    monkeypatch.setattr(sync, "verify_tag", lambda *args: "b" * 40)
 
     def download(command, **kwargs):
         directory = Path(command[command.index("--dir") + 1])
@@ -142,6 +153,7 @@ def test_existing_verified_attachment_skips_upload_and_copies_full_metadata(targ
     assert target["release"]["body"] == release()["body"]
     assert target["release"]["name"] == release()["name"]
     assert target["release"]["prerelease"] is True
+    assert target["api"][0][2]["tag_name"] == "v1.0"
 
 
 def test_existing_corrupt_attachment_is_never_deleted_or_replaced(target, monkeypatch):
@@ -166,6 +178,12 @@ def test_new_release_never_auto_creates_tag(target):
     assert result["status"] == "verified"
     assert target["api"][0][0] == "POST"
     assert target["api"][0][2]["auto_create_tag"] == "false"
+    assert target["api"][0][2]["target_commitish"] == "b" * 40
+    assert target["api"][0][2]["tag_name"] == "v1.0"
+    assert all(
+        required in target["api"][0][2]
+        for required in ("tag_name", "name", "body", "target_commitish")
+    )
 
 
 @pytest.mark.parametrize(
