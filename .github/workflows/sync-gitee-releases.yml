@@ -1,0 +1,87 @@
+name: Sync existing releases to Gitee
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'GitHub 已发布版本标签；填写 all 补齐全部正式版与预发行版'
+        required: true
+        default: all
+        type: string
+      dry_run:
+        description: '仅检查源清单及标签，不发布发行版或上传附件'
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gitee-release-backfill
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Synchronize source main and tags
+        if: ${{ !inputs.dry_run }}
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          GITEE_OWNER: ${{ vars.GITEE_OWNER || 'cuckoo711' }}
+          GITEE_REPO: ${{ vars.GITEE_REPO || 'mijiaAPI' }}
+        run: |
+          set -euo pipefail
+          if [ -z "$GITEE_TOKEN" ]; then
+            echo "::error::缺少仓库 Secret GITEE_TOKEN（需 projects 权限）。"
+            exit 1
+          fi
+          # 通过进程环境传递 Git HTTP 凭据，不写入仓库配置或命令行 URL。
+          auth=$(printf 'cuckoo711:%s' "$GITEE_TOKEN" | base64 -w0)
+          echo "::add-mask::$auth"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=http.https://gitee.com/.extraheader
+          export GIT_CONFIG_VALUE_0="Authorization: Basic $auth"
+          target="https://gitee.com/${GITEE_OWNER}/${GITEE_REPO}.git"
+          git push "$target" refs/remotes/origin/main:refs/heads/main
+          git push "$target" --tags
+
+      - name: Copy existing release metadata and verified assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          GITEE_OWNER: ${{ vars.GITEE_OWNER || 'cuckoo711' }}
+          GITEE_REPO: ${{ vars.GITEE_REPO || 'mijiaAPI' }}
+          SYNC_TAG: ${{ inputs.tag }}
+          SYNC_DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          args=(--github-repo "$GITHUB_REPOSITORY" --owner "$GITEE_OWNER" --repo "$GITEE_REPO" --report "$RUNNER_TEMP/gitee-release-sync.json")
+          if [ "$SYNC_TAG" = all ]; then
+            args+=(--all)
+          else
+            args+=(--tag "$SYNC_TAG")
+          fi
+          if [ "$SYNC_DRY_RUN" = true ]; then
+            args+=(--dry-run)
+          fi
+          python deploy/scripts/sync_gitee_releases.py "${args[@]}"
+
+      - name: Save per-release synchronization report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gitee-release-sync-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/gitee-release-sync.json
+          if-no-files-found: ignore
+          retention-days: 14

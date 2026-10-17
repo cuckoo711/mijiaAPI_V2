@@ -94,7 +94,26 @@ uv run python deploy/scripts/show_device_spec.py "yeelink.light.lamp4"
 
 ### 3. Gitee Release 镜像
 
-把本地/CI 构建产物发布到 Gitee Release，与 GitHub Release 对齐（同 tag、同附件）。CI 在正式发布与 Android 测试预发布里会自动调用；也可手动补同步：
+正式发布与 Android 测试预发布完成 GitHub Release 后，会自动从该 Release 同步标题、完整说明、预发行状态和原附件到 Gitee，并核对下载 SHA-256。补同步既有版本时无需重新构建：
+
+1. 在 Gitee 的“设置 → 私人令牌 → 生成新令牌”创建具有 `projects` 权限的令牌。
+2. 在 GitHub 仓库 `Settings → Secrets and variables → Actions → New repository secret` 中保存为 `GITEE_TOKEN`。令牌值仅填入 Secret，不放进源码、命令参数或报告。
+3. 进入 GitHub Actions 的 **Sync existing releases to Gitee**，选择 `main`，点击 **Run workflow**。`tag` 填某个已发布标签，或填 `all` 补齐全部正式版和预发行版；首次可勾选 `dry_run` 只检查清单。
+4. 查看任务结果与 `gitee-release-sync-*` 报告。只有附件实际从 Gitee 下载后哈希一致，才记为该版同步通过。
+
+已同步附件再次运行会核对后跳过；同名附件哈希不同、额外附件或标签 SHA 不符时停止，保留现有远端内容。先解决具体差异再重跑，不能把 Git 标签存在当作发行版附件已同步。
+
+本机已有 `gh` 登录和 `GITEE_TOKEN` 环境变量时，也可执行：
+
+```bash
+python deploy/scripts/sync_gitee_releases.py --all --dry-run --report gitee-plan.json
+python deploy/scripts/sync_gitee_releases.py --tag v3.9.1 --report gitee-sync.json
+python deploy/scripts/sync_gitee_releases.py --all --report gitee-sync.json
+```
+
+`--dry-run` 不需要 Gitee 写入令牌；实际同步前必须先将源仓库的 `main` 与标签推到 Gitee，并确保标签指向相同对象。手动工作流会先完成这一步。`--all` 仅读取 GitHub 已发布的 Release，排除草稿；只有标签但没有 Release 的版本不会被另行创建。旧版附件可能较大，首次补齐需要下载、上传并下载校验；逐版报告会保留已完成进度，重跑可复用已校验的远端内容。
+
+需要直接发布本地产物时，原有工具仍可使用：
 
 ```bash
 export GITEE_TOKEN=...   # Gitee 私人令牌，需 projects 权限

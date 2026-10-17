@@ -32,13 +32,20 @@ jobs:
             exit 1
           fi
 
-          # 令牌只出现在内存 remote URL，不写入磁盘配置
-          git remote add gitee "https://cuckoo711:${GITEE_TOKEN}@gitee.com/${GITEE_OWNER}/${GITEE_REPO}.git"
+          # Git HTTP 凭据仅放在进程环境，不写入 .git/config 或 remote URL。
+          auth=$(printf 'cuckoo711:%s' "$GITEE_TOKEN" | base64 -w0)
+          echo "::add-mask::$auth"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=http.https://gitee.com/.extraheader
+          export GIT_CONFIG_VALUE_0="Authorization: Basic $auth"
+          target="https://gitee.com/${GITEE_OWNER}/${GITEE_REPO}.git"
 
+          # 标签事件的 HEAD 指向版本提交；始终从源仓库的 main 同步主分支。
+          git fetch origin main
           echo "Mirroring main to gitee/${GITEE_OWNER}/${GITEE_REPO} ..."
-          git push gitee "HEAD:main"
+          git push "$target" "refs/remotes/origin/main:refs/heads/main"
 
           echo "Mirroring tags ..."
-          git push gitee --tags
+          git push "$target" --tags
 
           echo "Gitee mirror updated."
