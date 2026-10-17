@@ -22,17 +22,61 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  sync:
+  plan:
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 15
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      source_sha: ${{ steps.plan.outputs.source_sha }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: main
           fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+
+      - name: Plan published releases from source main
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SYNC_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+
+          requested = os.environ["SYNC_TAG"]
+          if not requested.strip():
+              raise SystemExit("::error::tag 不能为空；填写 all 或 GitHub 已发布版本标签。")
+          repository = os.environ["GITHUB_REPOSITORY"]
+          result = subprocess.run(
+              ["gh", "api", "--paginate", "--slurp", f"repos/{repository}/releases?per_page=100"],
+              check=True, capture_output=True, text=True, encoding="utf-8",
+          )
+          releases = [release for page in json.loads(result.stdout) for release in page]
+          selected = [
+              release for release in releases
+              if not release.get("draft")
+              and (requested == "all" or release["tag_name"] == requested)
+          ]
+          if not selected:
+              raise SystemExit("::error::未找到匹配的 GitHub 已发布发行版；草稿和仅有标签的版本不参与同步。")
+          selected.sort(key=lambda release: (release["created_at"], release["tag_name"]))
+          include = [{"tag": release["tag_name"], "release_id": release["id"]} for release in selected]
+          source_sha = subprocess.check_output(
+              ["git", "rev-parse", "refs/remotes/origin/main"], text=True,
+          ).strip()
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
+              output.write("matrix=" + json.dumps({"include": include}, separators=(",", ":")) + "\n")
+              output.write("source_sha=" + source_sha + "\n")
+          print(json.dumps({"source_main": source_sha, "release_count": len(include), "include": include}))
+          PY
 
       - name: Synchronize source main and tags
         if: ${{ !inputs.dry_run }}
@@ -56,22 +100,35 @@ jobs:
           git push "$target" refs/remotes/origin/main:refs/heads/main
           git push "$target" --tags
 
+  sync:
+    name: Sync ${{ matrix.tag }}
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.source_sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       - name: Copy existing release metadata and verified assets
         env:
           GH_TOKEN: ${{ github.token }}
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
           GITEE_OWNER: ${{ vars.GITEE_OWNER || 'cuckoo711' }}
           GITEE_REPO: ${{ vars.GITEE_REPO || 'mijiaAPI' }}
-          SYNC_TAG: ${{ inputs.tag }}
+          SYNC_TAG: ${{ matrix.tag }}
           SYNC_DRY_RUN: ${{ inputs.dry_run }}
         run: |
           set -euo pipefail
-          args=(--github-repo "$GITHUB_REPOSITORY" --owner "$GITEE_OWNER" --repo "$GITEE_REPO" --report "$RUNNER_TEMP/gitee-release-sync.json")
-          if [ "$SYNC_TAG" = all ]; then
-            args+=(--all)
-          else
-            args+=(--tag "$SYNC_TAG")
-          fi
+          args=(--github-repo "$GITHUB_REPOSITORY" --owner "$GITEE_OWNER" --repo "$GITEE_REPO" --tag "$SYNC_TAG" --report "$RUNNER_TEMP/gitee-release-sync.json")
           if [ "$SYNC_DRY_RUN" = true ]; then
             args+=(--dry-run)
           fi
@@ -81,7 +138,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: gitee-release-sync-${{ github.run_id }}-${{ github.run_attempt }}
+          name: gitee-release-sync-${{ matrix.release_id }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/gitee-release-sync.json
           if-no-files-found: ignore
           retention-days: 14
