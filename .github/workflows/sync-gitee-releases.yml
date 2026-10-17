@@ -119,7 +119,7 @@ jobs:
     name: Sync ${{ matrix.tag }}
     needs: plan
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 360
     strategy:
       fail-fast: false
       max-parallel: 6
@@ -142,7 +142,7 @@ jobs:
           SYNC_TAG: ${{ matrix.tag }}
           SYNC_DRY_RUN: ${{ inputs.dry_run }}
           GITEE_UPLOAD_TRANSPORT: curl
-          GITEE_UPLOAD_MAX_SECONDS: '120'
+          GITEE_UPLOAD_MAX_SECONDS: '7200'
         run: |
           set -euo pipefail
           args=(--github-repo "$GITHUB_REPOSITORY" --owner "$GITEE_OWNER" --repo "$GITEE_REPO" --tag "$SYNC_TAG" --report "$RUNNER_TEMP/gitee-release-sync.json")

@@ -228,6 +228,8 @@ jobs:
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
           GITEE_OWNER: ${{ vars.GITEE_OWNER || 'cuckoo711' }}
           GITEE_REPO: ${{ vars.GITEE_REPO || 'mijiaAPI' }}
+          GITEE_UPLOAD_TRANSPORT: curl
+          GITEE_UPLOAD_MAX_SECONDS: '7200'
         run: |
           set -e
           python deploy/scripts/sync_gitee_releases.py \
