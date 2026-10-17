@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'GitHub 已发布版本标签；填写 all 补齐全部正式版与预发行版'
+        description: 'latest=最新正式版和最新预发行版；也可指定标签，all 按需补齐历史版本'
         required: true
-        default: all
+        default: latest
         type: string
       dry_run:
         description: '仅检查源清单及标签，不发布发行版或上传附件'
@@ -53,18 +53,33 @@ jobs:
 
           requested = os.environ["SYNC_TAG"]
           if not requested.strip():
-              raise SystemExit("::error::tag 不能为空；填写 all 或 GitHub 已发布版本标签。")
+              raise SystemExit("::error::tag 不能为空；填写 latest、已发布版本标签或 all。")
           repository = os.environ["GITHUB_REPOSITORY"]
           result = subprocess.run(
               ["gh", "api", "--paginate", "--slurp", f"repos/{repository}/releases?per_page=100"],
               check=True, capture_output=True, text=True, encoding="utf-8",
           )
           releases = [release for page in json.loads(result.stdout) for release in page]
-          selected = [
+          published = [
               release for release in releases
-              if not release.get("draft")
-              and (requested == "all" or release["tag_name"] == requested)
+              if not release.get("draft") and release.get("published_at")
           ]
+          if requested == "latest":
+              selected = []
+              for prerelease in (False, True):
+                  candidates = [
+                      release for release in published
+                      if bool(release.get("prerelease")) is prerelease
+                  ]
+                  if candidates:
+                      selected.append(max(
+                          candidates, key=lambda release: (release["published_at"], release["id"])
+                      ))
+          else:
+              selected = [
+                  release for release in published
+                  if requested == "all" or release["tag_name"] == requested
+              ]
           if not selected:
               raise SystemExit("::error::未找到匹配的 GitHub 已发布发行版；草稿和仅有标签的版本不参与同步。")
           selected.sort(key=lambda release: (release["created_at"], release["tag_name"]))

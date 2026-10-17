@@ -94,12 +94,12 @@ uv run python deploy/scripts/show_device_spec.py "yeelink.light.lamp4"
 
 ### 3. Gitee Release 镜像
 
-正式发布与 Android 测试预发布完成 GitHub Release 后，会自动从该 Release 同步标题、完整说明、预发行状态和原附件到 Gitee，并核对下载 SHA-256。补同步既有版本时无需重新构建：
+正式发布与 Android 测试预发布完成 GitHub Release 后，会自动从该 Release 同步标题、完整说明、预发行状态和原附件到 Gitee，并核对下载 SHA-256。手动同步最新版本或指定版本时无需重新构建：
 
 1. 在 Gitee 的“设置 → 私人令牌 → 生成新令牌”创建具有 `projects` 权限的令牌。
 2. 在 GitHub 仓库 `Settings → Secrets and variables → Actions → New repository secret` 中保存为 `GITEE_TOKEN`。令牌值仅填入 Secret，不放进源码、命令参数或报告。
-3. 进入 GitHub Actions 的 **Sync existing releases to Gitee**，选择 `main`，点击 **Run workflow**。`tag` 填某个已发布标签，或填 `all` 补齐全部正式版和预发行版；首次可勾选 `dry_run` 只检查清单。
-4. 工作流从 `main` 规划已发布发行版清单，先同步代码和标签，再按不同发行版并行处理，最多同时运行 6 个版本。指定单个 `tag` 时只运行该版本；空标签或不存在的已发布版本会明确失败。
+3. 进入 GitHub Actions 的 **Sync existing releases to Gitee**，选择 `main`，点击 **Run workflow**。`tag` 默认 `latest`，按发布时间各选最新正式版和最新预发行版，最多同步两版；某一类别尚无发行版时只同步现有类别。也可填写具体已发布标签，只同步该版本。首次可勾选 `dry_run` 只检查清单。
+4. 工作流从 `main` 规划清单，先同步代码和标签，再按不同发行版并行处理；默认 `latest` 最多两个任务。只有需要补齐历史发行版时才显式填写 `all`，此时最多同时运行 6 个版本。空标签或不存在的已发布版本会明确失败，草稿不参与同步。
 5. 查看任务结果与 `gitee-release-sync-<源发行版ID>-<运行ID>-<尝试次数>` 报告。每个版本独立保存报告；只有附件实际从 Gitee 下载后哈希一致，才记为该版同步通过。
 
 不同版本之间独立执行，一个版本失败后其他版本继续完成。失败后可重新运行工作流，将 `tag` 填为失败版本单独重试；已同步附件会下载核对后跳过。不同手动工作流仍依次执行，避免同一版本被不同任务同时写入。同名附件哈希不同、额外附件或标签 SHA 不符时停止，保留现有远端内容。先解决具体差异再重跑，不能把 Git 标签存在当作发行版附件已同步。
@@ -107,12 +107,14 @@ uv run python deploy/scripts/show_device_spec.py "yeelink.light.lamp4"
 本机已有 `gh` 登录和 `GITEE_TOKEN` 环境变量时，也可执行：
 
 ```bash
-python deploy/scripts/sync_gitee_releases.py --all --dry-run --report gitee-plan.json
+python deploy/scripts/sync_gitee_releases.py --tag v3.9.1 --dry-run --report gitee-plan.json
 python deploy/scripts/sync_gitee_releases.py --tag v3.9.1 --report gitee-sync.json
-python deploy/scripts/sync_gitee_releases.py --all --report gitee-sync.json
+python deploy/scripts/sync_gitee_releases.py --tag v3.9.1-android-test.9 --report gitee-android-sync.json
 ```
 
-`--dry-run` 不需要 Gitee 写入令牌；工作流的 `dry_run` 也会跳过代码和标签推送。实际同步前必须先将源仓库的 `main` 与标签推到 Gitee，并确保标签指向相同对象。手动工作流会先完成这一步，只从 `refs/remotes/origin/main` 推送主分支，不强制覆盖已有标签；各版本任务使用规划时固定的 `main` 提交运行脚本。`--all` 仅读取 GitHub 已发布的 Release，排除草稿；只有标签但没有 Release 的版本不会被另行创建。本机的 `--all` 命令仍逐版串行处理，工作流的 `all` 则拆成多个版本任务。旧版附件可能较大，首次补齐需要下载、上传并下载校验；逐版报告会保留已完成进度，重跑可复用已校验的远端内容。
+`--dry-run` 不需要 Gitee 写入令牌；工作流的 `dry_run` 也会跳过代码和标签推送。实际同步前必须先将源仓库的 `main` 与标签推到 Gitee，并确保标签指向相同对象。手动工作流会先完成这一步，只从 `refs/remotes/origin/main` 推送主分支，不强制覆盖已有标签；各版本任务使用规划时固定的 `main` 提交运行脚本。`latest` 是工作流选择器，规划后会把具体标签传给同步脚本；本机脚本使用 `--tag` 指定版本。
+
+按需补齐历史时，本机可执行 `python deploy/scripts/sync_gitee_releases.py --all --report gitee-history-sync.json`。`--all` 仅读取 GitHub 已发布的 Release，排除草稿；只有标签但没有 Release 的版本不会被另行创建。本机命令逐版串行处理，工作流的显式 `all` 则拆成多个版本任务。附件同步需要下载、上传并下载校验；逐版报告保留已完成进度，重跑可复用已校验的远端内容。
 
 需要直接发布本地产物时，原有工具仍可使用：
 
