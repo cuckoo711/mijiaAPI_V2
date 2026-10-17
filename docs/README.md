@@ -6,7 +6,7 @@
 
 ## 主要文档
 
-- [../README.md](../README.md) - 项目主文档，包含快速部署、API 使用、配置说明
+- [../README.md](../README.md) - 项目首页，包含操作截图、下载运行、快速部署与 API 使用
 - [使用指南/07-管理台图文教程.md](使用指南/07-管理台图文教程.md) - 面向已部署服务的网页操作教程，附实际页面截图
 
 ## 架构设计
@@ -53,8 +53,8 @@
 
 ## 工具文档
 
-- [../deploy/scripts/README.md](../deploy/scripts/README.md) - 项目脚本使用说明（清理、设备规格等）
-- [../deploy/README.md](../deploy/README.md) - Docker / systemd / 打包、依赖就绪、审计队列恢复与运维排查
+- [../deploy/scripts/README.md](../deploy/scripts/README.md) - 清理、设备规格与 Gitee 发行版镜像维护
+- [../deploy/README.md](../deploy/README.md) - Docker / systemd、打包与自动发布、备份恢复与运维排查
 - [故障排查指南.md](故障排查指南.md) - 常见问题诊断和解决方案
 
 ---

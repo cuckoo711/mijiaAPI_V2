@@ -158,16 +158,28 @@ docker volume rm deploy_mijia-data
 
 ## 打包（PyInstaller）
 
-```bash
-# 推荐
-python deploy/packaging/build.py
+需要 Python、uv、Node.js 和 npm。在仓库根目录执行：
 
-# 或
-./deploy/packaging/build.sh
-# Windows: deploy\packaging\build.bat
+```bash
+uv sync
+uv pip install pyinstaller pillow
+uv run python deploy/packaging/build.py
+```
+
+脚本构建前端并生成当前平台的单文件程序，输出到 `dist/`。也可分步执行：
+
+```bash
+cd web && npm ci && npm run build && cd ..
+uv run pyinstaller --clean --noconfirm deploy/packaging/mijia-server.spec
 ```
 
 图标资源在 [`assets/`](assets/)；Windows 旁路启动脚本：[`packaging/start-server.bat`](packaging/start-server.bat)（检测 `configs/server/server.sqlite3`）。
+
+## 自动发布
+
+推送 `vX.Y.Z` 标签到 GitHub 后，[正式版工作流](../.github/workflows/build.yml) 构建桌面程序和 Android 测试 APK，完成各平台运行检查后创建 GitHub Release，附带程序、`SHA256SUMS` 和检查报告。标签版本须与 `pyproject.toml` 一致。
+
+`vX.Y.Z-android-test.N` 标签单独发布 Android 测试版，详见 [Android 发布说明](../android/README.md#github-自动构建与发布)。最新正式版和最新 Android 测试版的说明与全部附件自动同步至 Gitee；触发规则、令牌配置和排障见 [Gitee Release 镜像](scripts/README.md#3-gitee-release-镜像)。`main` 和 `v*` 标签由 [仓库镜像工作流](../.github/workflows/mirror-gitee.yml) 同步。
 
 ## 运维脚本
 

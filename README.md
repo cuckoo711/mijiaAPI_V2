@@ -7,9 +7,7 @@
 
 第三方米家智能家居 Python SDK，内置 FastAPI + Vue3 管理后台。
 
-> ## [管理台图文使用教程（17 张界面截图）](docs/使用指南/07-管理台图文教程.md)
->
-> **第一次使用，先看这里。** 从管理员登录、米家扫码和资源同步，到设备与场景控制、API Key、接口调用和故障排查，按截图逐步操作。
+**[图文教程](#管理台图文教程)** · [下载运行](#下载运行) · [快速部署](#快速部署) · [API 接入](#对外-api) · [完整文档](docs/README.md)
 
 **两种使用形态：**
 
@@ -19,6 +17,54 @@
 | **API Server** | 部署为本地/服务器服务，通过网页管理，对外提供 HTTP API |
 
 > 管理台默认监听 `127.0.0.1:8123`，公网使用需开启访问开关并建议搭配 HTTPS 反向代理。
+
+## 管理台图文教程
+
+**[查看完整教程（17 张截图，含配置与故障排查）](docs/使用指南/07-管理台图文教程.md)**
+
+以下截图使用演示数据，访问地址请替换为自己的服务地址。
+
+### 1. 登录管理员
+
+打开管理台，输入管理员账号和密码。首次使用时，先按页面提示创建管理员。
+
+![管理员登录](docs/使用指南/assets/管理台教程/02-管理员登录.jpg)
+
+### 2. 登录米家并同步资源
+
+进入「运行管理 → 米家登录」，点击「开始扫码登录」，用米家 App 扫码确认，再点击「同步家庭/设备/场景」。
+
+![米家登录与同步](docs/使用指南/assets/管理台教程/04-米家登录.jpg)
+
+### 3. 查看和管理设备
+
+进入「资源管理 → 家庭与设备」，按家庭筛选设备。修改 `Slug` 后点击该行「保存」；需要控制设备时，向右滚动表格，将「访问」设为「可控」。
+
+![家庭与设备](docs/使用指南/assets/管理台教程/05-家庭与设备.jpg)
+
+### 4. 读取状态并控制设备
+
+点击「状态与控制」查看当前属性。选择可写属性或动作、填写参数后，点击「确认写入属性」或「确认执行动作」。只读或隐藏设备无法控制。
+
+![设备状态与控制](docs/使用指南/assets/管理台教程/06-状态与控制.jpg)
+
+### 5. 执行场景
+
+进入「场景管理」，为需要的场景开启「允许执行」并关闭「隐藏」。点击「执行场景」，核对名称和家庭后点击「确认执行场景」。
+
+![场景执行确认](docs/使用指南/assets/管理台教程/08-场景确认.jpg)
+
+### 6. 创建 API Key
+
+进入「访问控制 → API Key」，填写名称，先选择「读取服务状态」「读取家庭与设备」，设置资源范围和有效期后点击「创建」。完整密钥只显示一次，请及时保存。
+
+![创建 API Key](docs/使用指南/assets/管理台教程/09-创建API-Key.jpg)
+
+### 7. 调用 API
+
+进入「访问控制 → API 使用」，查看接口说明和请求示例。使用新建的 Key 调用 `GET /api/v1/devices`，请求头为 `Authorization: Bearer YOUR_API_KEY`。
+
+![API 使用](docs/使用指南/assets/管理台教程/11-API使用.jpg)
 
 ## 快速部署
 
@@ -48,14 +94,6 @@ uv run python -m server.cli run
 ```
 
 打开 `http://127.0.0.1:8123` → 创建管理员 → 扫码登录米家 → 同步家庭/设备/场景 → 开始使用。
-
-### 首次使用流程
-
-1. 打开管理台，创建管理员账号
-2. 进入「米家登录」，用米家 App 扫码
-3. 点击「同步家庭/设备/场景」（支持实时进度显示）
-4. 进入「API Key」创建调用密钥
-5. 使用 API 接入你的应用
 
 ## 核心功能
 
@@ -100,15 +138,7 @@ curl -H "Authorization: Bearer YOUR_API_KEY" \
 
 控制请求出现 `409 EXECUTION_UNKNOWN` 时，命令可能已送达，服务不会自动重发；请先查询设备状态或场景效果，再决定后续操作。查询请求与发送前的连接失败仍可重试。
 
-批量属性接口 `/api/v1/batch/devices/properties` 的每项必须包含 `device`（兼容 `device_id`）、正整数 `siid` / `piid` 和 `value`。SDK 批量请求使用 `did`（兼容 `device_id`）。服务会在发送整批命令前检查全部属性规格、写权限、类型、范围和步长。
-
-管理台支持密钥资源范围、有效期、启停、删除与轮换。`POST /api/admin/api-keys/{id}/rotate` 在同一事务中创建新密钥并停用旧密钥；默认继承原权限和有效期，可传 `expires_at` 修改有效期，传 `null` 取消有效期。新密钥仅在创建或轮换响应中显示一次。
-
-在「家庭与设备」打开「状态与控制」，可读取状态与规格，填写属性值或动作参数后明确点击确认；「场景管理」提供手动执行入口。管理员写入要求设备可控或场景可执行，并拒绝隐藏资源。读取状态、打开表单、审计补写均不会自动执行设备操作。接口、参数与 Cookie/CSRF 说明见 [API Server 开发启动](docs/开发指南/05-API-Server-开发启动.md#管理员手动控制与操作回执)。
-
-控制响应进入审计阶段后，`X-Operation-ID` 标识该次操作，`X-Audit-Delivery` 区分 `stored`、`queued`、`unavailable`；审计落盘状态与设备执行结果分开判断。队列在启动时和运行中约每 10 秒补写，也可在管理台显式补写。完全未能保存的事件无法补写，需排查日志与存储。`/healthz` 用于 HTTP 存活检测，`/readyz` 检查 SQLite 可写、前端入口与审计状态，依赖异常返回 503。详细恢复步骤见 [部署运维说明](deploy/README.md#依赖就绪与审计恢复)。
-
-源码测试、模拟浏览器和隔离 Docker 验证只能证明对应的软件路径；真实米家授权、具体设备规格、共享家庭场景权限、设备状态与实际动作效果仍需在目标环境验收。HTTP 200、控制 ACK、操作回执和就绪检查均不代替物理设备验收。
+批量属性、密钥轮换、管理员接口与操作回执见 [API Server 接口说明](docs/开发指南/05-API-Server-开发启动.md#常用接口)。
 
 ## 免责声明与使用边界
 
@@ -217,12 +247,6 @@ MIJIA_SERVER_LOG_LEVEL=INFO
 
 改为非本机绑定后，建议关闭私网首次创建入口，使用容器内 `init --admin admin --allow-lan` 创建管理员并明确启用局域网策略。更多说明见 [`deploy/README.md`](deploy/README.md)。
 
-Docker 生命周期验证可复用以下命令。测试仅创建带随机前缀的隔离卷和回环端口，覆盖首次创建、Cookie/CSRF、密钥撤销、重启/重建持久化及整卷备份恢复；不会读取生产卷或调用真实米家设备。
-
-```bash
-python tests/docker/smoke.py --image mijia-server:latest --report docker-smoke-report.json
-```
-
 ### systemd
 
 仓库提供加固示例单元，见 [`deploy/mijia-server.service`](deploy/mijia-server.service) 与
@@ -256,52 +280,9 @@ server {
 }
 ```
 
-## 项目结构
+## 下载运行
 
-```
-mijiaAPI_V2/
-├── mijiaAPI_V2/           # SDK 核心
-├── server/                # FastAPI 服务端
-├── web/                   # Vue3 管理台
-├── configs/               # 运行时数据与 TOML 模板
-├── docs/ · examples/ · tests/
-├── deploy/                # Docker / systemd / 打包 / 运维脚本
-│   ├── Dockerfile
-│   ├── docker-compose.yml
-│   ├── packaging/         # build 脚本与 mijia-server.spec
-│   ├── scripts/           # clean / release notes / 设备规格工具
-│   └── assets/            # 应用图标
-├── pyproject.toml · Makefile · README.md
-└── .dockerignore          # 需在仓库根（Docker build context）
-```
-
-管理台使用 HttpOnly Cookie 会话 + CSRF；对外 API 仍用 `Authorization: Bearer <api_key>`。
-SDK 与 Server 默认数据目录均为 `configs/`（旧 `.mijia/` 启动时迁移后删除）。
-详见 [docs/开发指南/05-API-Server-开发启动.md](docs/开发指南/05-API-Server-开发启动.md)。
-
-## 打包为可执行文件
-
-项目支持打包为独立可执行文件，无需安装 Python 即可运行。
-
-### 本地构建
-
-```bash
-# 安装构建工具
-uv pip install pyinstaller pillow
-
-# 一键构建（前端 + 可执行文件）
-uv run python deploy/packaging/build.py
-
-# 或分步：
-cd web && npm ci && npm run build && cd ..
-uv run pyinstaller --clean --noconfirm deploy/packaging/mijia-server.spec
-```
-
-输出目录：`dist/`。
-
-### 多平台构建
-
-项目支持以下平台的自动构建：
+从 [GitHub 发行版](https://github.com/cuckoo711/mijiaAPI_V2/releases) 或 [Gitee 发行版](https://gitee.com/cuckoo711/mijiaAPI/releases) 下载对应程序，无需安装 Python。
 
 | 平台 | 架构 | 产物 |
 |------|------|------|
@@ -310,22 +291,9 @@ uv run pyinstaller --clean --noconfirm deploy/packaging/mijia-server.spec
 | Linux | ARM64 | `mijia-server-linux-arm64` |
 | macOS | ARM64 | `mijia-server-macos-arm64` |
 
-产物是 PyInstaller 单文件可执行程序，直接挂在 Release 上，不额外打包成压缩包。Release 同时提供 `SHA256SUMS`，用于核对下载文件的 SHA-256。
+发行版同时提供 `SHA256SUMS`，可用于核对下载文件。Intel Mac 请按上方步骤从源码运行。
 
-- **GitHub Release**（构建与验收的主入口）：<https://github.com/cuckoo711/mijiaAPI_V2/releases>
-- **Gitee Release**（国内下载镜像，CI 自动同步同一套产物）：<https://gitee.com/cuckoo711/mijiaAPI/releases>
-
-Android 手机独立运行服务的测试 APK 见 [GitHub 发行版](https://github.com/cuckoo711/mijiaAPI_V2/releases) 或 [Gitee 发行版](https://gitee.com/cuckoo711/mijiaAPI/releases)，选择最新 `android-test` 测试版。Android 7.0 起，优先下载 `universal` 通用包；安装使用、兼容性与验收范围见 [Android 说明](android/README.md)。后续版本会自动构建并附带安卓测试包。
-
-> macOS Intel（x64）不再随版本发布：标准运行器里最后一个 Intel macOS 镜像
-> `macos-13` 已于 2025 年 12 月停止支持，而 PyInstaller 无法交叉编译。Intel Mac
-> 用户请用 `uv sync` 从源码运行，或自行在本机执行上面的打包命令。
-
-推送版本标签到 GitHub 后会自动构建与验收，通过后创建 GitHub Release。**Sync latest releases to Gitee** 随发布完成自动同步最高版本号的正式版和最新 Android 测试版，包括全部附件、完整说明和 SHA-256 校验；补发旧标签不会补传历史版本。手工发布或修改说明也会触发同步，每天北京时间 03:37 自动核对和补偿失败，正常发版无需手动操作 Gitee。
-
-`mirror-gitee` 工作流自动同步 `main` 与 `v*` 标签。Release 同步统一执行，失败会重新读取清单并自动尝试，已有正确附件核对后复用。详情与排障入口见 [Gitee Release 镜像说明](deploy/scripts/README.md#3-gitee-release-镜像)。
-
-CI 使用仓库 Secret `GITEE_TOKEN`（Gitee 私人令牌的 `projects` 权限）；仓库属主/名称默认 `cuckoo711/mijiaAPI`，可用 Actions 变量 `GITEE_OWNER` / `GITEE_REPO` 覆盖。令牌保持有效即可，无需在本机重复提供。
+Android 7.0 及以上可选择最新 `android-test` 测试版的 `universal` 通用 APK，安装方法见 [Android 说明](android/README.md#使用)。
 
 ### 运行可执行文件
 
@@ -348,6 +316,7 @@ chmod +x mijia-server-linux-x64
 
 | 分类 | 文档 |
 |------|------|
+| 管理台图文教程 | [完整操作步骤与截图](docs/使用指南/07-管理台图文教程.md) |
 | 文档索引 | [docs/README.md](docs/README.md) |
 | 快速开始 / 配置 / 最佳实践 | [docs/使用指南/](docs/使用指南/) |
 | SDK 与领域模型 / 异常 | [docs/API参考/](docs/API参考/) |
@@ -356,6 +325,7 @@ chmod +x mijia-server-linux-x64
 | 故障排查 | [docs/故障排查指南.md](docs/故障排查指南.md) |
 | 示例代码 | [examples/README.md](examples/README.md) |
 | Android 测试版 | [android/README.md](android/README.md) |
+| 构建与发布 | [打包与自动发布](deploy/README.md#打包pyinstaller) · [Gitee 镜像维护](deploy/scripts/README.md#3-gitee-release-镜像) |
 
 ## 常见问题
 

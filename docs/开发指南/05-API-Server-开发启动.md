@@ -185,6 +185,14 @@ server/
 
 管理台「API 使用」页有完整示例；交互式文档可在「系统安全」开启。
 
+### 批量属性
+
+`POST /api/v1/batch/devices/properties` 的每项必须包含 `device`（兼容 `device_id`）、正整数 `siid` / `piid` 和 `value`。SDK 批量请求使用 `did`（兼容 `device_id`）。服务会在发送整批命令前检查全部属性规格、写权限、类型、范围和步长。
+
+### 密钥轮换
+
+`POST /api/admin/api-keys/{id}/rotate` 在同一事务中创建新密钥并停用旧密钥，继承原权限与资源范围。默认继承原有效期，可传 `expires_at` 修改有效期，传 `null` 取消有效期。新密钥仅在创建或轮换响应中显示一次。
+
 ## 管理员手动控制与操作回执
 
 以下管理接口使用已登录管理员 Cookie；写入和补写须带 `X-CSRF-Token`。`device_id`、`scene_id` 使用管理列表返回的本地 `id`，不使用设备 Slug 或米家远端 ID。
