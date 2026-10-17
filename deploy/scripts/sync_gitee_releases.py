@@ -209,7 +209,9 @@ def sync_release(
     tag = release["tag_name"]
     # Verify the upload path with small checksum/report files before large binaries.
     assets = dict(
-        sorted(assets_by_name(release["assets"], source=True).items(), key=lambda item: item[1]["size"])
+        sorted(
+            assets_by_name(release["assets"], source=True).items(), key=lambda item: item[1]["size"]
+        )
     )
     target_commitish = verify_tag(repository, owner, repo, tag)
     summary = {
