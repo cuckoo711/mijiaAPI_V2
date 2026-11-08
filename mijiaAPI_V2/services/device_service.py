@@ -156,17 +156,20 @@ class DeviceService:
         """
         return self._device_repo.get_by_id(device_id, credential)
 
-    def get_device_properties(self, device_id: str, credential: Credential) -> List[DeviceProperty]:
+    def get_device_properties(
+        self, device_id: str, credential: Credential, *, fresh: bool = False
+    ) -> List[DeviceProperty]:
         """获取设备属性
 
         Args:
             device_id: 设备ID
             credential: 用户凭据
+            fresh: 跳过缓存读取，直接从API获取最新值
 
         Returns:
             设备属性列表
         """
-        return self._device_repo.get_properties(device_id, credential)
+        return self._device_repo.get_properties(device_id, credential, fresh=fresh)
 
     def set_device_property(
         self, device_id: str, siid: int, piid: int, value: Any, credential: Credential

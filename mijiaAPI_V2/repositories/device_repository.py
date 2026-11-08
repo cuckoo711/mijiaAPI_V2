@@ -260,21 +260,25 @@ class DeviceRepositoryImpl(IDeviceRepository):
 
         return None
 
-    def get_properties(self, device_id: str, credential: Credential) -> List[DeviceProperty]:
+    def get_properties(
+        self, device_id: str, credential: Credential, *, fresh: bool = False
+    ) -> List[DeviceProperty]:
         """获取设备属性
 
         Args:
             device_id: 设备ID
             credential: 用户凭据
+            fresh: 跳过缓存读取，直接从API获取最新值
 
         Returns:
             设备属性列表
         """
         # 检查缓存
         cache_key = f"device:{device_id}:properties"
-        cached = self._cache.get(cache_key, namespace=credential.user_id)
-        if cached:
-            return [DeviceProperty.model_validate(p) for p in cached]
+        if not fresh:
+            cached = self._cache.get(cache_key, namespace=credential.user_id)
+            if cached:
+                return [DeviceProperty.model_validate(p) for p in cached]
 
         # 从API获取
         response = self._http.post(

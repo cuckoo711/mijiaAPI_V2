@@ -53,6 +53,7 @@ from mijiaAPI_V2.factory import (
     create_auth_service,
     create_multi_user_clients,
 )
+from mijiaAPI_V2.watcher import DeviceStateWatcher, StateChangeEvent
 
 __all__ = [
     # 版本信息
@@ -67,6 +68,9 @@ __all__ = [
     "create_auth_service",
     "create_multi_user_clients",
     "create_api_client_from_file",
+    # 状态监听
+    "DeviceStateWatcher",
+    "StateChangeEvent",
     # 领域模型
     "Credential",
     "Device",

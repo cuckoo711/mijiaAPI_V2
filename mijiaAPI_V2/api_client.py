@@ -3,7 +3,7 @@
 提供同步和异步的API客户端实现。
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional, Union
 from contextlib import contextmanager
 
 from .core.logging import get_logger
@@ -11,6 +11,7 @@ from .domain.models import Credential, Device, Home, Scene
 from .services.device_service import DeviceService, normalize_property_requests
 from .services.scene_service import SceneService
 from .services.statistics_service import StatisticsService
+from .watcher import DEFAULT_POLL_INTERVAL, DeviceStateWatcher, StateChangeHandler
 
 logger = get_logger(__name__)
 
@@ -56,6 +57,42 @@ class MijiaAPI:
         self._statistics_service = statistics_service
         self._home_repository = home_repository
         self._cache_manager = cache_manager
+        self._watcher: Optional[DeviceStateWatcher] = None
+
+    def _state_watcher(self) -> DeviceStateWatcher:
+        if self._watcher is None:
+            self._watcher = DeviceStateWatcher(self._device_service, self._credential)
+        return self._watcher
+
+    def on_change(
+        self,
+        devices: Union[str, int, Iterable[Union[str, int]]],
+        interval: float = DEFAULT_POLL_INTERVAL,
+    ) -> Callable[[StateChangeHandler], StateChangeHandler]:
+        """装饰器：注册设备状态变化回调
+
+        后台线程按 ``interval`` 轮询指定设备的属性，与上次快照对比，
+        有变化时调用被装饰的函数，事件为 :class:`StateChangeEvent`。
+        首次轮询只建立基线，不触发回调。回调在轮询线程中同步执行。
+
+        Args:
+            devices: 设备ID，或设备ID列表
+            interval: 轮询间隔（秒），默认30秒；低于5秒会被钳制到5秒
+
+        Returns:
+            装饰器，返回原函数，可继续正常调用
+
+        Example:
+            >>> @api.on_change(["did_1", "did_2"], interval=10)
+            ... def on_change(event: StateChangeEvent) -> None:
+            ...     print(event.did, event.name, event.old, "->", event.new)
+        """
+        return self._state_watcher().on_change(devices, interval)
+
+    def stop_watching(self, timeout: float = 5.0) -> None:
+        """停止设备状态监听的后台轮询线程"""
+        if self._watcher is not None:
+            self._watcher.stop(timeout=timeout)
 
     def get_homes(self) -> List[Home]:
         """获取家庭列表
@@ -379,6 +416,8 @@ class MijiaAPI:
             credential: 新的凭据对象
         """
         self._credential = credential
+        if self._watcher is not None:
+            self._watcher.update_credential(credential)
 
     @property
     def credential(self) -> Credential:
@@ -466,6 +505,36 @@ class AsyncMijiaAPI:
         self._statistics_service = statistics_service
         self._home_repository = home_repository
         self._cache_manager = cache_manager
+        self._watcher: Optional[DeviceStateWatcher] = None
+
+    def _state_watcher(self) -> DeviceStateWatcher:
+        if self._watcher is None:
+            self._watcher = DeviceStateWatcher(self._device_service, self._credential)
+        return self._watcher
+
+    def on_change(
+        self,
+        devices: Union[str, int, Iterable[Union[str, int]]],
+        interval: float = DEFAULT_POLL_INTERVAL,
+    ) -> Callable[[StateChangeHandler], StateChangeHandler]:
+        """装饰器：注册设备状态变化回调
+
+        与同步版一致：后台线程轮询设备属性并分发变化事件。
+        回调在轮询线程中同步执行，不要在其中调用阻塞事件循环的代码。
+
+        Args:
+            devices: 设备ID，或设备ID列表
+            interval: 轮询间隔（秒），默认30秒；低于5秒会被钳制到5秒
+
+        Returns:
+            装饰器，返回原函数，可继续正常调用
+        """
+        return self._state_watcher().on_change(devices, interval)
+
+    def stop_watching(self, timeout: float = 5.0) -> None:
+        """停止设备状态监听的后台轮询线程"""
+        if self._watcher is not None:
+            self._watcher.stop(timeout=timeout)
 
     async def get_homes(self) -> List[Home]:
         """异步获取家庭列表
@@ -782,6 +851,8 @@ class AsyncMijiaAPI:
             credential: 新的凭据对象
         """
         self._credential = credential
+        if self._watcher is not None:
+            self._watcher.update_credential(credential)
 
     @property
     def credential(self) -> Credential:

@@ -55,8 +55,10 @@ class IDeviceRepository(ABC):
         pass
 
     @abstractmethod
-    def get_properties(self, device_id: str, credential: Credential) -> List[DeviceProperty]:
-        """获取设备属性"""
+    def get_properties(
+        self, device_id: str, credential: Credential, *, fresh: bool = False
+    ) -> List[DeviceProperty]:
+        """获取设备属性；fresh=True 时跳过缓存读取"""
         pass
 
     @abstractmethod

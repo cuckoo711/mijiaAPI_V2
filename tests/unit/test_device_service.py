@@ -213,9 +213,27 @@ def test_get_device_properties_delegates_to_repo(
     result = device_service.get_device_properties("device_001", sample_credential)
 
     # 验证
-    mock_device_repo.get_properties.assert_called_once_with("device_001", sample_credential)
+    mock_device_repo.get_properties.assert_called_once_with(
+        "device_001", sample_credential, fresh=False
+    )
     assert len(result) == 1
     assert result[0] == sample_property
+
+
+def test_get_device_properties_passes_fresh_flag(
+    device_service: DeviceService,
+    mock_device_repo: Mock,
+    sample_credential: Credential,
+    sample_property: DeviceProperty,
+) -> None:
+    """测试fresh=True透传给仓储以跳过缓存"""
+    mock_device_repo.get_properties.return_value = [sample_property]
+
+    device_service.get_device_properties("device_001", sample_credential, fresh=True)
+
+    mock_device_repo.get_properties.assert_called_once_with(
+        "device_001", sample_credential, fresh=True
+    )
 
 
 def test_set_device_property_success(
