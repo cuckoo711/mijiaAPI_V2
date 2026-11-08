@@ -66,6 +66,7 @@ class MipsService:
         self._event_handlers: List[tuple] = []
         self._state_handlers: List[tuple] = []
         self._refresh_lock = threading.Lock()
+        self._refresh_stop: Optional[threading.Event] = None
 
     # ---- 登录 / 令牌 ----
 
@@ -202,12 +203,32 @@ class MipsService:
         else:
             client.subscribe_all()
         self._client = client
+        self._start_refresh_watchdog()
         logger.info("MIPS 推送服务已启动")
 
     def stop(self) -> None:
+        if self._refresh_stop is not None:
+            self._refresh_stop.set()
+            self._refresh_stop = None
         if self._client is not None:
             self._client.disconnect()
             self._client = None
+
+    def _start_refresh_watchdog(self) -> None:
+        """后台守护线程：令牌到期前自动续期，保证服务可长期运行"""
+        if self._refresh_stop is not None:
+            return
+        stop = threading.Event()
+        self._refresh_stop = stop
+
+        def _loop() -> None:
+            while not stop.wait(60):
+                if self._tokens is not None and self._tokens.needs_refresh():
+                    self._refresh_tokens()
+
+        threading.Thread(
+            target=_loop, name="mips-token-refresh", daemon=True
+        ).start()
 
     # ---- 内部分发 ----
 

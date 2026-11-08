@@ -308,3 +308,20 @@ class TestService:
 
     def test_is_connected_false_before_start(self):
         assert self._service().is_connected is False
+
+    def test_refresh_watchdog_lifecycle(self):
+        service = self._service()
+        with patch.object(MipsCloudClient, "connect"), patch.object(
+            MipsCloudClient, "subscribe_all"
+        ):
+            service._tokens = MipsTokens(
+                access_token="at",
+                refresh_token="rt",
+                expires_at=100.0,
+                device_uuid="u1",
+            )
+            service.start()
+            assert service._refresh_stop is not None
+            service.stop()
+            assert service._refresh_stop is None
+            assert service._client is None

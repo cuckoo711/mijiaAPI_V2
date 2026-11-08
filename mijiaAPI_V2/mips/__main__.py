@@ -2,10 +2,10 @@
 
 运行::
 
-    python -m mijiaAPI_V2.mips                # 默认 127.0.0.1:8130
+    python -m mijiaAPI_V2.mips                # 默认 0.0.0.0:8130，允许局域网访问
     python -m mijiaAPI_V2.mips --port 8131 --webhook http://127.0.0.1:9000/hook
 
-浏览器打开服务地址即可登录小米账号、查看实时推送。
+浏览器打开服务地址（本机或局域网 IP）即可登录小米账号、查看实时推送。
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import json
 import queue
+import socket
 import threading
 from typing import Any, Dict, List, Optional
 
@@ -200,9 +201,26 @@ def create_app(state: AppState) -> FastAPI:
     return app
 
 
+def _lan_ip() -> str:
+    """探测本机在局域网中的地址（仅用于启动提示，不建立真实连接）"""
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            sock.connect(("8.8.8.8", 80))
+            return sock.getsockname()[0]
+        finally:
+            sock.close()
+    except OSError:
+        return "127.0.0.1"
+
+
 def main(argv: Optional[List[str]] = None) -> None:
     parser = argparse.ArgumentParser(description="MIoT Pub/Sub 推送服务")
-    parser.add_argument("--host", default="127.0.0.1", help="监听地址")
+    parser.add_argument(
+        "--host",
+        default="0.0.0.0",
+        help="监听地址，默认 0.0.0.0 允许局域网访问；改回 127.0.0.1 仅限本机",
+    )
     parser.add_argument("--port", type=int, default=8130, help="监听端口")
     parser.add_argument("--cloud", default="cn", help="云区域：cn/de/i2/ru/sg/us")
     parser.add_argument("--devices", default="", help="只订阅这些设备 did（逗号分隔），默认全部")
@@ -257,6 +275,9 @@ def main(argv: Optional[List[str]] = None) -> None:
 
     app = create_app(state)
     print(f"MIPS 推送服务: http://{args.host}:{args.port}/", flush=True)
+    if args.host not in ("127.0.0.1", "localhost", "::1"):
+        print(f"局域网访问: http://{_lan_ip()}:{args.port}/", flush=True)
+        print("提示：服务已对局域网开放，事件流对同网设备可见。", flush=True)
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
 
 
