@@ -9,6 +9,7 @@ from __future__ import annotations
 import threading
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Union
+from uuid import uuid4
 
 import httpx
 
@@ -67,6 +68,7 @@ class MipsService:
         self._state_handlers: List[tuple] = []
         self._refresh_lock = threading.Lock()
         self._refresh_stop: Optional[threading.Event] = None
+        self._device_uuid: Optional[str] = None
 
     # ---- 登录 / 令牌 ----
 
@@ -117,11 +119,18 @@ class MipsService:
 
     def _oauth_client(self) -> MipsOAuthClient:
         if self._oauth is None:
-            device_uuid = self._tokens.device_uuid if self._tokens else "mips-default"
             self._oauth = MipsOAuthClient(
-                cloud_server=self._cloud_server, device_uuid=device_uuid
+                cloud_server=self._cloud_server, device_uuid=self._ensure_device_uuid()
             )
         return self._oauth
+
+    def _ensure_device_uuid(self) -> str:
+        """设备标识（ha.<uuid>），登录前临时生成、登录后跟随令牌保存"""
+        if self._tokens is not None:
+            return self._tokens.device_uuid
+        if self._device_uuid is None:
+            self._device_uuid = str(uuid4())
+        return self._device_uuid
 
     def _refresh_tokens(self) -> None:
         with self._refresh_lock:

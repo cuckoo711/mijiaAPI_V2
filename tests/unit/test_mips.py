@@ -90,6 +90,11 @@ class TestAuth:
         assert "device_id=ha.u1" in url
         assert "homeassistant.local" in url
 
+    def test_device_uuid_defaults_to_real_uuid(self):
+        client = MipsOAuthClient()
+        assert client.device_id.startswith("ha.")
+        assert len(client.device_id) > len("ha.u1") + 8
+
     @patch("mijiaAPI_V2.mips.auth.httpx.get")
     def test_exchange_code_calls_token_api(self, mock_get):
         mock_get.return_value = MagicMock(
@@ -112,7 +117,10 @@ class TestAuth:
         assert args[0].endswith("/app/v2/ha/oauth/get_token")
         data = json.loads(kwargs["params"]["data"])
         assert data["code"] == "the-code"
-        assert data["client_id"] == "2882303761520251711"
+        assert data["client_id"] == 2882303761520251711  # 服务端要求数值类型
+        assert isinstance(data["client_id"], int)
+        assert data["device_id"] == "ha.u1"
+        assert kwargs["headers"]["User-Agent"] == "ha_xiaomi_home/2.0.2 client/ha.u1"
 
     @patch("mijiaAPI_V2.mips.auth.httpx.get")
     def test_exchange_code_rejects_error_response(self, mock_get):

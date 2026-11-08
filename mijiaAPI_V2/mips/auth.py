@@ -17,6 +17,7 @@ from pathlib import Path
 import time
 from typing import Any, Dict, Optional
 from urllib.parse import parse_qs, urlencode, urlparse
+from uuid import uuid4
 
 import httpx
 
@@ -113,11 +114,11 @@ class MipsOAuthClient:
     def __init__(
         self,
         cloud_server: str = "cn",
-        device_uuid: str = "mips-default",
+        device_uuid: Optional[str] = None,
         timeout: float = 30.0,
     ) -> None:
         self._cloud_server = cloud_server
-        self._device_uuid = device_uuid
+        self._device_uuid = device_uuid or str(uuid4())
         self._timeout = timeout
         self._client_id = MIPS_CLIENT_ID
         self._redirect_uri = MIPS_REDIRECT_URI
@@ -182,25 +183,39 @@ class MipsOAuthClient:
         return data
 
     def _get_token(self, data: Dict[str, Any]) -> MipsTokens:
+        # 服务端校验的请求形态：client_id 为数值、device_id 为 ha.<uuid>、
+        # 带 UA 与表单 Content-Type（与官方集成客户端一致）
+        payload = dict(data)
+        payload["client_id"] = int(self._client_id)
+        headers = {
+            "Content-Type": "application/x-www-form-urlencoded",
+            "User-Agent": f"ha_xiaomi_home/2.0.2 client/{self.device_id}",
+        }
         try:
             response = httpx.get(
                 f"https://{self.api_host}/app/v2/ha/oauth/get_token",
-                params={"data": json.dumps(data)},
+                params={"data": json.dumps(payload)},
+                headers=headers,
                 timeout=self._timeout,
             )
         except Exception as exc:
             raise MipsAuthError(f"令牌请求失败: {exc}") from exc
         if response.status_code == 401:
-            raise MipsAuthError("授权码或 refresh_token 无效（401）")
+            raise MipsAuthError(
+                "授权码或 refresh_token 无效（401），请重新登录获取新的授权码"
+            )
         if response.status_code != 200:
             raise MipsAuthError(f"令牌服务返回 HTTP {response.status_code}")
         try:
-            payload = response.json()
+            body = response.json()
         except ValueError as exc:
             raise MipsAuthError("令牌响应不是 JSON") from exc
-        result = payload.get("result") if isinstance(payload, dict) else None
-        if payload.get("code") != 0 or not isinstance(result, dict):
-            raise MipsAuthError(f"令牌响应无效: {payload}")
+        result = body.get("result") if isinstance(body, dict) else None
+        if body.get("code") != 0 or not isinstance(result, dict):
+            raise MipsAuthError(
+                f"令牌响应无效: {body}；请重新点登录获取新的授权码"
+                "（每个授权码只能用一次，过期或用过即失效）"
+            )
         if not all(k in result for k in ("access_token", "refresh_token", "expires_in")):
             raise MipsAuthError(f"令牌响应缺少字段: {result}")
         expires_in = float(result.get("expires_in") or 0)
