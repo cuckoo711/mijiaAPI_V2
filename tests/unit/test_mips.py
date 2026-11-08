@@ -23,6 +23,9 @@ from mijiaAPI_V2.mips.events import (
 )
 from mijiaAPI_V2.mips.service import MipsService
 
+# 云 MQTT 要求 client_id 为 ha.<32位hex>，测试统一用合规的实例 ID
+TEST_UUID = "0123456789abcdef0123456789abcdef"
+
 
 class TestEventParsing:
     def test_parse_property_change(self):
@@ -96,12 +99,12 @@ class TestAuth:
             extract_code_from_redirect("   ")
 
     def test_auth_url_contains_required_params(self):
-        client = MipsOAuthClient(device_uuid="u1")
+        client = MipsOAuthClient(device_uuid=TEST_UUID)
         url = client.auth_url()
         assert "account.xiaomi.com/oauth2/authorize" in url
         assert "client_id=2882303761520251711" in url
         assert "response_type=code" in url
-        assert "device_id=ha.u1" in url
+        assert f"device_id=ha.{TEST_UUID}" in url
         assert "homeassistant.local" in url
         # 与官方集成一致：webhook 路径 redirect_uri、sha1 state、布尔 skip_confirm
         assert "redirect_uri=http%3A%2F%2Fhomeassistant.local%3A8123%2Fapi%2Fwebhook%2F" in url
@@ -111,13 +114,21 @@ class TestAuth:
     def test_state_matches_official_shape(self):
         import hashlib
 
-        client = MipsOAuthClient(device_uuid="u1")
-        assert client.state == hashlib.sha1(b"d=ha.u1").hexdigest()
+        client = MipsOAuthClient(device_uuid=TEST_UUID)
+        assert client.state == hashlib.sha1(f"d=ha.{TEST_UUID}".encode()).hexdigest()
 
     def test_device_uuid_defaults_to_real_uuid(self):
+        import re
+
         client = MipsOAuthClient()
-        assert client.device_id.startswith("ha.")
-        assert len(client.device_id) > len("ha.u1") + 8
+        # 云 MQTT 要求 ha.<32位hex>，不合规会被拒（Not authorized）
+        assert re.fullmatch(r"ha\.[0-9a-f]{32}", client.device_id)
+
+    def test_nonconforming_uuid_is_replaced(self):
+        client = MipsOAuthClient(device_uuid="b4b1d7d2-cc28-4220-ae61-2034a565dcb3")
+        import re
+
+        assert re.fullmatch(r"ha\.[0-9a-f]{32}", client.device_id)
 
     @patch("mijiaAPI_V2.mips.auth.httpx.get")
     def test_exchange_code_calls_token_api(self, mock_get):
@@ -132,7 +143,7 @@ class TestAuth:
                 },
             },
         )
-        client = MipsOAuthClient(device_uuid="u1")
+        client = MipsOAuthClient(device_uuid=TEST_UUID)
         tokens = client.exchange_code("the-code")
         assert tokens.access_token == "at"
         assert tokens.refresh_token == "rt"
@@ -143,10 +154,10 @@ class TestAuth:
         assert data["code"] == "the-code"
         assert data["client_id"] == 2882303761520251711  # 服务端要求数值类型
         assert isinstance(data["client_id"], int)
-        assert data["device_id"] == "ha.u1"
+        assert data["device_id"] == f"ha.{TEST_UUID}"
         # redirect_uri 与授权请求一致：注册前缀 + webhook 路径
         assert data["redirect_uri"].startswith("http://homeassistant.local:8123/api/webhook/")
-        assert kwargs["headers"]["User-Agent"] == "ha_xiaomi_home/v0.5.0 client/ha.u1"
+        assert kwargs["headers"]["User-Agent"] == f"ha_xiaomi_home/v0.5.0 client/ha.{TEST_UUID}"
 
     @patch("mijiaAPI_V2.mips.auth.httpx.get")
     def test_exchange_code_rejects_error_response(self, mock_get):
@@ -181,7 +192,7 @@ class TestTokenStore:
             access_token="SECRET-ACCESS-VALUE",
             refresh_token="SECRET-REFRESH-VALUE",
             expires_at=123.0,
-            device_uuid="u1",
+            device_uuid=TEST_UUID,
         )
         store.save_tokens(tokens)
         raw = (tmp_path / "mips_tokens.json").read_text(encoding="utf-8")
@@ -347,15 +358,31 @@ class TestService:
         service = self._service()
         with patch.object(MipsCloudClient, "connect"), patch.object(
             MipsCloudClient, "subscribe_all"
-        ):
+        ), patch.object(MipsTokenStore, "save_tokens"):
             service._tokens = MipsTokens(
                 access_token="at",
                 refresh_token="rt",
                 expires_at=100.0,
-                device_uuid="u1",
+                device_uuid=TEST_UUID,
             )
             service.start()
             assert service._refresh_stop is not None
             service.stop()
             assert service._refresh_stop is None
             assert service._client is None
+
+    def test_old_uuid_normalized_on_use(self, tmp_path):
+        import re as _re
+
+        service = MipsService(token_path=str(tmp_path / "t.json"))
+        service._tokens = MipsTokens(
+            access_token="at",
+            refresh_token="rt",
+            expires_at=100.0,
+            device_uuid="b4b1d7d2-cc28-4220-ae61-2034a565dcb3",
+        )
+        with patch.object(MipsTokenStore, "save_tokens") as mock_save:
+            did = service._ensure_device_uuid()
+        assert _re.fullmatch(r"[0-9a-f]{32}", did)
+        assert service._tokens.device_uuid == did
+        mock_save.assert_called_once()

@@ -52,6 +52,15 @@ class MipsAuthError(Exception):
     """登录 / 令牌错误"""
 
 
+def is_instance_id(value: str) -> bool:
+    """云 MQTT 的 client_id 要求 ha.<32位hex>，不满足会被拒（Not authorized）"""
+    return bool(re.fullmatch(r"[0-9a-f]{32}", value or ""))
+
+
+def new_instance_id() -> str:
+    return uuid4().hex
+
+
 @dataclass
 class MipsTokens:
     """OAuth 令牌"""
@@ -130,7 +139,7 @@ class MipsOAuthClient:
         redirect_uri: Optional[str] = None,
     ) -> None:
         self._cloud_server = cloud_server
-        self._device_uuid = device_uuid or str(uuid4())
+        self._device_uuid = device_uuid if is_instance_id(device_uuid or "") else new_instance_id()
         self._timeout = timeout
         self._client_id = MIPS_CLIENT_ID
         # 令牌交换必须使用与授权请求完全一致的 redirect_uri；

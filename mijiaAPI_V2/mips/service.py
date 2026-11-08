@@ -9,7 +9,6 @@ from __future__ import annotations
 import threading
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Union
-from uuid import uuid4
 
 import httpx
 
@@ -19,6 +18,8 @@ from mijiaAPI_V2.mips.auth import (
     MipsTokenStore,
     MipsTokens,
     extract_code_from_redirect,
+    is_instance_id,
+    new_instance_id,
 )
 from mijiaAPI_V2.mips.cloud import MipsCloudClient
 from mijiaAPI_V2.mips.events import (
@@ -127,11 +128,19 @@ class MipsService:
         return self._oauth
 
     def _ensure_device_uuid(self) -> str:
-        """设备标识（ha.<uuid>），登录前临时生成、登录后跟随令牌保存"""
+        """设备标识（ha.<32位hex>），登录前临时生成、登录后跟随令牌保存
+
+        云 MQTT 要求 client_id 为 ``ha.<32位hex>``；旧版本存过的带连字符
+        UUID 不合规（CONNACK 拒绝 Not authorized），加载时替换并持久化。
+        """
         if self._tokens is not None:
+            if not is_instance_id(self._tokens.device_uuid):
+                self._tokens.device_uuid = new_instance_id()
+                self._store.save_tokens(self._tokens)
+                logger.info("已更新设备标识为合规格式")
             return self._tokens.device_uuid
-        if self._device_uuid is None:
-            self._device_uuid = str(uuid4())
+        if self._device_uuid is None or not is_instance_id(self._device_uuid):
+            self._device_uuid = new_instance_id()
         return self._device_uuid
 
     def _refresh_tokens(self) -> None:
@@ -203,7 +212,7 @@ class MipsService:
             app_id=self._oauth_client()._client_id,
             access_token=self._tokens.access_token,
             cloud_server=self._cloud_server,
-            client_id=f"ha.{self._tokens.device_uuid}",
+            client_id=f"ha.{self._ensure_device_uuid()}",
         )
         client.on_property_change(self._dispatch_property)
         client.on_device_event(self._dispatch_event)
