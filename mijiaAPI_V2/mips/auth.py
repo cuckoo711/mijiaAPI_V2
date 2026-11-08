@@ -14,9 +14,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 from pathlib import Path
+import re
 import time
 from typing import Any, Dict, Optional
-from urllib.parse import parse_qs, urlencode, urlparse
+from urllib.parse import unquote, urlencode
 from uuid import uuid4
 
 import httpx
@@ -228,15 +229,22 @@ class MipsOAuthClient:
 
 
 def extract_code_from_redirect(redirect_input: str) -> str:
-    """从用户粘贴的重定向地址（或纯 code）中提取授权码"""
+    """从用户粘贴的重定向地址（或纯 code）中提取授权码
+
+    注意只做 %XX 解码，绝不把 ``+`` 当空格——OAuth 授权码常含 base64 字符
+    ``+ / =``，浏览器地址栏显示的又是解码后的网址，一旦 ``+`` 被转成空格
+    服务端就会报 invalid request。
+    """
     text = (redirect_input or "").strip()
     if not text:
         raise MipsAuthError("授权码不能为空")
-    if "://" not in text and "?" not in text and "=" not in text:
-        return text
-    parsed = urlparse(text)
-    query = parse_qs(parsed.query)
-    code = query.get("code", [None])[0]
-    if code:
-        return code
-    raise MipsAuthError("地址里没有找到 code 参数，请粘贴完整的重定向地址")
+    match = re.search(r"code=([^&#\s]*)", text)
+    if match:
+        code = unquote(match.group(1))
+        if code:
+            return code
+        raise MipsAuthError("code 参数为空，请粘贴完整的重定向地址")
+    if "://" in text:
+        raise MipsAuthError("地址里没有找到 code 参数，请粘贴完整的重定向地址")
+    # 用户直接粘贴授权码（可能含 base64 的 + / = 填充符）
+    return text

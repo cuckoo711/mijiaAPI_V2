@@ -72,8 +72,22 @@ class TestAuth:
         url = "http://homeassistant.local:8123/?code=abc123&state=xyz"
         assert extract_code_from_redirect(url) == "abc123"
 
+    def test_extract_code_preserves_plus_and_padding(self):
+        # 浏览器地址栏显示解码后的网址，base64 授权码里的 + / = 必须原样保留
+        url = "http://homeassistant.local:8123/?code=ab+c/d==&state=xyz"
+        assert extract_code_from_redirect(url) == "ab+c/d=="
+
+    def test_extract_code_decodes_percent_encoding(self):
+        url = "http://homeassistant.local:8123/?code=ab%2Bc%2Fd%3D%3D&state=x"
+        assert extract_code_from_redirect(url) == "ab+c/d=="
+
+    def test_extract_code_tolerates_surrounding_text(self):
+        text = "登录后跳转到了 http://homeassistant.local:8123/?code=zz9/xx= 打不开"
+        assert extract_code_from_redirect(text) == "zz9/xx="
+
     def test_extract_code_from_raw_code(self):
         assert extract_code_from_redirect("abc123") == "abc123"
+        assert extract_code_from_redirect("ab+c/d==") == "ab+c/d=="
 
     def test_extract_code_missing(self):
         with pytest.raises(MipsAuthError):
