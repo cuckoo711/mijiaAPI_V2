@@ -103,6 +103,16 @@ class TestAuth:
         assert "response_type=code" in url
         assert "device_id=ha.u1" in url
         assert "homeassistant.local" in url
+        # 与官方集成一致：webhook 路径 redirect_uri、sha1 state、布尔 skip_confirm
+        assert "redirect_uri=http%3A%2F%2Fhomeassistant.local%3A8123%2Fapi%2Fwebhook%2F" in url
+        assert f"state={client.state}" in url
+        assert "skip_confirm=False" in url
+
+    def test_state_matches_official_shape(self):
+        import hashlib
+
+        client = MipsOAuthClient(device_uuid="u1")
+        assert client.state == hashlib.sha1(b"d=ha.u1").hexdigest()
 
     def test_device_uuid_defaults_to_real_uuid(self):
         client = MipsOAuthClient()
@@ -134,7 +144,9 @@ class TestAuth:
         assert data["client_id"] == 2882303761520251711  # 服务端要求数值类型
         assert isinstance(data["client_id"], int)
         assert data["device_id"] == "ha.u1"
-        assert kwargs["headers"]["User-Agent"] == "ha_xiaomi_home/2.0.2 client/ha.u1"
+        # redirect_uri 与授权请求一致：注册前缀 + webhook 路径
+        assert data["redirect_uri"].startswith("http://homeassistant.local:8123/api/webhook/")
+        assert kwargs["headers"]["User-Agent"] == "ha_xiaomi_home/v0.5.0 client/ha.u1"
 
     @patch("mijiaAPI_V2.mips.auth.httpx.get")
     def test_exchange_code_rejects_error_response(self, mock_get):

@@ -120,7 +120,9 @@ class MipsService:
     def _oauth_client(self) -> MipsOAuthClient:
         if self._oauth is None:
             self._oauth = MipsOAuthClient(
-                cloud_server=self._cloud_server, device_uuid=self._ensure_device_uuid()
+                cloud_server=self._cloud_server,
+                device_uuid=self._ensure_device_uuid(),
+                redirect_uri=self._tokens.redirect_uri if self._tokens else None,
             )
         return self._oauth
 

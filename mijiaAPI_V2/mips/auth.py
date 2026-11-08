@@ -2,19 +2,24 @@
 
 登录流程（授权码模式）：
 1. ``auth_url()`` 生成授权链接，浏览器完成小米账号登录；
-2. 授权后小米固定重定向到 ``http://homeassistant.local:8123``（该回调地址
-   注册在小米 OAuth 服务上，无法更改），浏览器会打开一个无法访问的地址；
+2. 授权后小米固定重定向到注册的回调地址（``http://homeassistant.local:8123``
+   前缀，带 ``/api/webhook/<id>`` 路径），浏览器会打开一个无法访问的地址；
 3. 把浏览器地址栏里带 ``code=`` 的完整地址（或直接贴 code）交给
    ``exchange_code()`` 换取 access_token / refresh_token；
 4. 令牌过期前用 ``refresh()`` 续期，全程无需再次登录。
+
+请求形态与小米官方集成保持一致（回调地址、state 摘要、UA 等），
+否则令牌交换会报 invalid request。
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+import hashlib
 import json
 from pathlib import Path
 import re
+import secrets
 import time
 from typing import Any, Dict, Optional
 from urllib.parse import unquote, urlencode
@@ -30,12 +35,14 @@ from mijiaAPI_V2.infrastructure.credential_store import (
 
 logger = get_logger(__name__)
 
-# 小米 OAuth 服务上注册的应用与回调地址（与官方 HA 集成一致）
+# 小米 OAuth 服务上注册的应用与回调地址前缀（与官方 HA 集成一致）
 MIPS_CLIENT_ID = "2882303761520251711"
 MIPS_REDIRECT_URI = "http://homeassistant.local:8123"
 MIPS_AUTH_URL = "https://account.xiaomi.com/oauth2/authorize"
 MIPS_API_HOST = "ha.api.io.mi.com"
 MIPS_USER_PROFILE_URL = "https://open.account.xiaomi.com/user/profile"
+# 官方集成的客户端标识（其云接口按此形态校验请求）
+MIPS_USER_AGENT = "ha_xiaomi_home/v0.5.0 client/{device_id}"
 
 # 提前续期比例：过期时间走到 70% 就刷新
 TOKEN_REFRESH_RATIO = 0.7
@@ -53,6 +60,7 @@ class MipsTokens:
     refresh_token: str
     expires_at: float  # epoch 秒，按 TOKEN_REFRESH_RATIO 折算后的续期触发点
     device_uuid: str
+    redirect_uri: str = field(default=MIPS_REDIRECT_URI)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -60,6 +68,7 @@ class MipsTokens:
             "refresh_token": self.refresh_token,
             "expires_at": self.expires_at,
             "device_uuid": self.device_uuid,
+            "redirect_uri": self.redirect_uri,
         }
 
     @classmethod
@@ -69,6 +78,7 @@ class MipsTokens:
             refresh_token=str(data["refresh_token"]),
             expires_at=float(data["expires_at"]),
             device_uuid=str(data["device_uuid"]),
+            redirect_uri=str(data.get("redirect_uri") or MIPS_REDIRECT_URI),
         )
 
     def needs_refresh(self, now: Optional[float] = None) -> bool:
@@ -117,16 +127,25 @@ class MipsOAuthClient:
         cloud_server: str = "cn",
         device_uuid: Optional[str] = None,
         timeout: float = 30.0,
+        redirect_uri: Optional[str] = None,
     ) -> None:
         self._cloud_server = cloud_server
         self._device_uuid = device_uuid or str(uuid4())
         self._timeout = timeout
         self._client_id = MIPS_CLIENT_ID
-        self._redirect_uri = MIPS_REDIRECT_URI
+        # 令牌交换必须使用与授权请求完全一致的 redirect_uri；
+        # 官方集成使用注册前缀 + webhook 路径，这里保持同一形态。
+        self._redirect_uri = redirect_uri or (
+            f"{MIPS_REDIRECT_URI}/api/webhook/{secrets.randbits(64)}"
+        )
 
     @property
     def device_id(self) -> str:
         return f"ha.{self._device_uuid}"
+
+    @property
+    def redirect_uri(self) -> str:
+        return self._redirect_uri
 
     @property
     def api_host(self) -> str:
@@ -134,15 +153,20 @@ class MipsOAuthClient:
             return MIPS_API_HOST
         return f"{self._cloud_server}.{MIPS_API_HOST}"
 
-    def auth_url(self, state: Optional[str] = None) -> str:
-        params = {
+    @property
+    def state(self) -> str:
+        # 与官方集成一致：state = sha1("d=" + device_id)
+        return hashlib.sha1(f"d={self.device_id}".encode("utf-8")).hexdigest()
+
+    def auth_url(self) -> str:
+        params: Dict[str, Any] = {
             "redirect_uri": self._redirect_uri,
-            "client_id": self._client_id,
+            "client_id": int(self._client_id),
             "response_type": "code",
             "device_id": self.device_id,
-            "state": state or self.device_id,
-            "skip_confirm": "true",
+            "state": self.state,
         }
+        params["skip_confirm"] = False
         return f"{MIPS_AUTH_URL}?{urlencode(params)}"
 
     def exchange_code(self, code: str) -> MipsTokens:
@@ -184,13 +208,13 @@ class MipsOAuthClient:
         return data
 
     def _get_token(self, data: Dict[str, Any]) -> MipsTokens:
-        # 服务端校验的请求形态：client_id 为数值、device_id 为 ha.<uuid>、
-        # 带 UA 与表单 Content-Type（与官方集成客户端一致）
+        # 与官方集成客户端一致的请求形态：client_id 数值、完整 redirect_uri、
+        # 带 UA 与表单 Content-Type
         payload = dict(data)
         payload["client_id"] = int(self._client_id)
         headers = {
             "Content-Type": "application/x-www-form-urlencoded",
-            "User-Agent": f"ha_xiaomi_home/2.0.2 client/{self.device_id}",
+            "User-Agent": MIPS_USER_AGENT.format(device_id=self.device_id),
         }
         try:
             response = httpx.get(
@@ -225,6 +249,7 @@ class MipsOAuthClient:
             refresh_token=str(result["refresh_token"]),
             expires_at=time.time() + expires_in * TOKEN_REFRESH_RATIO,
             device_uuid=self._device_uuid,
+            redirect_uri=self._redirect_uri,
         )
 
 
