@@ -316,6 +316,46 @@ class TestService:
         assert len(all_events) == 2
         assert len(only_one) == 1
 
+    def _prop_event(self, did, value, siid=2, piid=1):
+        return parse_property_change(
+            did, "t", json.dumps({"params": {"siid": siid, "piid": piid, "value": value}}).encode()
+        )
+
+    def test_changed_only_fires_only_on_transitions(self):
+        service = self._service()
+        fired = []
+        service.on_property_change(did="did-1", changed_only=True)(fired.append)
+
+        service._dispatch_property(self._prop_event("did-1", True))   # 首次：只记基线
+        service._dispatch_property(self._prop_event("did-1", True))   # 同值：不触发
+        service._dispatch_property(self._prop_event("did-1", False))  # 翻转：触发
+        service._dispatch_property(self._prop_event("did-1", True))   # 翻转：触发
+        assert [e.value for e in fired] == [False, True]
+
+    def test_default_fires_on_every_message(self):
+        service = self._service()
+        fired = []
+        service.on_property_change(did="did-1")(fired.append)
+
+        service._dispatch_property(self._prop_event("did-1", True))
+        service._dispatch_property(self._prop_event("did-1", True))
+        assert len(fired) == 2
+
+    def test_changed_only_cache_is_per_property_and_handler(self):
+        service = self._service()
+        fired_a, fired_b = [], []
+        service.on_property_change(changed_only=True)(fired_a.append)
+        service.on_property_change(did="did-1", changed_only=True)(fired_b.append)
+
+        service._dispatch_property(self._prop_event("did-1", 1, piid=1))  # 基线
+        service._dispatch_property(self._prop_event("did-1", 2, piid=2))  # 基线（独立属性）
+        service._dispatch_property(self._prop_event("did-1", 1, piid=1))  # 未变，不触发
+        service._dispatch_property(self._prop_event("did-1", 3, piid=2))  # piid=2 变化
+        service._dispatch_property(self._prop_event("did-1", 1, piid=1))  # piid=1 仍未变
+        service._dispatch_property(self._prop_event("did-1", 9, piid=1))  # piid=1 变化
+        assert [e.value for e in fired_a] == [3, 9]
+        assert [e.value for e in fired_b] == [3, 9]
+
     @patch("mijiaAPI_V2.mips.service.httpx.post")
     def test_webhook_post(self, mock_post):
         service = self._service(webhook_url="http://example.com/hook")

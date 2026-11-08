@@ -31,6 +31,8 @@ from mijiaAPI_V2.mips.events import (
 
 logger = get_logger(__name__)
 
+_MISSING = object()
+
 
 class MipsService:
     """MIPS 推送服务
@@ -164,16 +166,23 @@ class MipsService:
     # ---- 事件订阅（装饰器）----
 
     def on_property_change(
-        self, did: Optional[Union[str, int]] = None
+        self,
+        did: Optional[Union[str, int]] = None,
+        changed_only: bool = False,
     ) -> Callable[[Callable[[PropertyChangeEvent], None]], Callable]:
         """装饰器：订阅属性变化推送
 
         Args:
             did: 只接收该设备的推送；None 表示全部设备
+            changed_only: 仅在属性值发生变化时触发。开启后会缓存上一次的
+                值——同一取值的重复上报不触发；首次上报只记录基线、不触发。
+                默认 False（收到即触发）。
         """
 
         def decorator(handler):
-            self._prop_handlers.append((_norm_did(did), handler))
+            self._prop_handlers.append(
+                (_norm_did(did), bool(changed_only), handler, {})
+            )
             return handler
 
         return decorator
@@ -262,9 +271,19 @@ class MipsService:
     # ---- 内部分发 ----
 
     def _dispatch_property(self, event: PropertyChangeEvent) -> None:
-        for did_filter, handler in list(self._prop_handlers):
-            if did_filter is None or did_filter == event.did:
-                _safe_call(handler, event, "属性变化")
+        for did_filter, changed_only, handler, last_values in list(self._prop_handlers):
+            if did_filter is not None and did_filter != event.did:
+                continue
+            if changed_only:
+                key = f"{event.did}.{event.siid}.{event.piid}"
+                previous = last_values.get(key, _MISSING)
+                if previous is _MISSING:
+                    last_values[key] = event.value
+                    continue
+                if previous == event.value:
+                    continue
+                last_values[key] = event.value
+            _safe_call(handler, event, "属性变化")
         self._post_webhook(
             {"type": "property_change", **_event_payload(event)}
         )

@@ -162,6 +162,26 @@ def _do_login(state: AppState, value: str) -> Dict[str, Any]:
     return {"ok": True}
 
 
+def load_hooks(path: str, service: MipsService) -> None:
+    """加载本地钩子脚本（须定义 ``register(service)``）
+
+    钩子用 ``@service.on_property_change(...)`` 等装饰器注册回调，
+    适合部署本机专用的联动逻辑（不入库）。
+    """
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("mips_hooks", path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"无法加载钩子文件: {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    register = getattr(module, "register", None)
+    if not callable(register):
+        raise SystemExit(f"钩子文件必须定义 register(service): {path}")
+    register(service)
+    print(f"[MIPS] 已加载钩子: {path}", flush=True)
+
+
 def create_app(state: AppState) -> FastAPI:
     app = FastAPI(title="MIPS 推送服务", docs_url=None, redoc_url=None)
 
@@ -230,6 +250,9 @@ def main(argv: Optional[List[str]] = None) -> None:
     parser.add_argument("--cloud", default="cn", help="云区域：cn/de/i2/ru/sg/us")
     parser.add_argument("--devices", default="", help="只订阅这些设备 did（逗号分隔），默认全部")
     parser.add_argument("--webhook", default="", help="事件转发的 webhook 地址")
+    parser.add_argument(
+        "--hooks", default="", help="本地钩子脚本路径（定义 register(service)），不入库的联动逻辑"
+    )
     args = parser.parse_args(argv)
 
     devices = [d.strip() for d in args.devices.split(",") if d.strip()] or None
@@ -238,17 +261,6 @@ def main(argv: Optional[List[str]] = None) -> None:
         devices=devices,
         webhook_url=args.webhook or None,
     )
-    if service.load_tokens():
-        logger.info("已加载保存的令牌，尝试连接")
-        try:
-            service.start()
-        except Exception as exc:
-            logger.warning(
-                "自动连接失败，请在页面重新登录",
-                extra={"error_type": type(exc).__name__},
-            )
-    else:
-        logger.info("未找到令牌，请在页面登录")
 
     state = AppState(service)
 
@@ -277,6 +289,21 @@ def main(argv: Optional[List[str]] = None) -> None:
     @service.on_device_state()
     def _on_state(event) -> None:
         state.broadcast({"type": "device_state", "did": event.did, "state": event.state})
+
+    if args.hooks:
+        load_hooks(args.hooks, service)
+
+    if service.load_tokens():
+        logger.info("已加载保存的令牌，尝试连接")
+        try:
+            service.start()
+        except Exception as exc:
+            logger.warning(
+                "自动连接失败，请在页面重新登录",
+                extra={"error_type": type(exc).__name__},
+            )
+    else:
+        logger.info("未找到令牌，请在页面登录")
 
     app = create_app(state)
     print(f"MIPS 推送服务: http://{args.host}:{args.port}/", flush=True)
