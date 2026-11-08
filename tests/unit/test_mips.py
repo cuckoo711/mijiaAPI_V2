@@ -228,14 +228,22 @@ class TestCloudClient:
         assert "device/did-1/up/event_occured/#" in topics
         assert "device/did-1/state/#" in topics
 
-    def test_subscribe_all_wildcards(self):
-        client = self._client()
-        mqtt = MagicMock()
-        mqtt.subscribe.return_value = (0, 1)
-        client._mqtt = mqtt
-        client.subscribe_all()
-        topics = [call.args[0] for call in mqtt.subscribe.call_args_list]
-        assert "device/+/up/properties_changed/#" in topics
+    @patch("mijiaAPI_V2.mips.cloud.httpx.post")
+    def test_fetch_device_dids(self, mock_post):
+        from mijiaAPI_V2.mips.cloud import fetch_device_dids
+
+        mock_post.return_value = MagicMock(
+            json=lambda: {
+                "code": 0,
+                "result": {
+                    "list": [{"did": "111"}, {"did": 222}],
+                    "has_more": False,
+                },
+            }
+        )
+        dids = fetch_device_dids("tok", "inst32hex")
+        assert dids == ["111", "222"]
+        assert mock_post.call_args.kwargs["headers"]["Authorization"] == "Bearertok"
 
     def test_on_message_dispatches_property_change(self):
         client = self._client()
@@ -356,9 +364,11 @@ class TestService:
 
     def test_refresh_watchdog_lifecycle(self):
         service = self._service()
-        with patch.object(MipsCloudClient, "connect"), patch.object(
-            MipsCloudClient, "subscribe_all"
-        ), patch.object(MipsTokenStore, "save_tokens"):
+        with patch.object(MipsCloudClient, "connect"), patch(
+            "mijiaAPI_V2.mips.service.fetch_device_dids", return_value=["did-1"]
+        ), patch.object(MipsCloudClient, "subscribe_devices"), patch.object(
+            MipsTokenStore, "save_tokens"
+        ):
             service._tokens = MipsTokens(
                 access_token="at",
                 refresh_token="rt",

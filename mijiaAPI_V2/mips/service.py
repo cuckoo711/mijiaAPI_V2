@@ -21,7 +21,7 @@ from mijiaAPI_V2.mips.auth import (
     is_instance_id,
     new_instance_id,
 )
-from mijiaAPI_V2.mips.cloud import MipsCloudClient
+from mijiaAPI_V2.mips.cloud import MipsCloudClient, fetch_device_dids
 from mijiaAPI_V2.mips.events import (
     DeviceEvent,
     DeviceStateEvent,
@@ -221,7 +221,16 @@ class MipsService:
         if self._devices:
             client.subscribe_devices(self._devices)
         else:
-            client.subscribe_all()
+            # Broker 不允许 did 通配符订阅，先拉设备列表再逐台订阅
+            dids = fetch_device_dids(
+                self._tokens.access_token,
+                self._ensure_device_uuid(),
+                cloud_server=self._cloud_server,
+            )
+            if not dids:
+                raise RuntimeError("账号下没有可订阅的设备")
+            logger.info("已获取设备列表，逐台订阅", extra={"count": len(dids)})
+            client.subscribe_devices(dids)
         self._client = client
         self._start_refresh_watchdog()
         logger.info("MIPS 推送服务已启动")

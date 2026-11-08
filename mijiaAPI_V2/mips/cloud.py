@@ -15,7 +15,9 @@ from __future__ import annotations
 
 import ssl
 import threading
-from typing import Callable, Dict, Iterable, List, Optional, Union
+from typing import Any, Callable, Dict, Iterable, List, Optional, Union
+
+import httpx
 
 from mijiaAPI_V2.core.logging import get_logger
 from mijiaAPI_V2.mips.events import (
@@ -40,6 +42,65 @@ StateHandler = Callable[[DeviceStateEvent], None]
 
 def broker_host(cloud_server: str = "cn") -> str:
     return f"{cloud_server}-{MIPS_BROKER_HOST}"
+
+
+def api_host(cloud_server: str = "cn") -> str:
+    if cloud_server == "cn":
+        return "ha.api.io.mi.com"
+    return f"{cloud_server}.ha.api.io.mi.com"
+
+
+def fetch_device_dids(
+    access_token: str,
+    instance_id: str,
+    cloud_server: str = "cn",
+    app_id: str = "2882303761520251711",
+    timeout: float = 30.0,
+) -> List[str]:
+    """通过云端 HTTP 接口拉取账号下的设备 did 列表
+
+    Broker 不支持通配符订阅，必须按具体 did 逐台订阅；
+    该接口与官方集成一致（device_list_page，带分页）。
+    """
+    host = api_host(cloud_server)
+    headers = {
+        "Host": host,
+        "X-Client-BizId": "haapi",
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer{access_token}",
+        "X-Client-AppId": app_id,
+        "User-Agent": f"ha_xiaomi_home/v0.5.0 client/ha.{instance_id}",
+    }
+    dids: List[str] = []
+    start_did = None
+    for _ in range(20):  # 分页上限保护
+        payload: Dict[str, Any] = {
+            "limit": 200,
+            "get_split_device": True,
+            "get_third_device": True,
+            "dids": [],
+        }
+        if start_did:
+            payload["start_did"] = start_did
+        response = httpx.post(
+            f"https://{host}/app/v2/home/device_list_page",
+            headers=headers,
+            json=payload,
+            timeout=timeout,
+        )
+        body = response.json()
+        if body.get("code") != 0:
+            raise ConnectionError(f"设备列表接口返回异常: {body}")
+        result = body.get("result") or {}
+        for device in result.get("list") or []:
+            did = device.get("did")
+            if did is not None and str(did).strip():
+                dids.append(str(did))
+        if result.get("has_more") and result.get("next_start_did"):
+            start_did = result["next_start_did"]
+            continue
+        break
+    return dids
 
 
 class MipsCloudClient:
@@ -108,6 +169,7 @@ class MipsCloudClient:
             mqtt.tls_set(tls_version=ssl.PROTOCOL_TLS_CLIENT)
             mqtt.on_connect = self._on_connect
             mqtt.on_disconnect = self._on_disconnect
+            mqtt.on_subscribe = self._on_subscribe
             mqtt.on_message = self._on_message
             self._mqtt = mqtt
             try:
@@ -149,18 +211,12 @@ class MipsCloudClient:
 
     # ---- 订阅 ----
 
-    def subscribe_all(self) -> None:
-        """订阅全部设备（topic 通配符，Broker 不支持时需改用 subscribe_devices）"""
-        self._subscribe(
-            [
-                "device/+/up/properties_changed/#",
-                "device/+/up/event_occured/#",
-                "device/+/state/#",
-            ]
-        )
-
     def subscribe_devices(self, dids: Iterable[Union[str, int]]) -> None:
-        """订阅指定设备"""
+        """订阅指定设备
+
+        注意：Broker 不允许 did 位置的 ``+`` 通配符（SUBACK 返回 Not authorized），
+        必须按具体 did 逐台订阅。
+        """
         topics = []
         for did in dids:
             did = str(did).strip()
@@ -194,6 +250,12 @@ class MipsCloudClient:
     def _on_disconnect(self, client, userdata, flags, reason_code, properties) -> None:
         self._connected.clear()
         logger.warning("云 MQTT 断开", extra={"reason": str(reason_code)})
+
+    def _on_subscribe(self, client, userdata, mid, reason_codes, properties) -> None:
+        # subscribe() 返回成功只代表已发送；真正的授权结果在这里
+        for code in reason_codes or []:
+            if str(code) != "Granted QoS 0" and str(code) != "Granted QoS 1" and str(code) != "Granted QoS 2":
+                logger.error("订阅被拒绝", extra={"mid": mid, "reason": str(code)})
 
     def _on_message(self, client, userdata, message) -> None:
         topic = message.topic
