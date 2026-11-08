@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import queue
 import socket
 import threading
@@ -215,6 +216,10 @@ def _lan_ip() -> str:
 
 
 def main(argv: Optional[List[str]] = None) -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s",
+    )
     parser = argparse.ArgumentParser(description="MIoT Pub/Sub 推送服务")
     parser.add_argument(
         "--host",
